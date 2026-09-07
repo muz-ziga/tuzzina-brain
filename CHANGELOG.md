@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.1 — Test portability fix (Linux/Python 3.12)
+
+- `tests/test_select.py`:
+  - `from pathlib import Path` import added.
+  - `sys.path.insert(0, str(Path(__file__).parent.parent / "src"))`
+    replaces the previous `os.path.join(...)` form, and is paired
+    with `sys.modules.pop("select", None)`.
+- Why: on Linux/Python 3.12, `urllib` transitively imports the
+  stdlib `select` module and caches it in `sys.modules` before this
+  test runs. Once cached, a bare `import select` resolves to the
+  stdlib, shadowing the local `src/select.py` and breaking
+  `test_non_tty_*` (4 errors). The path-insert alone is not enough;
+  the cached stdlib entry must be evicted first.
+- Effect: `python3 -m unittest discover -s tests` now passes
+  83/83 on Linux/Python 3.12 (matches Windows).
+- No production code change. No Tuzzina source change. No
+  architecture change. No new dependency. Single file touched.
+
 ## 0.4.0 — Channel Selection / Strategy Management
 
 - Tuzzina is the source of truth for channel identity. Brain stores

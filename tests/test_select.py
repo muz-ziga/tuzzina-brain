@@ -7,8 +7,23 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Insert src/ at the front of sys.path so the local Brain module
+# `select` resolves before Python's stdlib `select` (a name
+# collision that bit Linux/Python 3.12 deployments because the
+# stdlib's `select` is imported transitively by `urllib` and gets
+# cached in sys.modules before this test runs). Must run BEFORE
+# `import select`.
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+# If the stdlib `select` is already in sys.modules (cached from an
+# earlier transitive import like urllib/unittest), the bare
+# `import select` later in this test would resolve to it and shadow
+# our local module. The src/ path insert above puts our directory
+# first; we must also evict the cached stdlib entry so the next
+# `import select` re-runs the path-based search and finds OURS.
+sys.modules.pop("select", None)
 
 
 class FakeResp:
