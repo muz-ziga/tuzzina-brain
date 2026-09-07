@@ -1,19 +1,18 @@
-"""ChannelProfile loader. Reads channels/<name>.<platform>.yaml.
-The schema is extensible: only documented fields are normalized; any
-other key is preserved verbatim in ChannelProfile.extras for future
-fields (image_policy, video_policy, content_pillars, ...).
+"""ChannelProfile loader (v2). Reads strategies/<integration_id>.yaml.
 
-Only fields that appear in the YAML are set; absent fields keep the
-sentinel value in the dataclass, so the resolver can distinguish
-"channel did not set this" from "channel set it to the dataclass
-default literal"."""
+The YAML is a Brain strategy, NOT a channel definition. The only
+identity field is `integration_id` which must already exist in
+Tuzzina (verified at runtime, not at YAML-load time).
+
+Only Brain-owned fields are normalised. The Tuzzina-owned DTO shape
+is NOT mirrored here; we accept an opaque `provider_overrides` dict
+that goes straight into the Tuzzina post `settings` payload.
+"""
 from __future__ import annotations
 import yaml
 
 from channels.profile import (Brand, ChannelProfile, HashtagPolicy,
-                              PlatformSettings, _MISSING)
-
-VALID_PLATFORMS = ("facebook",)  # others later
+                              _MISSING)
 
 
 def _err(path: str, msg: str) -> ValueError:
@@ -41,14 +40,10 @@ def load_channel_profile(path: str) -> ChannelProfile:
         cfg = yaml.safe_load(f)
     if not isinstance(cfg, dict):
         raise _err("", "must be a mapping")
-    platform_v = cfg.get("platform", "facebook")
-    if platform_v not in VALID_PLATFORMS:
-        raise _err("platform", f"must be one of {VALID_PLATFORMS}")
-    name = str(cfg.get("name", "")).strip()
-    if not name:
-        raise _err("name", "required, non-empty")
-    language_v = cfg.get("language", _MISSING)
-    links_policy_v = cfg.get("links_policy", _MISSING)
+    integration_id = str(cfg.get("integration_id", "")).strip()
+    if not integration_id:
+        raise _err("integration_id", "required, non-empty (Tuzzina integration id)")
+    links_policy = cfg.get("links_policy", _MISSING)
 
     b = cfg.get("brand") or {}
     if not isinstance(b, dict):
@@ -74,24 +69,19 @@ def load_channel_profile(path: str) -> ChannelProfile:
         preferred=_opt_list(h.get("preferred")),
     )
 
-    s = cfg.get("platform_settings") or {}
-    if not isinstance(s, dict):
-        raise _err("platform_settings", "must be a mapping")
-    if "__type" not in s:
-        s["__type"] = platform_v
-    elif s["__type"] != platform_v:
-        raise _err("platform_settings.__type",
-                   f"must equal platform ({platform_v})")
-    platform_settings = PlatformSettings(platform=platform_v, payload=dict(s))
+    provider_overrides = dict(cfg.get("provider_overrides") or {})
+    if not isinstance(provider_overrides, dict):
+        raise _err("provider_overrides", "must be a mapping")
 
-    known = {"platform", "name", "language", "links_policy", "brand",
-             "hashtags", "platform_settings"}
+    known = {"integration_id", "brand", "hashtags", "links_policy",
+             "provider_overrides"}
     extras = {k: v for k, v in cfg.items() if k not in known}
 
-    return ChannelProfile(name=name,
-                         platform=platform_v if platform_v else _MISSING,
-                         language=language_v,
-                         brand=brand, hashtags=hashtags,
-                         links_policy=links_policy_v,
-                         platform_settings=platform_settings,
-                         extras=extras)
+    return ChannelProfile(
+        integration_id=integration_id,
+        brand=brand,
+        hashtags=hashtags,
+        links_policy=links_policy,
+        provider_overrides=provider_overrides,
+        extras=extras,
+    )

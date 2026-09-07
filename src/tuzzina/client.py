@@ -77,21 +77,24 @@ class TuzzinaClient:
             "type": "draft", "shortLink": False, "date": date,
             "tags": [], "posts": posts})
 
-    def integrations(self) -> dict:
-        return self._call("GET", "/public/v1/integrations")
+    def integrations(self) -> list:
+        """List Tuzzina integrations connected to the current org.
+        Returns a list of {id, name, identifier, picture, disabled,
+        profile, customer} dicts. Tuzzina is the source of truth; the
+        brain never invents or duplicates channels.
+        """
+        data = self._call("GET", "/public/v1/integrations")
+        return data if isinstance(data, list) else []
 
-    def list_posts(self) -> dict:
-        return self._call("GET", "/public/v1/posts")
-
-    def find_integration(self, provider: str,
-                         name_contains: str = "") -> dict:
-        data = self.integrations()
-        items = data if isinstance(data, list) else data.get("data", [])
-        for it in items:
-            pid = it.get("providerIdentifier") or it.get("identifier", "")
-            if pid == provider and name_contains.lower() in \
-                    str(it.get("name", "")).lower():
+    def get_integration(self, integration_id: str) -> dict:
+        """Look up one integration by its Tuzzina id. Used after the
+        strategy YAML declares the integration_id; we cross-check it
+        against the live Tuzzina list so the brain cannot target a
+        dead or unknown channel."""
+        if not integration_id:
+            raise TuzzinaError("integration_id is required")
+        for it in self.integrations():
+            if str(it.get("id", "")) == str(integration_id):
                 return it
-        raise TuzzinaError(f"no {provider} integration"
-                           + (f" matching {name_contains!r}"
-                              if name_contains else ""))
+        raise TuzzinaError(
+            f"integration {integration_id!r} not found in Tuzzina")

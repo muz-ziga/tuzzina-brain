@@ -40,8 +40,12 @@ def fake_urlopen(req, timeout=None):
             req.get_method() == "POST":
         return FakeResp({"ok": True})
     if req.full_url.endswith("/public/v1/integrations"):
-        return FakeResp([{"id": "int1", "name": "My Page",
-                          "providerIdentifier": "facebook"}])
+        return FakeResp([
+            {"id": "int1", "name": "Juzzir Facebook",
+             "identifier": "facebook", "picture": "x", "disabled": False},
+            {"id": "int2", "name": "Muzziga",
+             "identifier": "facebook", "picture": "y", "disabled": False},
+        ])
     if req.full_url.endswith("/public/v1/posts"):
         return FakeResp([])
     return FakeResp({}, 404)
@@ -73,13 +77,25 @@ class ClientTest(unittest.TestCase):
         self.c.create_draft([], "2026-09-08T09:00:00+00:00")
         self.assertTrue(any("/public/v1/posts" in u for u, _ in CALLS))
 
-    def test_find_integration(self):
-        it = self.c.find_integration("facebook")
-        self.assertEqual(it["id"], "int1")
+    def test_integrations_returns_list(self):
+        items = self.c.integrations()
+        self.assertIsInstance(items, list)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["id"], "int1")
+        self.assertEqual(items[1]["id"], "int2")
 
-    def test_find_missing(self):
+    def test_get_integration_by_id(self):
+        it = self.c.get_integration("int2")
+        self.assertEqual(it["id"], "int2")
+        self.assertEqual(it["name"], "Muzziga")
+
+    def test_get_integration_missing_raises(self):
         with self.assertRaises(TuzzinaError):
-            self.c.find_integration("tiktok")
+            self.c.get_integration("nonexistent")
+
+    def test_get_integration_empty_id_raises(self):
+        with self.assertRaises(TuzzinaError):
+            self.c.get_integration("")
 
     def test_http_error_no_retry_duplicate(self):
         urllib.request.urlopen = lambda *a, **k: FakeResp({}, 400)
@@ -93,10 +109,10 @@ class ClientTest(unittest.TestCase):
             n["i"] += 1
             if n["i"] < 2:
                 raise ConnectionError("down")
-            return FakeResp({"ok": True})
+            return FakeResp([])
         urllib.request.urlopen = flaky
         c = TuzzinaClient("http://x/api", "k", retries=2)
-        self.assertEqual(c.list_posts(), {"ok": True})
+        self.assertEqual(c.integrations(), [])
         self.assertEqual(n["i"], 2)
 
 

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0 — Tuzzina-Owns-Channel-Identity (architectural correction)
+
+- `ChannelProfile` is no longer a channel definition. It is a Brain
+  strategy attached to an existing Tuzzina integration, referenced
+  by `integration_id` (Tuzzina's id, NOT a brain-side name).
+- Removed from brain: `ChannelProfile.name`, `ChannelProfile.platform`,
+  `PlatformSettings` dataclass, `VALID_PLATFORMS` whitelist,
+  `__type` validation in the loader. None of these existed in
+  Tuzzina's domain; all of them were brain duplicating channel
+  identity.
+- `client.find_integration(provider, name_contains)` removed.
+  It picked a channel by name substring, which is the exact pattern
+  the new rule forbids ("never choose the 'first matching channel'
+  when multiple channels have the same name").
+- New `client.integrations()` returns the list of connected
+  integrations from Tuzzina; new `client.get_integration(id)`
+  validates a strategy's claimed id against Tuzzina and returns
+  the integration record (id, name, identifier, picture).
+- `resolve(project, channel, channel_meta)` now takes an OPTIONAL
+  `channel_meta` hint dict (from Tuzzina) and surfaces it in the
+  resolved config as `channel_meta` for audit/logging. The brain
+  never invents identity from it.
+- Renamed `platform_settings` -> `provider_overrides` everywhere.
+  Plain dict, no DTO mirror, no `__type` enforcement. Tuzzina is
+  the owner of provider DTO shape; the brain supplies values only.
+- `channels/juzzir.facebook.yaml` rewritten: dropped `name` and
+  `platform`; carries `integration_id: cmtr8cxod...` and
+  Brain-owned policy only. The channel's name, platform, picture
+  are sourced from Tuzzina at runtime.
+- `run.py` no longer matches by name; it calls
+  `client.get_integration(strategy.integration_id)` to validate and
+  obtain the Tuzzina record before any work begins.
+- 4 new tests: `integrations_returns_list`, `get_integration_by_id`,
+  `get_integration_missing_raises`, `get_integration_empty_id_raises`.
+  Test count: 53 -> 57. All pass.
+
 ## 0.2.0 — Channel Profile / Channel Strategy Layer
 
 - New `src/channels/` package: `ChannelProfile` dataclass, YAML loader,

@@ -1,18 +1,27 @@
-"""Channel profile contracts. A ChannelProfile is the per-channel
-strategy/policy: language, audience, tone, hashtag policy, link policy,
-platform settings, generation provider policy. It is NOT a copy of
-G2. G2 stays one pipeline; the channel profile is the policy that
-the pipeline consumes.
+"""Channel profile contracts (v2). A ChannelProfile is Brain's
+*strategy attached to* a Tuzzina integration. It does NOT define
+the channel: Tuzzina owns integration identity, platform, OAuth, and
+provider DTOs. Brain only contributes:
+  - brand voice, audience, tone
+  - hashtag policy
+  - link policy
+  - generation provider policy
+  - source strategy, competitor set
+  - planning preferences
+  - any future per-channel strategy (extensible via extras)
 
-Resolution: project (campaign) defaults merged with channel override;
-channel wins on every leaf. This lets a project set "all channels
-Arabic" while a single channel overrides to "English for this one".
+The integration_id is the only bridge: it ties the strategy to a
+specific Tuzzina integration (channel) discovered at runtime via
+GET /public/v1/integrations.
 
-Sentinel pattern: dataclass defaults are sentinel objects. This lets
-the resolver distinguish "channel did not set this field" from
-"channel set it to the dataclass default literal". A plain empty
-string can't be used because some fields have meaningful non-empty
-defaults (audience='general', cta_style='Learn more', ...).
+Resolution: project (campaign) defaults are merged with the channel
+profile keyed by integration_id. Channel wins on every leaf it sets;
+absent fields fall back to the project.
+
+Sentinel pattern: dataclass defaults are sentinel objects so the
+resolver can distinguish 'channel did not set this' from 'channel
+explicitly set it to the dataclass default literal'. Empty string IS
+a legitimate override value.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -43,57 +52,45 @@ class HashtagPolicy:
 
 
 @dataclass
-class PlatformSettings:
-    """Final settings dict that will reach Tuzzina. Must contain
-    __type matching the platform; other fields follow Tuzzina's DTOs.
-    Channel profiles fill only what they need; Tuzzina DTOs are
-    NOT redefined here."""
-    platform: str = "facebook"
-    payload: dict = field(default_factory=dict)
-
-
-@dataclass
 class ChannelProfile:
-    """Per-channel strategy. Extensible: any new field is just a
-    dataclass attribute; the resolver copies it. We do NOT enforce
-    every field — unknown keys are preserved in extras for forward
-    compatibility with future policies (image_policy, video_policy,
-    content_pillars, competitor_set, posting_frequency_preference, ...)."""
-    name: str = ""
-    platform: Any = _MISSING
-    language: Any = _MISSING
+    """Brain strategy attached to ONE Tuzzina integration.
+    identity (integration_id) is the only required field; everything
+    else has a documented default that can come from the project
+    (campaign) or stay unset for Tuzzina's own defaults.
+
+    `provider_overrides` is a plain dict for values that go straight
+    into the Tuzzina post `settings` payload. We do NOT name it
+    after a specific platform DTO and we do NOT validate its keys
+    here: Tuzzina is the owner of DTO shape and validation.
+
+    `extras` is forward-compat metadata (content_pillars, image_policy,
+    video_policy, competitor_set, posting_frequency_preference, ...).
+    G2 may read these in future steps; for now they are advisory.
+    """
+    integration_id: str = ""
     brand: Brand = field(default_factory=Brand)
     hashtags: HashtagPolicy = field(default_factory=HashtagPolicy)
     links_policy: Any = _MISSING
-    platform_settings: PlatformSettings = field(default_factory=PlatformSettings)
+    provider_overrides: dict = field(default_factory=dict)
     extras: dict = field(default_factory=dict)
-
-
-def _merge_dict(base: dict, override: dict) -> dict:
-    out = dict(base or {})
-    for k, v in (override or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _merge_dict(out[k], v)
-        else:
-            out[k] = v
-    return out
 
 
 def _is_set(v: Any) -> bool:
     return v is not _MISSING
 
 
-def resolve(project_cfg: dict, channel: ChannelProfile) -> dict:
-    """Deep-merge project (campaign) defaults with channel profile.
-    Channel wins on every leaf, but a channel field is only
-    considered 'set' if it differs from the sentinel
-    (i.e. the channel author actually set it). Empty string IS a
-    legitimate value ('override to empty'). Unknown future fields
-    live in ChannelProfile.extras.
+def resolve(project_cfg: dict, channel: ChannelProfile,
+            channel_meta: dict | None = None) -> dict:
+    """Deep-merge project (campaign) defaults with the channel
+    profile. Channel wins on every leaf it sets; absent fields fall
+    back to the project. Empty string IS a legitimate override.
 
-    The shape of the returned dict is identical to the current
-    load_campaign() output PLUS channel-specific overrides, so
-    pipeline.py and planner.py need no change to the keys they read."""
+    `channel_meta` is an OPTIONAL hint dict (e.g. from Tuzzina's
+    integration record: {platform, name, picture, ...}) for callers
+    that want it surfaced in the resolved config for logging/
+    auditing. The brain never assumes channel_meta is present and
+    never uses it to fabricate identity.
+    """
     proj_brand = project_cfg.get("brand") or {}
     proj_lang = project_cfg.get("language") or {}
     proj_hs = project_cfg.get("hashtags") or {}
@@ -123,25 +120,28 @@ def resolve(project_cfg: dict, channel: ChannelProfile) -> dict:
     }
 
     h = channel.hashtags
-    proj_fb = ((proj_hs.get("per_platform") or {})
-               .get("facebook", {}) or {})
+    proj_plat = ((proj_hs.get("per_platform") or {}).get(
+        (channel_meta or {}).get("identifier", "default"), {}) or {})
     hashtags_merged = {
         "enabled": (bool(h.enabled) if _is_set(h.enabled)
                     else bool(proj_hs.get("enabled", True))),
-        "per_platform": {"facebook": {
-            "max": (int(h.max) if _is_set(h.max) else int(
-                proj_fb.get("max", 5))),
-            "preferred": (list(h.preferred) if _is_set(h.preferred)
-                          else list(proj_fb.get("preferred") or [])),
-        }},
+        "per_platform": {
+            (channel_meta or {}).get("identifier", "default"): {
+                "max": (int(h.max) if _is_set(h.max)
+                        else int(proj_plat.get("max", 5))),
+                "preferred": (list(h.preferred) if _is_set(h.preferred)
+                              else list(proj_plat.get("preferred") or [])),
+            }
+        },
         "rules": list(proj_hs.get("rules") or []),
     }
 
     return {
+        "integration_id": channel.integration_id,
         "brand": brand_merged,
         "language": {
-            "default": (channel.language
-                        if _is_set(channel.language)
+            "default": ((channel_meta or {}).get("language")
+                        if (channel_meta or {}).get("language")
                         else proj_lang.get("default", "ar")),
             "output_override": proj_lang.get("output_override"),
         },
@@ -150,8 +150,7 @@ def resolve(project_cfg: dict, channel: ChannelProfile) -> dict:
                          if _is_set(channel.links_policy) else proj_lp),
         "schedule": project_cfg.get("schedule") or {},
         "sources": project_cfg.get("sources") or [],
-        "platform": (channel.platform
-                     if _is_set(channel.platform) else "facebook"),
-        "platform_settings": dict(channel.platform_settings.payload),
+        "channel_meta": dict(channel_meta or {}),
+        "provider_overrides": dict(channel.provider_overrides),
         "extras": dict(channel.extras),
     }

@@ -1,9 +1,11 @@
-name: "Juzzir Facebook"
-platform: facebook
-language: "ar"
+# Brain strategy for Tuzzina integration cmtr8cxod0003qh788fwdt2jq.
+# Channel identity (name, platform, OAuth) is owned by Tuzzina;
+# this file carries Brain-owned policy only.
 
-# Brand policy for this channel. Empty fields fall back to the
-# project (campaign) defaults. Channel wins on every leaf.
+integration_id: cmtr8cxod0003qh788fwdt2jq
+
+# Brand voice and audience for this channel. Empty fields fall back
+# to project (campaign) defaults.
 brand:
   tone: "informative, slightly playful"
   audience: "music producers, mastering engineers, Arabic-speaking creators"
@@ -11,7 +13,7 @@ brand:
   preferred_words: ["juzzir", "audio", "mastering", "mix"]
   cta_style: "Try it free at juzzir.com"
 
-# Hashtag policy: max 5, prefer these, then project defaults
+# Hashtag policy. Empty `max` falls back to the project's per-platform max.
 hashtags:
   enabled: true
   max: 5
@@ -19,13 +21,13 @@ hashtags:
 
 links_policy: hide
 
-# Platform-specific settings. __type MUST match platform.
-# These are exactly the fields Tuzzina's Facebook DTO expects.
-# We do NOT redefine the DTO here; we just supply the values.
-platform_settings:
-  __type: facebook
+# Opaque per-provider values that go straight into the Tuzzina post
+# `settings` payload. Tuzzina is the owner of DTO shape; the brain
+# only supplies values it cares about (no DTO mirror here).
+provider_overrides:
   post_type: post
 
-# Unknown future fields can go under `extras:` and are preserved
-# by the loader (forward-compat with image_policy, video_policy,
-# content_pillars, competitor_set, posting_frequency_preference, ...).
+# Forward-compat metadata that may be consumed by future G2 steps
+# (image_policy, video_policy, content_pillars, competitor_set,
+# posting_frequency_preference, ...). Not sent to Tuzzina unless
+# a G2 step explicitly reads and promotes them.

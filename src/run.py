@@ -1,6 +1,11 @@
-"""run.py: campaign + channel-profile -> G1 -> G2 -> upload -> G3 -> Tuzzina.
-Usage: TUZZINA_API_KEY=... python3 src/run.py <campaign.yaml> <channel.yaml> [--mock|--openai]
+"""run.py: campaign + channel-strategy -> G1 -> G2 -> upload -> G3 -> Tuzzina.
+Usage: TUZZINA_API_KEY=... python3 src/run.py <campaign.yaml> <strategy.yaml> [--mock|--openai]
 Default generators: mock (no keys needed). --openai needs OPENAI_API_KEY.
+
+The strategy YAML's `integration_id` is the ONLY bridge to Tuzzina:
+Brain never invents a channel. Tuzzina's get_integration is called
+to validate the id is live, and the response supplies the platform
+identifier used for the Tuzzina post settings.
 """
 from __future__ import annotations
 import json
@@ -22,11 +27,10 @@ from tuzzina.client import TuzzinaClient
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print("usage: run.py <campaign.yaml> <channel.yaml> [--mock|--openai]")
+        print("usage: run.py <campaign.yaml> <strategy.yaml> [--mock|--openai]")
         return 2
     campaign = load_campaign(sys.argv[1])
-    channel = load_channel_profile(sys.argv[2])
-    cfg = resolve(campaign, channel)
+    strategy = load_channel_profile(sys.argv[2])
     mode = sys.argv[3] if len(sys.argv) > 3 else "--mock"
     oai = os.environ.get("OPENAI_API_KEY", "")
     if mode == "--openai":
@@ -39,6 +43,21 @@ def main() -> int:
         text_gen = G.MockTextGenerator()
         image_gen_obj = G.MockImageGenerator()
 
+    client = TuzzinaClient(
+        os.environ.get("TUZZINA_API_URL", "http://127.0.0.1:4107/api"),
+        os.environ.get("TUZZINA_API_KEY", ""))
+    integ = client.get_integration(strategy.integration_id)
+    print(f"channel: name={integ.get('name')!r} "
+          f"id={integ.get('id')} platform={integ.get('identifier')!r}")
+
+    channel_meta = {
+        "integration_id": integ.get("id"),
+        "name": integ.get("name"),
+        "identifier": integ.get("identifier"),
+        "picture": integ.get("picture"),
+    }
+    cfg = resolve(campaign, strategy, channel_meta=channel_meta)
+
     adapters = {"website": WebsiteAdapter()}
     packages: list[ContentPackage] = []
     for src in cfg["sources"]:
@@ -50,20 +69,13 @@ def main() -> int:
             packages.append(build_package(
                 item, cfg["brand"], cfg["language"], cfg["hashtags"],
                 cfg["links_policy"], text_gen, image_gen_obj,
-                platform=cfg["platform"],
-                platform_settings=cfg["platform_settings"]))
+                platform=str(integ.get("identifier") or ""),
+                platform_settings=cfg["provider_overrides"]))
     if not packages:
         print("no content extracted; nothing to do")
         return 1
     planned = plan(packages, cfg["schedule"])
     print(f"G3 planned {len(planned)} posts")
-
-    client = TuzzinaClient(
-        os.environ.get("TUZZINA_API_URL", "http://127.0.0.1:4107/api"),
-        os.environ.get("TUZZINA_API_KEY", ""))
-    integ = client.find_integration(
-        channel.platform, os.environ.get("TUZZINA_CHANNEL_MATCH", ""))
-    print(f"channel: {integ.get('name')} ({integ.get('id')})")
 
     posts_payload = []
     for p in planned:
@@ -78,7 +90,7 @@ def main() -> int:
             images.append({"id": up["id"], "path": up["path"]})
             print(f"media -> {up['path'][:80]}")
         posts_payload.append({
-            "integration": {"id": integ["id"]},
+            "integration": {"id": strategy.integration_id},
             "value": [{"content": p.content, "image": images}],
             "settings": p.settings,
         })
