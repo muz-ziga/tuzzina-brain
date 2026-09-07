@@ -1,5 +1,6 @@
 """Select CLI tests. Stubs TuzzinaClient.integrations()/get_integration()
 to drive the interactive and non-TTY flows without network."""
+import importlib.util
 import io
 import json
 import os
@@ -9,21 +10,30 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
-# Insert src/ at the front of sys.path so the local Brain module
-# `select` resolves before Python's stdlib `select` (a name
-# collision that bit Linux/Python 3.12 deployments because the
-# stdlib's `select` is imported transitively by `urllib` and gets
-# cached in sys.modules before this test runs). Must run BEFORE
-# `import select`.
+# Insert src/ at the front of sys.path. Note: on Linux the stdlib
+# `select` is a C builtin (no __file__, loaded by BuiltinImporter)
+# that gets pulled into sys.modules very early (urllib, subprocess).
+# A plain `import select` will always resolve to the cached stdlib
+# entry because BuiltinImporter is consulted before path-based
+# finders. Path inserts do NOT help in that case.
+#
+# The fix used here is to load src/select.py directly by file path
+# under a different module name, bypassing the stdlib cache.
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+_SELECT_PY = Path(__file__).parent.parent / "src" / "select.py"
 
-# If the stdlib `select` is already in sys.modules (cached from an
-# earlier transitive import like urllib/unittest), the bare
-# `import select` later in this test would resolve to it and shadow
-# our local module. The src/ path insert above puts our directory
-# first; we must also evict the cached stdlib entry so the next
-# `import select` re-runs the path-based search and finds OURS.
-sys.modules.pop("select", None)
+
+def _load_select_mod():
+    spec = importlib.util.spec_from_file_location("brain_select_mod",
+                                                  str(_SELECT_PY))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["brain_select_mod"] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        sys.modules.pop("brain_select_mod", None)
+        raise
+    return mod
 
 
 class FakeResp:
@@ -67,15 +77,9 @@ def _make_client(items, lookup=None):
 # Capture the select.py CLI without invoking it through __main__,
 # so we can test the non-TTY flow without affecting the real env.
 def _run_select(argv, stdin_text, *, base_dir=None, monkey_key=True):
-    import importlib
     if monkey_key:
         os.environ["TUZZINA_API_KEY"] = "k"
-    # The stdlib `select` may have been re-cached by unittest's
-    # bootstrap between module load and now; pop it again right
-    # before the import to force the path-based lookup.
-    sys.modules.pop("select", None)
-    import select as select_mod
-    importlib.reload(select_mod)
+    select_mod = _load_select_mod()
     buf_out, buf_err = io.StringIO(), io.StringIO()
     with redirect_stdout(buf_out), redirect_stderr(buf_err):
         if stdin_text is not None:
@@ -93,12 +97,9 @@ def _run_select(argv, stdin_text, *, base_dir=None, monkey_key=True):
 def _run_select_with_client(argv, stdin_text, *, base_dir, client):
     """Run select.main with a custom client. Avoids the real
     TuzzinaClient construction by replacing _build_client AFTER
-    reload (so the reload does not reset our patch)."""
-    import importlib
+    load (so the load does not reset our patch)."""
     os.environ["TUZZINA_API_KEY"] = "k"
-    sys.modules.pop("select", None)
-    import select as select_mod
-    importlib.reload(select_mod)
+    select_mod = _load_select_mod()
     select_mod._build_client = lambda base, key: client
     buf_out, buf_err = io.StringIO(), io.StringIO()
     with redirect_stdout(buf_out), redirect_stderr(buf_err):
