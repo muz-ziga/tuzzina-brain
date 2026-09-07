@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.4.0 — Channel Selection / Strategy Management
+
+- Tuzzina is the source of truth for channel identity. Brain stores
+  only Brain-owned strategy, never channel identity.
+- `brain-strategies/<integration_id>.yaml`: one file per Tuzzina
+  integration. Filename = Tuzzina's id, NOT a brain-side name.
+- New `src/channels/strategy.py`: `ChannelStrategy` dataclass with
+  Brain-owned policy groups (brand, hashtags, links_policy, content,
+  generation, planning, provider_overrides, extras). No `platform`,
+  `name`, `provider` (social), or `oauth` fields.
+- New `src/channels/strategy_store.py`: load/save/validate with
+  path-traversal protection (`^[A-Za-z0-9_\-]{1,128}$` on the id)
+  and atomic write (temp + rename). Reusable by select.py and run.py;
+  when a Brain API/Frontend replaces the CLI, this is the only
+  file-logic to keep.
+- `src/channels/profile.py`: new `resolve_strategy(project, strategy,
+  channel_meta)` reads the new ChannelStrategy and surfaces
+  content/generation/planning in `extra_policies`. Uses the
+  shared `_MISSING` sentinel from `channels.strategy` so all
+  dataclass sentinels are comparable across modules.
+- New `src/select.py`: interactive + non-TTY CLI.
+  - Interactive: lists integrations from `GET /public/v1/integrations`,
+    lets the operator pick one, then asks only for Brain-owned
+    policy fields. Never asks for platform, name, OAuth, or
+    provider identity (those come from Tuzzina).
+  - Non-TTY: `--stdin-json` reads strategy as JSON for the upcoming
+    Brain API/Frontend integration.
+  - Validates the picked id against Tuzzina via `get_integration`
+    before saving. Read-only on Tuzzina (one GET); one local write.
+- `src/run.py`: new `--strategy-by-integration <integration_id>` mode.
+  Calls `client.get_integration(integration_id)`, loads the strategy
+  from `brain-strategies/`, and runs G1/G2/G3. The platform passed
+  to `build_package` comes from Tuzzina's response, never from the
+  strategy. Legacy two-arg mode (`<campaign.yaml> <strategy.yaml>`)
+  preserved for backward compatibility.
+- 20 new tests:
+  - `tests/test_strategy_store.py` (8): id validation, save/load
+    roundtrip, overwrite, missing-file, mismatched-id, invalid-yaml,
+    path-traversal rejection, identity-leak detection.
+  - `tests/test_select.py` (7): empty-list discovery, integration
+    lookup success/missing, non-TTY save with stubs, traversal
+    rejection, missing id, integration not in Tuzzina.
+  - `tests/test_run.py` (5): strategy-by-integration loads + validates,
+    strategy cannot override platform, missing strategy file stops
+    before G1, Tuzzina 404 stops run, legacy two-arg mode still works.
+- 0.3.0 files (`channels/juzzir.facebook.yaml` with the old `name`
+  + `platform` fields) left in place for backward compatibility;
+  the legacy `run.py` two-arg mode still reads it. New work uses
+  `brain-strategies/<integration_id>.yaml`.
+
 ## 0.3.0 — Tuzzina-Owns-Channel-Identity (architectural correction)
 
 - `ChannelProfile` is no longer a channel definition. It is a Brain

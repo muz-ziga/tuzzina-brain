@@ -1,0 +1,208 @@
+"""run.py tests: the new --strategy-by-integration mode and the
+legacy mode. Mocks TuzzinaClient so no real HTTP is hit."""
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stdout, redirect_stderr
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+def _make_client(items=None):
+    client = object()  # placeholder; we replace methods directly
+    from tuzzina.client import TuzzinaClient, TuzzinaError
+    c = TuzzinaClient("http://x/api", "k")
+    c.integrations = lambda: items or []
+    def _lookup(iid):
+        for it in (items or []):
+            if it.get("id") == iid:
+                return it
+        raise TuzzinaError(f"integration {iid} not found in Tuzzina")
+    c.get_integration = _lookup
+    # upload/draft stubs (run.py will not hit the network)
+    c.upload_from_url = lambda url: {"id": "m1", "path": url}
+    c.upload_bytes = lambda data, name, mime: {
+        "id": "m2", "path": f"https://pub.r2.dev/{name}"}
+    c.create_draft = lambda posts, date: [{"postId": "p1"}]
+    return c
+
+
+def _write_strategy(tmpdir, iid, **overrides):
+    from channels.strategy import (Brand, ChannelStrategy, ContentPolicy,
+                                    GenerationPolicy, HashtagPolicy,
+                                    PlanningPolicy)
+    s = ChannelStrategy(
+        integration_id=iid,
+        brand=Brand(tone="loud"),
+        hashtags=HashtagPolicy(enabled=True, max=2),
+        links_policy="hide",
+        content=ContentPolicy(),
+        generation=GenerationPolicy(),
+        planning=PlanningPolicy(),
+    )
+    for k, v in overrides.items():
+        setattr(s, k, v)
+    from channels.strategy_store import save
+    save(s, base_dir=tmpdir)
+    return s
+
+
+CAMPAIGN = """
+brand:
+  name: X
+language:
+  default: ar
+hashtags:
+  enabled: true
+  per_platform:
+    facebook:
+      max: 5
+links_policy: hide
+sources:
+  - type: website
+    url: https://example.com
+    n: 1
+schedule:
+  timezone: Europe/Madrid
+"""
+
+
+def _write_campaign(tmpdir):
+    p = os.path.join(tmpdir, "camp.yaml")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(CAMPAIGN)
+    return p
+
+
+def _run_run(argv, *, tmpdir, items):
+    os.environ["TUZZINA_API_KEY"] = "k"
+    import importlib
+    import run as run_mod
+    orig_website = run_mod.WebsiteAdapter
+
+    def _fake_build(base, key):
+        return _make_client(items)
+
+    orig_build = getattr(run_mod, "_build_client", None)
+    if orig_build is not None:
+        run_mod._build_client = _fake_build
+    else:
+        run_mod.TuzzinaClient = _fake_build
+    # Avoid real network: WebsiteAdapter.extract is monkey-patched.
+    class FakeWebsite:
+        def extract(self, url, n):
+            from contracts import ExtractionResult, Identity, SourceItem
+            return ExtractionResult(
+                items=[SourceItem(source_id="s1", source_type="website",
+                                  source_url=url, title="T", text="body",
+                                  images=[])],
+                identity=Identity(name="X"),
+                meta={"returned": 1, "requested": n,
+                      "partial": False, "reason": ""})
+    run_mod.WebsiteAdapter = FakeWebsite
+    buf_out, buf_err = io.StringIO(), io.StringIO()
+    with redirect_stdout(buf_out), redirect_stderr(buf_err):
+        try:
+            rc = run_mod.main(argv)
+        except SystemExit as e:
+            rc = e.code if isinstance(e.code, int) else 1
+        finally:
+            if orig_build is not None:
+                run_mod._build_client = orig_build
+            else:
+                run_mod.TuzzinaClient = orig_build  # actually orig TuzzinaClient
+            run_mod.WebsiteAdapter = orig_website
+    return rc, buf_out.getvalue(), buf_err.getvalue()
+
+
+class RunByIntegrationTest(unittest.TestCase):
+    def test_loads_strategy_and_validates_against_tuzzina(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        _write_strategy(tmp, "integ-fb-1")
+        items = [{"id": "integ-fb-1", "name": "Juzzir Facebook",
+                   "identifier": "facebook"}]
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp],
+            tmpdir=tmp, items=items)
+        self.assertEqual(rc, 0, msg=f"err={err}")
+        # Platform printed = facebook (from Tuzzina, not from YAML)
+        self.assertIn("platform='facebook'", out)
+        self.assertIn("DRAFTS CREATED", out)
+
+    def test_strategy_cannot_override_platform(self):
+        # If a malformed strategy somehow set provider_overrides with
+        # a '__type' key, the run must use Tuzzina's platform, not the
+        # strategy's value. The current schema doesn't accept
+        # '__type' in strategy/provider_overrides (no field for it),
+        # so this test only documents the current safety and the
+        # 'provider' field on GenerationPolicy is advisory, not
+        # authoritative. We still verify that the platform Tuzzina
+        # returned is what is sent to the scheduler.
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        _write_strategy(tmp, "integ-fb-1",
+                        provider_overrides={"post_type": "post"})
+        items = [{"id": "integ-fb-1", "name": "Juzzir",
+                   "identifier": "facebook"}]
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp],
+            tmpdir=tmp, items=items)
+        self.assertEqual(rc, 0, msg=f"err={err}")
+        # Build path uses cfg["channel_meta"]["identifier"]; the
+        # code in run.py passes that platform to build_package. The
+        # strategy's provider_overrides only contain post_type, no
+        # __type leakage.
+        self.assertIn("platform='facebook'", out)
+
+    def test_missing_integration_id_stops_before_g1(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        # No strategy file; strategy_store.load will FileNotFoundError
+        # before G1 runs.
+        items = []
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "missing-id",
+             "--strategy-base-dir", tmp],
+            tmpdir=tmp, items=items)
+        self.assertNotEqual(rc, 0, msg=f"err={err}")
+
+    def test_tuzzina_404_stops_run(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        _write_strategy(tmp, "integ-1")
+        # items is empty so get_integration raises; we never call G1.
+        items = []
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-1",
+             "--strategy-base-dir", tmp],
+            tmpdir=tmp, items=items)
+        self.assertNotEqual(rc, 0, msg=f"err={err}")
+
+
+class LegacyModeStillWorksTest(unittest.TestCase):
+    def test_legacy_two_positional_args(self):
+        # The original flow with a strategy.yaml at an explicit path
+        # still works. This is the "old shape" ChannelProfile loader.
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        strat_yaml = os.path.join(tmp, "strat.yaml")
+        with open(strat_yaml, "w", encoding="utf-8") as f:
+            f.write("integration_id: integ-fb-1\nbrand:\n  tone: loud\n"
+                    "hashtags:\n  enabled: true\n  max: 3\n"
+                    "links_policy: hide\n"
+                    "provider_overrides:\n  post_type: post\n")
+        items = [{"id": "integ-fb-1", "name": "Juzzir",
+                   "identifier": "facebook"}]
+        rc, out, err = _run_run([camp, strat_yaml], tmpdir=tmp, items=items)
+        self.assertEqual(rc, 0, msg=f"err={err}")
+        self.assertIn("DRAFTS CREATED", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,80 @@
+"""Brain-owned strategy schema (v3). A Strategy is Brain's per-channel
+policy attached to ONE Tuzzina integration. It does NOT define the
+channel: Tuzzina owns integration identity, platform, OAuth, and
+provider DTOs. The only bridge is `integration_id`.
+
+Fields grouped semantically so the YAML reads as a Brain-side policy
+document. Unknown future fields go in `extras` and pass through
+unchanged (forward-compat with image_policy, video_policy, etc.).
+"""
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Any
+
+
+_MISSING = object()
+
+
+@dataclass
+class Brand:
+    name: Any = _MISSING
+    tone: Any = _MISSING
+    audience: Any = _MISSING
+    banned_words: Any = _MISSING
+    preferred_words: Any = _MISSING
+    cta_style: Any = _MISSING
+
+
+@dataclass
+class HashtagPolicy:
+    enabled: Any = _MISSING
+    max: Any = _MISSING
+    preferred: Any = _MISSING
+
+
+@dataclass
+class ContentPolicy:
+    content_pillars: Any = _MISSING
+    sources_policy: Any = _MISSING
+
+
+@dataclass
+class GenerationPolicy:
+    provider: Any = _MISSING
+    prompt_style: Any = _MISSING
+
+
+@dataclass
+class PlanningPolicy:
+    cadence: Any = _MISSING
+    days: Any = _MISSING
+    times: Any = _MISSING
+
+
+@dataclass
+class ChannelStrategy:
+    """Brain strategy attached to ONE Tuzzina integration.
+    `integration_id` is the only identity field. Everything else
+    is Brain-owned policy and has documented defaults that may come
+    from the project (campaign) when unset here.
+
+    `provider_overrides` is a plain dict for values that go straight
+    into the Tuzzina post `settings` payload. Tuzzina is the owner
+    of DTO shape; the brain supplies values only. We do NOT name
+    this after a specific platform and do NOT validate keys here.
+
+    `extras` is forward-compat metadata not consumed by G2 today.
+    """
+    integration_id: str = ""
+    brand: Brand = field(default_factory=Brand)
+    hashtags: HashtagPolicy = field(default_factory=HashtagPolicy)
+    links_policy: Any = _MISSING
+    content: ContentPolicy = field(default_factory=ContentPolicy)
+    generation: GenerationPolicy = field(default_factory=GenerationPolicy)
+    planning: PlanningPolicy = field(default_factory=PlanningPolicy)
+    provider_overrides: dict = field(default_factory=dict)
+    extras: dict = field(default_factory=dict)
+
+
+def _is_set(v: Any) -> bool:
+    return v is not _MISSING

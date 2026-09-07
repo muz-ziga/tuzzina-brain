@@ -43,27 +43,43 @@ audit metadata — never as the source of identity.
 ## Layering (G1/G2/G3 + Channel Strategy)
 
 ```
-Project (campaign.yaml) ── defaults ─┐
-                                    ├── resolve(project, channel, channel_meta)
-Channel (channels/<integration_id>.yaml) ── strategy ─┘
-            ↓
-        G2 pipeline (one shared)
-            ↓
-        Tuzzina Public API (upload + posts)
+Tuzzina (Public API)
+   │
+   │  GET /public/v1/integrations  (channel discovery)
+   │  GET /public/v1/integration-settings/:id
+   │  POST /public/v1/upload-from-url
+   │  POST /public/v1/posts
+   ▼
+Brain
+   │
+   │  select.py      ── CLI: read Tuzzina, pick one, save strategy
+   │  run.py        ── CLI: read Tuzzina, load strategy, run pipeline
+   │  brain-strategies/<integration_id>.yaml  (Brain-owned policy only)
+   │
+   │  G1 (sources) -> G2 (brand + policy merge) -> G3 (plan)
+   │
+   │  upload-to-R2 via Tuzzina Public API
+   │  create-posts via Tuzzina Public API
+   ▼
+Tuzzina (Scheduler / Temporal / provider adapters)
 ```
 
 G1 / G2 / G3 are ONE pipeline, shared across all channels. Channel
-strategy is a policy layer that supplies the per-channel brand tone,
-audience, hashtag policy, link policy, and per-provider overrides.
-The Channel strategy does NOT redefine Tuzzina DTOs; it sets the
-values that get passed through.
+Strategy is a policy layer that supplies the per-channel brand tone,
+audience, hashtag policy, link policy, content/generation/planning
+policies, and per-provider overrides.
 
-Adding a new channel = add `channels/<integration_id>.yaml` (referencing
-an existing Tuzzina integration). No code change to G2.
+## Strategy file convention
 
-Adding a new policy field (image_policy, video_policy, ...) = add it
-under `extras:` in the YAML; the resolver preserves it. No code change
-required to read it later from a G2 step.
+`brain-strategies/<integration_id>.yaml` — one file per Tuzzina
+integration. The filename IS the Tuzzina integration id, so two
+strategies can never collide and the filename is a reference, not
+an identity.
+
+A strategy file may contain only Brain-owned policy. It MUST NOT
+contain `platform`, `name` (channel name), `provider` (social
+platform), `oauth`, or any `providerIdentifier`. The platform comes
+from `get_integration(integration_id)` at runtime.
 
 ## Build discipline
 
