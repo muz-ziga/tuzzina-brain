@@ -70,6 +70,10 @@ def _run_select(argv, stdin_text, *, base_dir=None, monkey_key=True):
     import importlib
     if monkey_key:
         os.environ["TUZZINA_API_KEY"] = "k"
+    # The stdlib `select` may have been re-cached by unittest's
+    # bootstrap between module load and now; pop it again right
+    # before the import to force the path-based lookup.
+    sys.modules.pop("select", None)
     import select as select_mod
     importlib.reload(select_mod)
     buf_out, buf_err = io.StringIO(), io.StringIO()
@@ -92,6 +96,7 @@ def _run_select_with_client(argv, stdin_text, *, base_dir, client):
     reload (so the reload does not reset our patch)."""
     import importlib
     os.environ["TUZZINA_API_KEY"] = "k"
+    sys.modules.pop("select", None)
     import select as select_mod
     importlib.reload(select_mod)
     select_mod._build_client = lambda base, key: client
