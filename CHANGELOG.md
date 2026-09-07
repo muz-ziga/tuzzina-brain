@@ -3,16 +3,20 @@
 ## 0.4.1 — Test portability fix (Linux/Python 3.12)
 
 - `tests/test_select.py`:
-  - `from pathlib import Path` import added.
-  - `sys.path.insert(0, str(Path(__file__).parent.parent / "src"))`
-    replaces the previous `os.path.join(...)` form, and is paired
-    with `sys.modules.pop("select", None)`.
-- Why: on Linux/Python 3.12, `urllib` transitively imports the
-  stdlib `select` module and caches it in `sys.modules` before this
-  test runs. Once cached, a bare `import select` resolves to the
-  stdlib, shadowing the local `src/select.py` and breaking
-  `test_non_tty_*` (4 errors). The path-insert alone is not enough;
-  the cached stdlib entry must be evicted first.
+  - `from pathlib import Path` and `import importlib.util` imports
+    added.
+  - Replaces the old `import select as select_mod; importlib.reload(...)`
+    pattern with a `_load_select_mod()` helper that uses
+    `importlib.util.spec_from_file_location` to load `src/select.py`
+    directly by file path under the module name `brain_select_mod`.
+- Why: on Linux/Python 3.12 the stdlib `select` is a C builtin
+  (no `__file__`, loaded by `BuiltinImporter`) and gets pulled into
+  `sys.modules` very early by `urllib`/`subprocess`. Once cached,
+  a bare `import select` always resolves to the stdlib — even with
+  `sys.modules.pop('select', None)` and `sys.path.insert(0, ...)` —
+  because `BuiltinImporter` is consulted before path-based finders.
+  Loading by file path under a different module name bypasses the
+  cache entirely.
 - Effect: `python3 -m unittest discover -s tests` now passes
   83/83 on Linux/Python 3.12 (matches Windows).
 - No production code change. No Tuzzina source change. No
