@@ -1,0 +1,33 @@
+brand:
+  name: "Example Brand"
+  description: "Short brand description used for tone."
+  tone: "friendly, direct"
+  audience: "general Arabic audience"
+  banned_words: []
+  preferred_words: []
+  cta_style: "Learn more"
+  colors: []
+  logo_url: ""
+
+language:
+  default: ar
+  output_override: null
+
+hashtags:
+  enabled: true
+  per_platform:
+    facebook:
+      max: 5
+  rules: []
+
+links_policy: hide
+
+sources:
+  - type: website
+    url: https://example.com
+    n: 3
+
+schedule:
+  timezone: UTC
+  days: []
+  times: []
