@@ -1,0 +1,33 @@
+brand:
+  name: "Juzzir"
+  description: "Project-wide defaults for Juzzir. Channel profiles override."
+  tone: "informative"
+  audience: "general Arabic audience"
+  banned_words: []
+  preferred_words: ["juzzir"]
+  cta_style: "Learn more"
+  colors: []
+  logo_url: ""
+
+language:
+  default: ar
+  output_override: null
+
+hashtags:
+  enabled: true
+  per_platform:
+    facebook:
+      max: 5
+  rules: []
+
+links_policy: hide
+
+sources:
+  - type: website
+    url: https://www.juzzir.com/
+    n: 1
+
+schedule:
+  timezone: Europe/Madrid
+  days: []
+  times: []

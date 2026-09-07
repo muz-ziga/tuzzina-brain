@@ -1,5 +1,5 @@
-"""run.py: campaign -> G1 -> G2 -> upload -> G3 -> Tuzzina drafts.
-Usage: TUZZINA_API_KEY=... python3 src/run.py campaigns/<name>.yaml [--mock|--openai]
+"""run.py: campaign + channel-profile -> G1 -> G2 -> upload -> G3 -> Tuzzina.
+Usage: TUZZINA_API_KEY=... python3 src/run.py <campaign.yaml> <channel.yaml> [--mock|--openai]
 Default generators: mock (no keys needed). --openai needs OPENAI_API_KEY.
 """
 from __future__ import annotations
@@ -10,6 +10,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from campaign import load_campaign
+from channels.loader import load_channel_profile
+from channels.profile import resolve
 from contracts import ContentPackage
 from g1.website import WebsiteAdapter
 from g2 import generators as G
@@ -19,18 +21,20 @@ from tuzzina.client import TuzzinaClient
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: run.py campaigns/<name>.yaml [--mock|--openai]")
+    if len(sys.argv) < 3:
+        print("usage: run.py <campaign.yaml> <channel.yaml> [--mock|--openai]")
         return 2
-    cfg = load_campaign(sys.argv[1])
-    mode = sys.argv[2] if len(sys.argv) > 2 else "--mock"
+    campaign = load_campaign(sys.argv[1])
+    channel = load_channel_profile(sys.argv[2])
+    cfg = resolve(campaign, channel)
+    mode = sys.argv[3] if len(sys.argv) > 3 else "--mock"
     oai = os.environ.get("OPENAI_API_KEY", "")
     if mode == "--openai":
         if not oai:
             print("OPENAI_API_KEY is not set; use --mock")
             return 2
         text_gen = G.OpenAITextGenerator(oai)
-        image_gen_obj = None  # images via extracted URLs in this slice
+        image_gen_obj = None
     else:
         text_gen = G.MockTextGenerator()
         image_gen_obj = G.MockImageGenerator()
@@ -45,7 +49,9 @@ def main() -> int:
         for item in res.items:
             packages.append(build_package(
                 item, cfg["brand"], cfg["language"], cfg["hashtags"],
-                cfg["links_policy"], text_gen, image_gen_obj))
+                cfg["links_policy"], text_gen, image_gen_obj,
+                platform=cfg["platform"],
+                platform_settings=cfg["platform_settings"]))
     if not packages:
         print("no content extracted; nothing to do")
         return 1
@@ -56,7 +62,7 @@ def main() -> int:
         os.environ.get("TUZZINA_API_URL", "http://127.0.0.1:4107/api"),
         os.environ.get("TUZZINA_API_KEY", ""))
     integ = client.find_integration(
-        "facebook", os.environ.get("TUZZINA_CHANNEL_MATCH", ""))
+        channel.platform, os.environ.get("TUZZINA_CHANNEL_MATCH", ""))
     print(f"channel: {integ.get('name')} ({integ.get('id')})")
 
     posts_payload = []

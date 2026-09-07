@@ -1,0 +1,31 @@
+name: "Juzzir Facebook"
+platform: facebook
+language: "ar"
+
+# Brand policy for this channel. Empty fields fall back to the
+# project (campaign) defaults. Channel wins on every leaf.
+brand:
+  tone: "informative, slightly playful"
+  audience: "music producers, mastering engineers, Arabic-speaking creators"
+  banned_words: ["spam", "fake"]
+  preferred_words: ["juzzir", "audio", "mastering", "mix"]
+  cta_style: "Try it free at juzzir.com"
+
+# Hashtag policy: max 5, prefer these, then project defaults
+hashtags:
+  enabled: true
+  max: 5
+  preferred: ["juzzir", "audioproduction", "mastering", "indiemusic"]
+
+links_policy: hide
+
+# Platform-specific settings. __type MUST match platform.
+# These are exactly the fields Tuzzina's Facebook DTO expects.
+# We do NOT redefine the DTO here; we just supply the values.
+platform_settings:
+  __type: facebook
+  post_type: post
+
+# Unknown future fields can go under `extras:` and are preserved
+# by the loader (forward-compat with image_policy, video_policy,
+# content_pillars, competitor_set, posting_frequency_preference, ...).

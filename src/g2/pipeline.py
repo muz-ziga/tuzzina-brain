@@ -47,14 +47,17 @@ def apply_link_policy(content: str, url: str, policy: str,
 def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
                   hs_cfg: dict, links_policy: str,
                   text_gen: TextGenerator,
-                  image_gen: ImageGenerator | None) -> ContentPackage:
+                  image_gen: ImageGenerator | None,
+                  platform: str = "facebook",
+                  platform_settings: dict | None = None) -> ContentPackage:
     summary = normalize(item.text)
     text = text_gen.generate(item.title, summary, brand)
     text, banned_hit = apply_banned(text, brand.get("banned_words", []))
     max_tags = int(((hs_cfg.get("per_platform") or {}).get(
-        "facebook") or {}).get("max", 5)) if hs_cfg.get("enabled") else 0
-    tags = make_hashtags(item.title, summary,
-                         brand.get("preferred_words", []), max_tags)
+        platform) or {}).get("max", 5)) if hs_cfg.get("enabled") else 0
+    preferred = ((hs_cfg.get("per_platform") or {}).get(platform) or
+                {}).get("preferred", brand.get("preferred_words", []))
+    tags = make_hashtags(item.title, summary, preferred, max_tags)
     body = text
     if tags:
         body = f"{body}\n\n{' '.join(tags)}"
@@ -67,11 +70,16 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
     elif image_gen is not None:
         media.append({"kind": "generator", "generator": image_gen,
                       "prompt": f"{item.title} :: {summary[:200]}"})
+    settings = {"__type": platform}
+    if platform_settings:
+        for k, v in platform_settings.items():
+            if k != "__type":
+                settings[k] = v
     return ContentPackage(
         title=item.title[:200], content=body, description=summary[:300],
         hashtags=tags, links=[item.source_url] if links_policy == "attach"
         and item.source_url else [],
-        media=media, platform="facebook",
-        settings={"__type": "facebook", "post_type": "post"},
+        media=media, platform=platform,
+        settings=settings,
         source_ref=item.source_id,
         )

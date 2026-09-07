@@ -12,6 +12,27 @@ When extending this repo, add a new `SourceAdapter` (in
 (in `src/g2/generators.py`). Do not add new ad-hoc HTTP clients for
 Tuzzina; extend the existing one.
 
+## Layering (G1/G2/G3 + Channel Profile)
+
+```
+Project (campaign.yaml) ── defaults ─┐
+                                    ├── resolve() ── G2 pipeline ── Tuzzina
+Channel (channels/*.yaml) ── override┘
+```
+
+G1 / G2 / G3 are ONE pipeline, shared across all channels. Channel
+Profile is a policy layer that supplies the per-channel brand tone,
+audience, hashtag policy, link policy, and platform settings
+(__type + DTO fields). The ChannelProfile does NOT redefine Tuzzina
+DTOs; it sets the values that get passed through.
+
+Adding a new channel = add `channels/<name>.<platform>.yaml` + a new
+entry in `VALID_PLATFORMS` (loader). No code change to G2.
+
+Adding a new policy field (image_policy, video_policy, ...) = add it
+to `extras` of the YAML; the resolver preserves it. No code change
+required to read it later from a G2 step.
+
 ## Build discipline
 
 Before every commit:
