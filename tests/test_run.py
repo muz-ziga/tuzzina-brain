@@ -27,6 +27,7 @@ def _make_client(items=None):
     c.upload_bytes = lambda data, name, mime: {
         "id": "m2", "path": f"https://pub.r2.dev/{name}"}
     c.create_draft = lambda posts, date: [{"postId": "p1"}]
+    c.create_post = lambda posts, date, post_type="draft": [{"postId": "p1"}]
     return c
 
 
@@ -132,7 +133,7 @@ class RunByIntegrationTest(unittest.TestCase):
         self.assertEqual(rc, 0, msg=f"err={err}")
         # Platform printed = facebook (from Tuzzina, not from YAML)
         self.assertIn("platform='facebook'", out)
-        self.assertIn("DRAFTS CREATED", out)
+        self.assertIn("INJECTED", out)
 
     def test_strategy_cannot_override_platform(self):
         # If a malformed strategy somehow set provider_overrides with
@@ -159,6 +160,7 @@ class RunByIntegrationTest(unittest.TestCase):
         # strategy's provider_overrides only contain post_type, no
         # __type leakage.
         self.assertIn("platform='facebook'", out)
+        self.assertIn("INJECTED", out)
 
     def test_missing_integration_id_stops_before_g1(self):
         tmp = tempfile.mkdtemp(prefix="tbra_run_")
@@ -201,7 +203,72 @@ class LegacyModeStillWorksTest(unittest.TestCase):
                    "identifier": "facebook"}]
         rc, out, err = _run_run([camp, strat_yaml], tmpdir=tmp, items=items)
         self.assertEqual(rc, 0, msg=f"err={err}")
-        self.assertIn("DRAFTS CREATED", out)
+        self.assertIn("INJECTED", out)
+
+
+class InjectionPathTest(unittest.TestCase):
+    """The orchestration path goes through CanonicalIntent +
+    InjectionService (no manual payload construction)."""
+
+    def test_schedule_mode_flows_through(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        _write_strategy(tmp, "integ-fb-1")
+        items = [{"id": "integ-fb-1", "name": "Juzzir",
+                   "identifier": "facebook"}]
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp, "--post-mode", "schedule"],
+            tmpdir=tmp, items=items)
+        self.assertEqual(rc, 0, msg=f"err={err}")
+        self.assertIn("mode=schedule", out)
+
+    def test_now_mode_flows_through(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        _write_strategy(tmp, "integ-fb-1")
+        items = [{"id": "integ-fb-1", "name": "Juzzir",
+                   "identifier": "facebook"}]
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp, "--post-mode", "now"],
+            tmpdir=tmp, items=items)
+        self.assertEqual(rc, 0, msg=f"err={err}")
+        self.assertIn("mode=now", out)
+
+    def test_no_manual_payload_construction(self):
+        # run.py must not build Tuzzina post payloads by hand;
+        # payload assembly lives in InjectionService only.
+        import pathlib
+        src = (pathlib.Path(__file__).parent.parent / "src" / "run.py"
+               ).read_text(encoding="utf-8")
+        self.assertNotIn("posts_payload", src)
+        self.assertNotIn("create_draft", src)
+
+    def test_stale_integration_fails_cleanly(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        _write_strategy(tmp, "integ-stale")
+        items = []  # Tuzzina knows nothing about integ-stale
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-stale",
+             "--strategy-base-dir", tmp],
+            tmpdir=tmp, items=items)
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("INJECTED", out)
+
+    def test_unsupported_platform_fails_cleanly(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        _write_strategy(tmp, "integ-tt-1")
+        items = [{"id": "integ-tt-1", "name": "Juzzir TT",
+                   "identifier": "tiktok"}]
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-tt-1",
+             "--strategy-base-dir", tmp],
+            tmpdir=tmp, items=items)
+        self.assertEqual(rc, 4, msg=f"err={err}")
+        self.assertNotIn("INJECTED", out)
 
 
 if __name__ == "__main__":

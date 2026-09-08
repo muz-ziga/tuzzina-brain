@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0 — Phase 2: InjectionService is the live path
+
+- `run.py` no longer builds Tuzzina post payloads by hand. After
+  G1/G2/G3 + media upload (unchanged), each planned post becomes a
+  `CanonicalIntent` consumed by `InjectionService.inject`, which
+  resolves the integration live, selects the adapter from Tuzzina's
+  identifier, translates, and posts via `TuzzinaClient.create_post`.
+- New `--post-mode {draft,schedule,now}` flag (default: draft,
+  preserving previous behavior). Previously run.py always created
+  drafts; modes now flow through the Injection Layer.
+- Removed dead `_run()` helper (never called). Removed the inline
+  `adapter.shape_text` call (service assembles once; no duplicate
+  hashtags by construction).
+- `main()` maps `UnsupportedPlatform` to exit code 4 (same as the
+  previous inline handler).
+- One intentional semantic delta: each planned post is injected
+  with its own `planned_at` instead of bundling all posts under
+  the first slot's date. G3 already computed per-post slots; the
+  old code discarded all but the first.
+- 5 new tests in `tests/test_run.py` (schedule/now modes, no
+  manual payload construction, stale integration, unsupported
+  platform). 152/152 pass.
+- No Tuzzina/Postiz/Meta/R2 changes. No new dependencies.
+
 ## 0.6.0 — Injection Layer V1 (intent → adapter → Tuzzina payload)
 
 - New `src/injection/` package: `CanonicalIntent` (brain decision,

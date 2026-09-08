@@ -23,7 +23,10 @@ from g1.website import WebsiteAdapter
 from g2 import generators as G
 from g2.pipeline import build_package
 from g3.planner import plan
+from injection.intent import build_intent
+from injection.service import InjectionService
 from tuzzina.client import TuzzinaClient, TuzzinaError
+from adapters.base import UnsupportedPlatform
 
 
 def _build_client(base: str, key: str) -> TuzzinaClient:
@@ -40,28 +43,9 @@ def _build_generators(mode: str):
     return G.MockTextGenerator(), G.MockImageGenerator()
 
 
-def _run(campaign_path: str, strategy, channel_meta: dict, mode: str,
-         client: TuzzinaClient) -> int:
-    if isinstance(strategy, dict):
-        cfg = strategy
-    else:
-        from channels.profile import ChannelProfile
-        from channels.strategy import ChannelStrategy
-        if isinstance(strategy, ChannelStrategy):
-            cfg = resolve_strategy(campaign_path if isinstance(
-                campaign_path, dict) else {}, strategy, channel_meta)
-        elif isinstance(strategy, ChannelProfile):
-            cfg = resolve(strategy, channel_meta=channel_meta)
-        else:
-            raise TypeError("strategy must be ChannelStrategy or "
-                            "ChannelProfile or dict")
-    return _execute(cfg, mode, client, strategy.integration_id)
-
-
 def _execute(cfg: dict, mode: str, client: TuzzinaClient,
-             integration_id: str) -> int:
+             integration_id: str, post_mode: str = "draft") -> int:
     from adapters import get_adapter
-    from adapters.base import UnsupportedPlatform
     text_gen, image_gen_obj = _build_generators(mode)
     identifier = str(cfg.get("channel_meta", {}).get("identifier") or "")
     try:
@@ -111,8 +95,8 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
                   f"media below min_items={lo}")
             continue
         pkg.media = shaped
-        # Adapter text shaping (length cap, hashtag placement).
-        pkg.content = adapter.shape_text(pkg.content, pkg.hashtags)
+        # NOTE: no adapter.shape_text here. pkg.content stays plain and
+        # pkg.hashtags stay separate; InjectionService assembles once.
         kept.append(pkg)
     if not kept:
         print("no packages survived media policy; nothing to do")
@@ -120,7 +104,15 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
     planned = plan(kept, cfg["schedule"])
     print(f"G3 planned {len(planned)} posts")
 
-    posts_payload = []
+    # Injection path (the ONLY publish path): each planned post
+    # becomes a CanonicalIntent consumed by InjectionService, which
+    # resolves the integration live, selects the adapter from
+    # Tuzzina's identifier, translates, and posts via TuzzinaClient.
+    service = InjectionService()
+    overrides = cfg.get("provider_overrides") or {}
+    brand_cta = cfg.get("brand", {}).get("cta_style", "Learn more")
+    links_policy = cfg.get("links_policy", "hide")
+    results = []
     for p in planned:
         images = []
         for m in p.media:
@@ -132,15 +124,27 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
                 up = client.upload_bytes(blob, fname, "image/png")
             images.append({"id": up["id"], "path": up["path"]})
             print(f"media -> {up['path'][:80]}")
-        posts_payload.append({
-            "integration": {"id": integration_id},
-            "value": [{"content": p.content, "image": images}],
-            "settings": p.settings,
-        })
-    date = planned[0].planned_at
-    out = client.create_draft(posts_payload, date)
-    print("DRAFTS CREATED:")
-    print(json.dumps(out, ensure_ascii=False)[:800])
+        pk = overrides.get("post_type")
+        intent = build_intent(
+            integration_id=integration_id,
+            content=p.content,
+            media=images,
+            publish_at=p.planned_at,
+            mode=post_mode,
+            hashtags=list(p.tags),
+            link=p.source_ref if links_policy == "attach" else "",
+            links_policy=links_policy,
+            post_kind=pk if pk in ("post", "story") else "post",
+            settings=dict(overrides),
+            cta_style=brand_cta,
+        )
+        out = service.inject(intent, client)
+        results.append(out)
+    print(f"INJECTED {len(results)} post(s) [mode={post_mode}]:")
+    for r in results:
+        print(json.dumps({k: r[k] for k in (
+            "integration_id", "identifier", "post_kind", "mode",
+            "publish_at")}, ensure_ascii=False))
     return 0
 
 
@@ -153,6 +157,9 @@ def main(argv=None) -> int:
     except TuzzinaError as e:
         print(f"error: {e}", file=sys.stderr)
         return 3
+    except UnsupportedPlatform as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 4
 
 
 def _main(argv=None) -> int:
@@ -173,6 +180,10 @@ def _main(argv=None) -> int:
                    const="--mock", default="--mock")
     p.add_argument("--openai", action="store_const", dest="mode",
                    const="--openai")
+    p.add_argument("--post-mode", choices=["draft", "schedule", "now"],
+                   default="draft",
+                   help="Tuzzina post type for injected posts "
+                        "(default: draft)")
     args = p.parse_args(argv)
 
     if args.strategy and args.strategy_by_integration:
@@ -211,7 +222,8 @@ def _main(argv=None) -> int:
         # by the runtime channel_meta, not by the strategy. A future
         # audit must confirm channel_meta['identifier'] is what Tuzzina
         # returned, not what the YAML claims.
-        return _execute(cfg, args.mode, client, args.strategy_by_integration)
+        return _execute(cfg, args.mode, client, args.strategy_by_integration,
+                        post_mode=args.post_mode)
 
     # Legacy mode: explicit strategy.yaml
     profile = load_channel_profile(args.strategy)
@@ -225,7 +237,8 @@ def _main(argv=None) -> int:
     print(f"channel: name={integ.get('name')!r} "
           f"id={integ.get('id')} platform={integ.get('identifier')!r}")
     cfg = resolve(campaign, profile, channel_meta=channel_meta)
-    return _execute(cfg, args.mode, client, profile.integration_id)
+    return _execute(cfg, args.mode, client, profile.integration_id,
+                    post_mode=args.post_mode)
 
 
 if __name__ == "__main__":
