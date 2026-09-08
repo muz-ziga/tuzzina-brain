@@ -37,8 +37,26 @@ def _build_generators(mode: str):
     if mode == "--openai":
         if not oai:
             raise SystemExit("OPENAI_API_KEY is not set; use --mock")
-        return G.OpenAITextGenerator(oai), None
+        return G.OpenAITextGenerator(oai), G.TuzzinaImageGenerator()
     return G.MockTextGenerator(), G.MockImageGenerator()
+
+
+def _resolve_media(client: TuzzinaClient, m: dict) -> dict:
+    """One planned media item -> Tuzzina {id, path} reference.
+
+    url kind: existing upload_from_url (extracted source media).
+    Delegated generator kind (TuzzinaImageGenerator): client
+    generate_image (Tuzzina's stored reference, no Brain-side bytes,
+    no Brain-side upload). Mock/legacy generator kind:
+    generate_png + upload_bytes (unit tests and --mock paths only).
+    """
+    if m.get("kind") == "url":
+        return client.upload_from_url(m["url"])
+    gen = m["generator"]
+    if isinstance(gen, G.TuzzinaImageGenerator):
+        return client.generate_image(m["prompt"])
+    blob, fname = gen.generate_png(m["prompt"])
+    return client.upload_bytes(blob, fname, "image/png")
 
 
 def _execute(cfg: dict, mode: str, client: TuzzinaClient,
@@ -122,12 +140,7 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
     for p in planned:
         images = []
         for m in p.media:
-            if m.get("kind") == "url":
-                up = client.upload_from_url(m["url"])
-            else:
-                gen = m["generator"]
-                blob, fname = gen.generate_png(m["prompt"])
-                up = client.upload_bytes(blob, fname, "image/png")
+            up = _resolve_media(client, m)
             images.append({"id": up["id"], "path": up["path"]})
             print(f"media -> {up['path'][:80]}")
         pk = overrides.get("post_type")

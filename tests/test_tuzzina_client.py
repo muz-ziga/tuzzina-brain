@@ -14,9 +14,10 @@ CALLS = []
 
 
 class FakeResp:
-    def __init__(self, payload, code=200):
+    def __init__(self, payload, code=200, headers=None):
         self.payload = payload
         self.code = code
+        self.headers = headers or {}
 
     def read(self):
         return json.dumps(self.payload).encode()
@@ -32,6 +33,8 @@ class FakeResp:
 
 def fake_urlopen(req, timeout=None):
     CALLS.append((req.full_url, req.get_method()))
+    if req.full_url.endswith("/mcp"):
+        return _fake_mcp(req)
     if req.full_url.endswith("/public/v1/upload-from-url"):
         return FakeResp({"id": "m1", "path": "https://pub.r2.dev/a.jpg"})
     if req.full_url.endswith("/public/v1/upload"):
@@ -58,6 +61,50 @@ def fake_urlopen(req, timeout=None):
                        "dataSchema": []}],
         }})
     return FakeResp({}, 404)
+
+
+MCP_CALLS = []
+
+
+def _fake_mcp(req):
+    """Minimal MCP server double: JSON-RPC initialize + tools/call
+    for generateImageTool. Records every call (url, payload, headers)."""
+    payload = json.loads(req.data.decode())
+    MCP_CALLS.append({
+        "url": req.full_url,
+        "method": payload.get("method"),
+        "params": payload.get("params"),
+        "auth": req.get_header("Authorization"),
+        # urllib capitalizes stored header names
+        # ("Mcp-Session-Id" -> "Mcp-session-id"); on the wire HTTP
+        # header names are case-insensitive.
+        "session": req.get_header("Mcp-session-id"),
+    })
+    if payload.get("method") == "initialize":
+        return FakeResp({
+            "jsonrpc": "2.0", "id": payload.get("id"),
+            "result": {"protocolVersion": "2024-11-05",
+                       "capabilities": {},
+                       "serverInfo": {"name": "Postiz MCP",
+                                      "version": "1.0.0"}}},
+            headers={"mcp-session-id": "s1"})
+    if payload.get("method") == "notifications/initialized":
+        return FakeResp({})
+    if payload.get("method") == "tools/call":
+        args = (payload.get("params") or {}).get("arguments") or {}
+        assert (payload.get("params") or {}).get("name") == \
+            "generateImageTool", payload
+        ref = {"id": "m9",
+               "path": "https://pub.r2.dev/ai-%s.png" % (
+                   len(args.get("prompt", "")))}
+        return FakeResp({
+            "jsonrpc": "2.0", "id": payload.get("id"),
+            "result": {"content": [{"type": "text",
+                                    "text": json.dumps(ref)}],
+                       "isError": False}})
+    return FakeResp({"jsonrpc": "2.0", "id": payload.get("id"),
+                     "error": {"code": -32601, "message": "not found"}},
+                    code=400)
 
 
 class ClientTest(unittest.TestCase):
@@ -161,6 +208,73 @@ class ClientTest(unittest.TestCase):
         with contextlib.redirect_stdout(out), \
                 contextlib.redirect_stderr(err):
             c.get_integration_settings("int9")
+        self.assertNotIn(secret, out.getvalue())
+        self.assertNotIn(secret, err.getvalue())
+
+    def test_generate_image_hits_mcp_endpoint(self):
+        MCP_CALLS.clear()
+        self.c.generate_image("a calm sea at dawn")
+        self.assertTrue(any(c["url"] == "http://x/mcp"
+                            for c in MCP_CALLS))
+        self.assertTrue(all(c["url"] == "http://x/mcp"
+                            for c in MCP_CALLS))
+
+    def test_generate_image_forwards_prompt(self):
+        MCP_CALLS.clear()
+        self.c.generate_image("a calm sea at dawn")
+        calls = [c for c in MCP_CALLS
+                 if c["method"] == "tools/call"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["params"]["name"],
+                         "generateImageTool")
+        self.assertEqual(calls[0]["params"]["arguments"]["prompt"],
+                         "a calm sea at dawn")
+
+    def test_generate_image_returns_media_reference(self):
+        r = self.c.generate_image("hello world!")
+        self.assertEqual(r["id"], "m9")
+        self.assertTrue(r["path"].startswith("https://pub.r2.dev/"))
+        self.assertEqual(set(r), {"id", "path"})
+        self.assertFalse(any("/public/v1/upload" in u for u, _ in CALLS))
+
+    def test_generate_image_reuses_session(self):
+        MCP_CALLS.clear()
+        self.c.generate_image("x")
+        calls = [c for c in MCP_CALLS
+                 if c["method"] == "tools/call"]
+        self.assertEqual(calls[0]["session"], "s1")
+
+    def test_generate_image_empty_prompt_raises_without_call(self):
+        MCP_CALLS.clear()
+        n_calls = len(CALLS)
+        with self.assertRaises(TuzzinaError):
+            self.c.generate_image("  ")
+        self.assertEqual(len(CALLS), n_calls)
+        self.assertEqual(MCP_CALLS, [])
+
+    def test_generate_image_tool_error_propagates_no_fallback(self):
+        def boom_call(req, timeout=None):
+            payload = json.loads(req.data.decode())
+            if payload.get("method") == "tools/call":
+                return FakeResp({
+                    "jsonrpc": "2.0", "id": payload.get("id"),
+                    "error": {"code": -32000,
+                              "message": "credit exhausted"}})
+            return _fake_mcp(req)
+        urllib.request.urlopen = boom_call
+        with self.assertRaises(TuzzinaError) as ctx:
+            self.c.generate_image("x")
+        self.assertIn("credit exhausted", str(ctx.exception))
+        self.assertFalse(any("/public/v1/upload" in u for u, _ in CALLS))
+
+    def test_generate_image_no_secret_logging(self):
+        import contextlib
+        secret = "mcp-secret-abc-789"
+        c = TuzzinaClient("http://x/api", secret)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            c.generate_image("quiet prompt")
         self.assertNotIn(secret, out.getvalue())
         self.assertNotIn(secret, err.getvalue())
 

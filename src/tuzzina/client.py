@@ -25,9 +25,13 @@ class TuzzinaClient:
         self.retries = retries
 
     def _call(self, method: str, path: str, body=None,
-              files: dict | None = None) -> dict:
-        url = self.base + path
+              files: dict | None = None, url: str | None = None,
+              extra_headers: dict | None = None) -> dict:
+        if url is None:
+            url = self.base + path
         headers = {"Authorization": self.key}
+        if extra_headers:
+            headers.update(extra_headers)
         if files is None:
             data = json.dumps(body or {}).encode()
             headers["Content-Type"] = "application/json"
@@ -121,3 +125,106 @@ class TuzzinaClient:
         data = self._call(
             "GET", f"/public/v1/integration-settings/{integration_id}")
         return data if isinstance(data, dict) else {}
+
+    def _mcp_url(self) -> str:
+        """Root MCP endpoint of the same Tuzzina backend.
+
+        The Public API base ends in /api (e.g.
+        http://127.0.0.1:4107/api); the MCP server is mounted at the
+        backend root, so the prefix is stripped. Same host, same
+        API key, no new credentials.
+        """
+        root = self.base[:-len("/api")] if self.base.endswith("/api") \
+            else self.base
+        return root + "/mcp"
+
+    def _rpc(self, url: str, payload: dict,
+             session: dict) -> dict:
+        """One JSON-RPC 2.0 call over plain HTTP (stdlib only).
+
+        No retries: generation is not idempotent, so a failed call
+        fails loudly instead of risking a duplicate charge/run.
+        Captures the mcp-session-id response header when the server
+        sends one and reuses it on later calls in the same session.
+        HTTP errors raise TuzzinaError (never retried, never masked).
+        """
+        import urllib.error
+        body = json.dumps(payload).encode()
+        headers = {"Authorization": self.key,
+                   "Content-Type": "application/json",
+                   "Accept": "application/json, text/event-stream"}
+        if session.get("id"):
+            headers["Mcp-Session-Id"] = session["id"]
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers,
+                                         method="POST")
+            with urllib.request.urlopen(req,
+                                       timeout=self.timeout) as r:
+                hdrs = getattr(r, "headers", {}) or {}
+                sid = hdrs.get("mcp-session-id") or \
+                    hdrs.get("Mcp-Session-Id")
+                if sid:
+                    session["id"] = sid
+                raw = r.read().decode()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode()[:300]
+            except Exception:
+                detail = ""
+            raise TuzzinaError(f"HTTP {e.code} {url}: {detail}")
+
+    def generate_image(self, prompt: str) -> dict:
+        """Delegate image generation to Tuzzina's existing image tool.
+
+        Speaks the already-exposed MCP endpoint (POST <root>/mcp,
+        API-key auth) and calls the existing generateImageTool with
+        Brain's prompt decision. Tuzzina owns the engine, the
+        credentials, the ai_images credits, the storage, and the
+        returned {id, path} reference. The brain never sees image
+        bytes and performs no upload for delegated images.
+        Fail-closed: any error raises TuzzinaError; there is no
+        local fallback (no local image engine exists anymore).
+        """
+        if not prompt or not str(prompt).strip():
+            raise TuzzinaError("prompt is required")
+        url = self._mcp_url()
+        session: dict = {}
+        init = self._rpc(url, {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05",
+                       "capabilities": {},
+                       "clientInfo": {"name": "tuzzina-brain",
+                                      "version": "0.10.0"}}}, session)
+        if not isinstance(init, dict) or "result" not in init:
+            raise TuzzinaError(
+                "Tuzzina image delegation failed during handshake")
+        self._rpc(url, {"jsonrpc": "2.0",
+                        "method": "notifications/initialized"}, session)
+        call = self._rpc(url, {
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "generateImageTool",
+                       "arguments": {"prompt": str(prompt)}}}, session)
+        if isinstance(call, dict) and call.get("error"):
+            raise TuzzinaError(
+                f"Tuzzina image delegation failed: {call['error']}")
+        result = (call.get("result") or {}) if isinstance(call, dict) \
+            else {}
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict) and structured.get("id") and \
+                structured.get("path"):
+            return {"id": str(structured["id"]),
+                    "path": str(structured["path"])}
+        for item in result.get("content") or []:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            try:
+                data = json.loads(item.get("text") or "")
+            except Exception:
+                continue
+            if isinstance(data, dict) and data.get("id") and \
+                    data.get("path"):
+                return {"id": str(data["id"]),
+                        "path": str(data["path"])}
+        raise TuzzinaError(
+            "Tuzzina image delegation returned no media reference")

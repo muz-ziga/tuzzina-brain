@@ -277,6 +277,73 @@ def _boom(name):
     return _raise
 
 
+class ResolveMediaTest(unittest.TestCase):
+    """_resolve_media dispatch: url -> upload_from_url, delegated
+    generator -> generate_image (no bytes, no upload), mock
+    generator -> generate_png + upload_bytes (tests only)."""
+
+    def _client(self):
+        from tuzzina.client import TuzzinaClient
+        c = TuzzinaClient("http://x/api", "k")
+        seen: dict = {}
+        c.calls = seen
+
+        def from_url(url):
+            seen["from_url"] = url
+            return {"id": "u1", "path": url}
+
+        def up_bytes(data, name, mime):
+            seen["bytes"] = (data, name)
+            return {"id": "b1", "path": "x"}
+
+        def delegated(prompt):
+            seen["delegated"] = prompt
+            return {"id": "m9", "path": "https://pub.r2.dev/ai.png"}
+
+        c.upload_from_url = from_url
+        c.upload_bytes = up_bytes
+        c.generate_image = delegated
+        return c
+
+    def test_url_kind_uses_upload_from_url(self):
+        import run as run_mod
+        c = self._client()
+        up = run_mod._resolve_media(
+            c, {"kind": "url", "url": "https://demo.test/i.jpg"})
+        self.assertEqual(up["id"], "u1")
+        self.assertNotIn("bytes", c.calls)
+        self.assertNotIn("delegated", c.calls)
+
+    def test_delegated_kind_skips_bytes_and_upload(self):
+        import run as run_mod
+        from g2 import generators as G
+        c = self._client()
+        c.upload_bytes = _boom("upload_bytes")
+        up = run_mod._resolve_media(
+            c, {"kind": "generator",
+                "generator": G.TuzzinaImageGenerator(),
+                "prompt": "a calm sea"})
+        self.assertEqual(up, {"id": "m9",
+                              "path": "https://pub.r2.dev/ai.png"})
+        self.assertEqual(c.calls.get("delegated"), "a calm sea")
+
+    def test_mock_kind_keeps_bytes_path(self):
+        import run as run_mod
+        from g2 import generators as G
+        c = self._client()
+        up = run_mod._resolve_media(
+            c, {"kind": "generator",
+                "generator": G.MockImageGenerator(),
+                "prompt": "x"})
+        self.assertEqual(up["id"], "b1")
+        self.assertNotIn("delegated", c.calls)
+
+    def test_delegated_marker_never_emits_bytes(self):
+        from g2 import generators as G
+        with self.assertRaises(RuntimeError):
+            G.TuzzinaImageGenerator().generate_png("x")
+
+
 class InjectionPathTest(unittest.TestCase):
     """The orchestration path goes through CanonicalIntent +
     InjectionService (no manual payload construction)."""

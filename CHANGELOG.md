@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.10.0 — Migration Step 2: image generation delegation (no local image engine)
+
+- Removed `OpenAIImageGenerator` (`src/g2/generators.py`): Brain no
+  longer contains any local image-execution path. It was dead code
+  in `src` (never instantiated; `--openai` wired `None`), but its
+  existence was a parallel engine one import away.
+- New `TuzzinaClient.generate_image(prompt)` (`src/tuzzina/client.py`):
+  stdlib-only JSON-RPC 2.0 to the already-exposed MCP endpoint
+  (`POST <backend-root>/mcp`, same API key, no new credentials, no
+  new dependency) calling the existing `generateImageTool` with
+  Brain's prompt decision. Returns Tuzzina's stored `{id, path}`.
+  No retries (generation is not idempotent); errors raise
+  `TuzzinaError` with no local fallback. No Public API image
+  endpoint exists (only video), and the internal `/generate-image`
+  route is session-authed, so MCP is the only existing headless path.
+- New `TuzzinaImageGenerator` marker (no creds, no bytes;
+  `generate_png` raises fail-closed) + `run._resolve_media`
+  dispatch: delegated kind -> `generate_image` directly (zero
+  Brain-side bytes, zero `upload_bytes`); `--mock`/Mock path
+  byte-identical (`generate_png` + `upload_bytes`); `--openai` now
+  wires the delegated marker instead of `None` (production image
+  decisions delegate; note: each one spends Tuzzina `ai_images`
+  credit server-side). Dry-run unchanged (zero writes).
+- InjectionService, adapters, Strategy, G1, G3 untouched.
+- 12 new/updated tests (MCP endpoint+prompt+session, media-ref
+  passthrough, no-upload in delegated path, tool-error propagation
+  with no fallback, removal proof, Mock intact, no secret logging).
+- 170/170 pass (was 158). No Tuzzina/Postiz changes. No live calls.
+
 ## 0.9.0 — Migration Step 1: live capability/settings fetch (fetch-only primitive)
 
 - New `TuzzinaClient.get_integration_settings(integration_id)`

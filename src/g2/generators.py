@@ -1,8 +1,11 @@
-"""Generator interfaces. OpenAIImageGenerator needs OPENAI_API_KEY;
-MockImageGenerator builds deterministic content for tests/dry-runs.
-MetaAIImageGenerator: interface reserved, not implemented (see README)."""
+"""Generator interfaces. OpenAITextGenerator needs OPENAI_API_KEY;
+MockTextGenerator/MockImageGenerator build deterministic content for
+tests/dry-runs. Image bytes are never generated locally in production:
+TuzzinaImageGenerator is a delegation marker routed by run.py to
+TuzzinaClient.generate_image (existing Tuzzina image tool owns the
+engine, credits, storage, and media reference). MetaAIImageGenerator:
+interface reserved, not implemented (see README)."""
 from __future__ import annotations
-import os
 import struct
 import zlib
 from abc import ABC, abstractmethod
@@ -86,25 +89,17 @@ class MockImageGenerator(ImageGenerator):
         return png, "mock-64x64.png"
 
 
-class OpenAIImageGenerator(ImageGenerator):
-    def __init__(self, api_key: str = ""):
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set")
-        self.api_key = api_key
+class TuzzinaImageGenerator(ImageGenerator):
+    """Delegation marker: image prompt decisions are executed by
+    Tuzzina's existing image tool, never locally.
+
+    Carries no credentials, calls no API, generates no bytes.
+    run.py dispatches it to TuzzinaClient.generate_image, which
+    returns Tuzzina's stored {id, path} reference directly.
+    generate_png raises fail-closed so image bytes can never leak
+    back into Brain's upload path."""
 
     def generate_png(self, prompt: str) -> tuple[bytes, str]:
-        import json
-        from urllib.request import Request, urlopen
-        body = json.dumps({"model": "gpt-image-1", "prompt": prompt,
-                           "size": "1024x1024"}).encode()
-        req = Request("https://api.openai.com/v1/images/generations",
-                      data=body,
-                      headers={"Authorization": f"Bearer {self.api_key}",
-                               "Content-Type": "application/json"})
-        with urlopen(req, timeout=120) as r:
-            d = json.loads(r.read().decode())
-        import base64
-        b64 = d["data"][0].get("b64_json")
-        if not b64:
-            raise RuntimeError("image model returned no bytes")
-        return base64.b64decode(b64), "ai-image.png"
+        raise RuntimeError(
+            "delegated image path: use TuzzinaClient.generate_image; "
+            "local image bytes are unavailable by design")

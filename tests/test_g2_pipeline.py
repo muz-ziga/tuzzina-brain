@@ -81,11 +81,18 @@ class G2Test(unittest.TestCase):
         self.assertTrue(blob.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue(name.endswith(".png"))
 
-    def test_openai_needs_key(self):
+    def test_openai_text_needs_key(self):
         with self.assertRaises(RuntimeError):
             G.OpenAITextGenerator("")
-        with self.assertRaises(RuntimeError):
-            G.OpenAIImageGenerator("")
+
+    def test_local_image_engine_removed(self):
+        # STEP 2: no local OpenAI image execution may remain anywhere
+        # on the production path. The delegated marker carries no
+        # credentials and emits no bytes.
+        self.assertFalse(hasattr(G, "OpenAIImageGenerator"))
+        self.assertTrue(hasattr(G, "TuzzinaImageGenerator"))
+        with self.assertRaises(TypeError):
+            G.TuzzinaImageGenerator("some-key")
 
 
 if __name__ == "__main__":
