@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.18.0 — R5: end-to-end research cycle wiring (intelligence only)
+
+- New `src/research/cycle.py`: `run_cycle(sources, store,
+  policy, schedule, now, ...)` — one deterministic pass:
+  collect (rss/youtube via monitor NEW-gate, website via
+  extract as always-NEW, documented) -> research -> analysis
+  -> eligible ? existing G2 -> existing G3 -> CanonicalIntent
+  (: ineligible/empty stop cleanly, no G2, no Tuzzina call).
+  All roles injectable, Mocks by default (offline).
+- Commit rule: per-source monitor states commit ONLY on clean
+  end (full success, ineligible stop, or no-NEW stop); ANY
+  downstream raise commits nothing (at-least-once redelivery).
+  Collector errors are per-source (never block healthy ones).
+- STOPS at CanonicalIntent with media UNRESOLVED (generator
+  objects/URLs, never {id,path}) and no client: nothing can
+  publish. Single opportunity per cycle (R4 contract,
+  documented). Website has no dedup (absence documented, not a
+  second engine). G2/G3/monitor/research/analysis semantics
+  untouched; run.py/strategy/Tuzzina untouched.
+- 16 tests (`tests/test_research_cycle.py`, faked transport,
+  fixed clock): full/empty/updated/multi-source cycles,
+  traceability, eligible/ineligible paths, intent chain,
+  zero-Tuzzina-contact audit, 4 failure blocks, website
+  semantics, determinism. 293/293 pass (was 277). No cron/
+  DB/publish/generation/UI.
+
 ## 0.17.0 — R4: content opportunity analysis ("should we cover it?")
 
 - New `src/research/analysis.py`: `AnalysisModel` interface
