@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.14.0 — R1: RSS collector + monitoring state (collection only)
+
+- New `src/g1/rss.py` (stdlib only: urllib, xml.etree, socket,
+  ipaddress): fetch (25s timeout, 1MB cap, 5-redirect cap,
+  http/https-only, non-public targets refused pre-fetch) +
+  parse (RSS 2.x + Atom, tag-stripped summaries, RFC822/ISO
+  dates) + normalize (canonical URLs, utm/fragment stripped) +
+  stable identity (guid > link > content-hash) + sha256 content
+  hash. Failures raise `FeedError(reason)`; `RssAdapter` maps to
+  `SourceItem` (with new `item_id`/`content_hash` contract
+  fields) or partial `ExtractionResult`. No LLM, no decisions.
+- New `src/research/monitor.py`: `SourceState` (seen map +
+  advisory high-water mark + checked/error stamps, plain data),
+  `StateStore` protocol + `MemoryStateStore`, `collect()` with
+  CHECK→COLLECT→CLASSIFY→RETURN→COMMIT (cursor advances only on
+  commit; at-least-once, never silent loss), NEW/UNCHANGED/
+  UPDATED kinds (UPDATED never auto-new), horizon + max_items
+  window inputs, wall-clock-free (`now` is an explicit string).
+- Intermediate-unseen items surface as NEW (the autopost
+  single-newest loss mode is explicitly not repeated).
+- 26 fixture tests (`tests/test_rss_collector.py`, fake
+  transport/DNS, zero network): both formats, identity
+  precedence, idempotency, no-commit-no-advance, edits,
+  horizon, 11 failure modes, SSRF refusals, adapter mapping.
+- run.py/strategy/G1-website/G2/G3 untouched (no CLI wiring
+  until a state backend exists). 209/209 pass (was 183).
+  No Tuzzina changes. No cron/DB/LLM/UI.
+
 ## 0.13.1 — Live-proven MCP failure fidelity (Phase 1C)
 
 - `TuzzinaClient.generate_image`: when the live tool result

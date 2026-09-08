@@ -24,6 +24,11 @@ class SourceItem:
     hashtags: list = field(default_factory=list)
     published_at: str = ""
     platform: str = ""
+    # R1: stable per-item identity + content hash for monitoring.
+    # WebsiteAdapter leaves both "" (page URL in source_id is its
+    # identity); RSS fills them (guid/link/hash precedence).
+    item_id: str = ""
+    content_hash: str = ""
 
 
 @dataclass
