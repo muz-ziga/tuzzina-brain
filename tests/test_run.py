@@ -137,19 +137,14 @@ class RunByIntegrationTest(unittest.TestCase):
         self.assertIn("platform='facebook'", out)
         self.assertIn("INJECTED", out)
 
-    def test_strategy_cannot_override_platform(self):
-        # If a malformed strategy somehow set provider_overrides with
-        # a '__type' key, the run must use Tuzzina's platform, not the
-        # strategy's value. The current schema doesn't accept
-        # '__type' in strategy/provider_overrides (no field for it),
-        # so this test only documents the current safety and the
-        # 'provider' field on GenerationPolicy is advisory, not
-        # authoritative. We still verify that the platform Tuzzina
-        # returned is what is sent to the scheduler.
+    def test_strategy_carries_no_provider_payload(self):
+        # Policy-only proof: the resolved config reaching the build
+        # path contains no provider DTO/capability data. Settings
+        # truth is assembled at injection from adapter translation
+        # (identity + kind forced), never from strategy.
         tmp = tempfile.mkdtemp(prefix="tbra_run_")
         camp = _write_campaign(tmp)
-        _write_strategy(tmp, "integ-fb-1",
-                        provider_overrides={"post_type": "post"})
+        _write_strategy(tmp, "integ-fb-1")
         items = [{"id": "integ-fb-1", "name": "Juzzir",
                    "identifier": "facebook"}]
         rc, out, err = _run_run(
@@ -157,10 +152,6 @@ class RunByIntegrationTest(unittest.TestCase):
              "--strategy-base-dir", tmp],
             tmpdir=tmp, items=items)
         self.assertEqual(rc, 0, msg=f"err={err}")
-        # Build path uses cfg["channel_meta"]["identifier"]; the
-        # code in run.py passes that platform to build_package. The
-        # strategy's provider_overrides only contain post_type, no
-        # __type leakage.
         self.assertIn("platform='facebook'", out)
         self.assertIn("INJECTED", out)
 

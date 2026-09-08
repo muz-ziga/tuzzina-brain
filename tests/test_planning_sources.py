@@ -19,8 +19,8 @@ def _strat(**kw):
              links_policy="hide", mentions=MentionPolicy(),
              media=MediaPolicy(), sources=kw.pop("sources", []),
              content=ContentPolicy(), generation=GenerationPolicy(),
-             planning=PlanningPolicy(), provider_overrides={},
-             extras={})
+              planning=PlanningPolicy(),
+              extras={})
     d.update(kw)
     return ChannelStrategy(**d)
 

@@ -134,7 +134,6 @@ def _ask_strategy_fields() -> dict:
         "links_policy": "hide",
         "sources": [{"type": "website", "url": u, "n": src_n}
                     for u in src_urls],
-        "provider_overrides": {},
         "extras": {},
     }
 
@@ -194,7 +193,6 @@ def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
         ),
         sources=srcs,
         links_policy=f.get("links_policy", "hide"),
-        provider_overrides=dict(f.get("provider_overrides") or {}),
         extras=dict(f.get("extras") or {}),
     )
 

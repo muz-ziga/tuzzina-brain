@@ -88,7 +88,6 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
                 item, cfg["brand"], cfg["language"], cfg["hashtags"],
                 cfg["links_policy"], text_gen, image_gen_obj,
                 platform=identifier,
-                platform_settings=cfg["provider_overrides"],
                 limits={"max_length": caps.get("max_length")},
                 link_fn=adapter.apply_link))
     if not packages:
@@ -133,7 +132,6 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
     # identical to a silent service.
     from injection.trace import StderrTracer
     service = InjectionService(tracer=StderrTracer())
-    overrides = cfg.get("provider_overrides") or {}
     brand_cta = cfg.get("brand", {}).get("cta_style", "Learn more")
     links_policy = cfg.get("links_policy", "hide")
     results = []
@@ -143,7 +141,11 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
             up = _resolve_media(client, m)
             images.append({"id": up["id"], "path": up["path"]})
             print(f"media -> {up['path'][:80]}")
-        pk = overrides.get("post_type")
+        # post_kind is Brain intent ("post" default; story stays
+        # reachable via the injection API). Provider settings truth
+        # (post types, DTO shape) belongs to Tuzzina: injection
+        # assembles settings from adapter translation and forces
+        # identity/post_kind, so the strategy carries no DTO payload.
         intent = build_intent(
             integration_id=integration_id,
             content=p.content,
@@ -153,8 +155,8 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
             hashtags=list(p.tags),
             link=p.source_ref if links_policy == "attach" else "",
             links_policy=links_policy,
-            post_kind=pk if pk in ("post", "story") else "post",
-            settings=dict(overrides),
+            post_kind="post",
+            settings={},
             cta_style=brand_cta,
         )
         out = service.inject(intent, client)
@@ -174,9 +176,7 @@ def _dry_run_report(cfg: dict, planned: list, integration_id: str,
     upload-from-url, no create_post, no InjectionService call.
     Only safe metadata is shown (lengths/counts/keys, never content
     bodies beyond length, never secrets)."""
-    overrides = cfg.get("provider_overrides") or {}
-    pk = overrides.get("post_type")
-    post_kind = pk if pk in ("post", "story") else "post"
+    post_kind = "post"
     print(f"DRY-RUN {len(planned)} post(s) [mode={post_mode}]: "
           f"no writes performed")
     for i, p in enumerate(planned, 1):
@@ -196,7 +196,7 @@ def _dry_run_report(cfg: dict, planned: list, integration_id: str,
             "media_kinds": kinds,
             "has_link": bool(
                 (cfg.get("links_policy", "hide") == "attach")),
-            "settings_keys": sorted(str(k) for k in overrides),
+            "settings_keys": [],
         }, ensure_ascii=False))
     return 0
 

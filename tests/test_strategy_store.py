@@ -27,7 +27,6 @@ def _strategy(iid="integ-abc", tone="bold"):
         planning=PlanningPolicy(cadence="weekly", days=["monday"],
                                  times=["10:00"]),
         links_policy="hide",
-        provider_overrides={"post_type": "post"},
         extras={"custom_flag": 1},
     )
 
@@ -83,7 +82,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(loaded.planning.days, ["monday"])
         self.assertEqual(loaded.planning.times, ["10:00"])
         self.assertEqual(loaded.links_policy, "hide")
-        self.assertEqual(loaded.provider_overrides, {"post_type": "post"})
+        self.assertFalse(hasattr(loaded, "provider_overrides"))
         self.assertEqual(loaded.extras, {"custom_flag": 1})
 
     def test_save_overwrites(self):
@@ -103,6 +102,20 @@ class StoreTest(unittest.TestCase):
         with open(target, "w", encoding="utf-8") as f:
             yaml.safe_dump({"integration_id": "integ-other",
                             "strategy": {}}, f)
+        with self.assertRaises(ValueError):
+            load("integ-abc", base_dir=self.tmp)
+
+    def test_load_rejects_provider_overrides(self):
+        # Fail-closed: a strategy file smuggling provider DTO data is
+        # rejected at load, never silently accepted or stored.
+        import yaml
+        target = path_for("integ-abc", base_dir=self.tmp)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            yaml.safe_dump({"integration_id": "integ-abc",
+                            "strategy": {
+                                "provider_overrides": {
+                                    "post_type": "post"}}}, f)
         with self.assertRaises(ValueError):
             load("integ-abc", base_dir=self.tmp)
 
@@ -135,7 +148,9 @@ class BrainStratDoesNotCarryIdentityTest(unittest.TestCase):
         # for what the brain may set. There must be no 'platform',
         # 'name', or 'provider' identity field on ChannelStrategy.
         forbidden = {"platform", "name", "provider", "oauth",
-                      "channel_name", "facebook", "instagram"}
+                      "channel_name", "facebook", "instagram",
+                      "provider_overrides", "dto", "capabilities",
+                      "maxLength", "post_type"}
         field_names = {f for f in s.__dataclass_fields__}
         self.assertTrue(forbidden.isdisjoint(field_names),
                         f"forbidden identity fields leaked: "

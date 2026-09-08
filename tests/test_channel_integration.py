@@ -43,7 +43,6 @@ def _strategy(**kw):
         content=ContentPolicy(),
         generation=GenerationPolicy(),
         planning=PlanningPolicy(),
-        provider_overrides={"post_type": "post"},
         extras={},
     )
     d.update(kw)
@@ -67,11 +66,9 @@ class IntegrationTest(unittest.TestCase):
         pkg = build_package(_item(), cfg["brand"], cfg["language"],
                             cfg["hashtags"], cfg["links_policy"],
                             G.MockTextGenerator(), G.MockImageGenerator(),
-                            platform=meta["identifier"],
-                            platform_settings=cfg["provider_overrides"])
+                            platform=meta["identifier"])
         self.assertEqual(pkg.platform, "facebook")
-        self.assertEqual(pkg.settings["__type"], "facebook")
-        self.assertEqual(pkg.settings["post_type"], "post")
+        self.assertEqual(pkg.settings, {"__type": "facebook"})
         self.assertEqual(len(pkg.hashtags), 3)
         self.assertIn("#juzzir", pkg.hashtags)
         self.assertIn("#mastering", pkg.hashtags)
@@ -87,8 +84,7 @@ class IntegrationTest(unittest.TestCase):
         pkg = build_package(_item(), cfg["brand"], cfg["language"],
                             cfg["hashtags"], cfg["links_policy"],
                             G.MockTextGenerator(), G.MockImageGenerator(),
-                            platform=meta["identifier"],
-                            platform_settings=cfg["provider_overrides"])
+                            platform=meta["identifier"])
         self.assertIn("#juzzir", pkg.hashtags)
         self.assertLessEqual(len(pkg.hashtags), 5)
         self.assertEqual(pkg.settings["__type"], "facebook")
@@ -108,8 +104,8 @@ class IntegrationTest(unittest.TestCase):
                          3)
         self.assertEqual(cfg["hashtags"]["per_platform"]["facebook"]
                          ["preferred"], ["juzzir", "mastering"])
-        self.assertEqual(cfg["provider_overrides"]["post_type"], "post")
         self.assertEqual(cfg["integration_id"], "integ-fb-1")
+        self.assertNotIn("provider_overrides", cfg)
 
 
 if __name__ == "__main__":

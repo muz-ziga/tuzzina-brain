@@ -15,7 +15,7 @@ from channels.strategy import _MISSING as _MISSING, _is_set as _is_set
 
 
 def _finalize(integration_id, channel_meta, brand, hashtags, links_policy,
-              project_cfg, provider_overrides, extras) -> dict:
+              project_cfg, extras) -> dict:
     proj_lang = project_cfg.get("language") or {}
     return {
         "integration_id": integration_id,
@@ -31,7 +31,6 @@ def _finalize(integration_id, channel_meta, brand, hashtags, links_policy,
         "schedule": project_cfg.get("schedule") or {},
         "sources": project_cfg.get("sources") or [],
         "channel_meta": dict(channel_meta or {}),
-        "provider_overrides": dict(provider_overrides),
         "extras": dict(extras),
     }
 
@@ -114,7 +113,6 @@ def resolve_strategy(project_cfg: dict, strategy,
 
     out = _finalize(strategy.integration_id, channel_meta, brand_merged,
                     hashtags_merged, links, project_cfg,
-                    dict(strategy.provider_overrides),
                     dict(strategy.extras))
     out["sources"] = sources
     out["sources_from"] = sources_from

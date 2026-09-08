@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.11.0 — Migration Step 3: policy-only Strategy (provider_overrides removed)
+
+- Removed `provider_overrides` from `ChannelStrategy`
+  (`src/channels/strategy.py`), the store (`strategy_store.py`),
+  the resolver (`profile.py`), the interactive creator
+  (`strategy_select.py`), and all `run.py` reads. It was the sole
+  provider-DTO mirror: values flowed straight into the Tuzzina
+  post `settings` payload.
+- Loader is fail-closed: a YAML containing `provider_overrides`
+  raises instead of being silently accepted or stored.
+- `run.py` now builds intents with `post_kind="post"` and
+  `settings={}`; identity (`__type__`) and kind are forced at
+  injection from adapter translation (`injection/service.py`),
+  and live provider truth stays available via
+  `TuzzinaClient.get_integration_settings` for the upcoming
+  adapter slimming (no decorative fetch added here).
+- Retained policy fields unchanged: brand, language, hashtags,
+  links_policy, mentions, media intent, sources, content,
+  generation, planning, extras. G1, G3, image delegation,
+  scheduling, adapters (one docstring word), and Tuzzina untouched.
+- Tests: rejection + policy-only + no-override-key proofs;
+  integration/selection behavior preserved. 171/171 pass
+  (was 170). No Tuzzina/Postiz changes. No live calls. No UI.
+
 ## 0.10.0 — Migration Step 2: image generation delegation (no local image engine)
 
 - Removed `OpenAIImageGenerator` (`src/g2/generators.py`): Brain no

@@ -144,8 +144,6 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
             _is_set(s.planning.end_time) or \
             _is_set(s.planning.spacing_minutes):
         strat["planning"] = _planning_to(s.planning)
-    if s.provider_overrides:
-        strat["provider_overrides"] = dict(s.provider_overrides)
     if s.extras:
         strat["extras"] = dict(s.extras)
     return out
@@ -305,9 +303,9 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         max_items=_opt_int(md.get("max_items")),
     )
 
-    po = strat_cfg.get("provider_overrides") or {}
-    if not isinstance(po, dict):
-        raise _err("'strategy.provider_overrides' must be a mapping")
+    if "provider_overrides" in strat_cfg:
+        raise _err("'strategy.provider_overrides' was removed: provider "
+                   "settings belong to Tuzzina, not to Brain strategy")
     extras = strat_cfg.get("extras") or {}
     if not isinstance(extras, dict):
         raise _err("'strategy.extras' must be a mapping")
@@ -323,6 +321,5 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         content=content,
         generation=generation,
         planning=planning,
-        provider_overrides=dict(po),
         extras=dict(extras),
     )

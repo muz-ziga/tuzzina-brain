@@ -6,7 +6,8 @@ validates payload shape (Tuzzina does that). It only supplies:
   - shape_text(): cut/adapt generated text to the platform
   - shape_media(): choose/validate media items for the platform
   - link handling per platform (attach allowed vs ignored)
-  - provider_overrides defaults for the platform settings payload
+  - default_settings(): minimal settings skeleton (identity + kind);
+    provider truth itself is fetched live, never stored here
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod

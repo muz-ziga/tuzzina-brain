@@ -78,10 +78,11 @@ class ChannelStrategy:
     is Brain-owned policy and has documented defaults that may come
     from the project (campaign) when unset here.
 
-    `provider_overrides` is a plain dict for values that go straight
-    into the Tuzzina post `settings` payload. Tuzzina is the owner
-    of DTO shape; the brain supplies values only. We do NOT name
-    this after a specific platform and do NOT validate keys here.
+    Provider settings are NOT part of the strategy. Values that go
+    into the Tuzzina post `settings` payload (post types, DTO keys,
+    limits) belong to Tuzzina: the injection layer assembles them
+    from adapter translation, and live provider truth is fetched
+    via TuzzinaClient.get_integration_settings when needed.
 
     `extras` is forward-compat metadata not consumed by G2 today.
     """
@@ -95,7 +96,6 @@ class ChannelStrategy:
     content: ContentPolicy = field(default_factory=ContentPolicy)
     generation: GenerationPolicy = field(default_factory=GenerationPolicy)
     planning: PlanningPolicy = field(default_factory=PlanningPolicy)
-    provider_overrides: dict = field(default_factory=dict)
     extras: dict = field(default_factory=dict)
 
 
