@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.16.0 — R3: structured Research Model ("what did we find?")
+
+- New `src/research/models.py`: `ResearchModel` interface
+  (`research(items) -> ResearchResult`), `Finding` (statement,
+  kind fact|inference, confidence high|medium|low, item_ids,
+  excerpt) + `ResearchResult` (summary, findings, topics,
+  entities, item coverage, published range, model, meta).
+  Every finding traces to input ids; fact vs inference is
+  explicit so Analysis can never mistake a guess for a source.
+- `MockResearchModel` (deterministic: 1 fact/item + 1 shared
+  low-confidence inference) and `OpenAIResearchModel` (separate
+  role/prompt/contract from text generation, same stdlib
+  transport style; strict envelope unwrap + schema validation;
+  failures raise ResearchError: empty/malformed input, timeout,
+  model error, invalid output). Bounded context (20 items,
+  2000 chars, truncation recorded). No fetch, no state, no
+  Tuzzina, no publish/schedule/media duties (guard-scanned).
+- 23 tests (`tests/test_research_model.py`, faked transport, no
+  network/key): all 12 required fixture cases + boundary
+  guards. 246/246 pass (was 223). G1/R1/R2A/G2/G3/Strategy/
+  Injection/Tuzzina untouched. No Analysis Model (R4).
+
 ## 0.15.0 — R2A: YouTube public channel collector (collection only)
 
 - New `src/g1/youtube.py`: `YouTubeFeedAdapter` (source type
