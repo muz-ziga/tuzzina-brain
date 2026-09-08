@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 .venv/
+# Brain runtime strategies (per-integration policy files created by
+# strategy_select.py on the deployment host). NOT source-controlled:
+# they reference live Tuzzina integration ids and must survive
+# git pull / git clean during deployment.
+brain-strategies/

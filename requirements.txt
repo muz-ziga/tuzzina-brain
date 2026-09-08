@@ -1,0 +1,6 @@
+# Runtime dependencies for tuzzina-brain (stdlib + this file only).
+# Install: pip install -r requirements.txt
+# Floor pin (no ceiling): lets security updates flow while
+# guaranteeing the minimum API used (yaml.safe_load/safe_dump,
+# stable since PyYAML 5.x).
+pyyaml>=6.0

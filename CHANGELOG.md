@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.2 — Deployment readiness gaps (Phase 5.1, no behavior change)
+
+- `.gitignore`: added `brain-strategies/` so runtime strategy files
+  (per-integration policy created by `strategy_select.py` on the
+  deployment host) survive `git pull` / `git clean`. They were
+  untracked and deletable before.
+- New `requirements.txt` (`pyyaml>=6.0`, floor pin only): the sole
+  non-stdlib runtime dependency, previously installed manually and
+  unpinned. Install: `pip install -r requirements.txt`.
+- Verified (no change needed): `--dry-run` present in HEAD with
+  zero-write semantics; `campaigns/*.yaml` tracked in git;
+  no deploy scripts/systemd/Docker in repo (manual invocation
+  model documented in README/AGENTS).
+- 152/152 pass. No Tuzzina/Postiz/Meta/R2 changes. No behavior
+  changes. No new runtime code paths.
+
 ## 0.8.1 — Channel identity source-of-truth hardening (Phase 4 - stabilization)
 
 - src/channels/profile.py: removed ChannelProfile legacy class and resolve() legacy path; resolve_strategy() is now the single resolver (channel wins via sentinel, extra_policies removed as dead data).
