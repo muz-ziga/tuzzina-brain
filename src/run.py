@@ -108,7 +108,10 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
     # becomes a CanonicalIntent consumed by InjectionService, which
     # resolves the integration live, selects the adapter from
     # Tuzzina's identifier, translates, and posts via TuzzinaClient.
-    service = InjectionService()
+    # The stderr tracer emits causal trace lines; behavior otherwise
+    # identical to a silent service.
+    from injection.trace import StderrTracer
+    service = InjectionService(tracer=StderrTracer())
     overrides = cfg.get("provider_overrides") or {}
     brand_cta = cfg.get("brand", {}).get("cta_style", "Learn more")
     links_policy = cfg.get("links_policy", "hide")

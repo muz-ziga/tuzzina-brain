@@ -19,13 +19,61 @@ from adapters import get_adapter
 from injection.capabilities import status
 from injection.errors import InvalidInjectionIntent, UnsupportedCapability
 from injection.intent import MODES, POST_KINDS, CanonicalIntent
+from injection.trace import (ADAPTER_SELECTED, ERROR, POST_REQUEST,
+                             POST_RESPONSE, START, NullTracer,
+                             new_injection_id)
+
+
+def _post_ids(response) -> list:
+    """Extract post ids from a Tuzzina create_post response for the
+    trace. Never raises; never logs bodies. Only id strings."""
+    try:
+        if isinstance(response, list):
+            return [str(x.get("postId")) for x in response
+                    if isinstance(x, dict) and x.get("postId")]
+        if isinstance(response, dict) and response.get("postId"):
+            return [str(response["postId"])]
+    except Exception:
+        pass
+    return []
 
 
 class InjectionService:
+    def __init__(self, tracer=None):
+        # Tracer is observability only. None -> silent (existing
+        # callers keep byte-identical behavior). run.py passes a
+        # stderr tracer; tests pass a memory tracer.
+        self._tracer = tracer if tracer is not None else NullTracer()
+
     def inject(self, intent: CanonicalIntent, client) -> dict:
         """Inject one intent. Returns a summary dict; raises on any
-        refusal. `client` is a TuzzinaClient (duck-typed for tests)."""
+        refusal. `client` is a TuzzinaClient (duck-typed for tests).
+        Emits trace events; on failure emits injection.error with the
+        error TYPE and stage only, then re-raises unchanged."""
+        injection_id = new_injection_id()
+        stage = ["validate"]
+        try:
+            return self._inject(intent, client, injection_id, stage)
+        except Exception as e:
+            self._tracer.emit(
+                ERROR,
+                injection_id=injection_id,
+                integration_id=getattr(intent, "integration_id", ""),
+                error_type=type(e).__name__,
+                stage=stage[0])
+            raise
+
+    def _inject(self, intent, client, injection_id, stage) -> dict:
         self._validate(intent)
+
+        self._tracer.emit(
+            START,
+            injection_id=injection_id,
+            integration_id=intent.integration_id,
+            mode=intent.mode,
+            post_kind=intent.post_kind,
+            publish_at=intent.publish_at)
+        stage[0] = "resolve"
 
         # 2. Live resolution. Tuzzina is the authority; a dead id
         #    fails here with TuzzinaError, never silently.
@@ -39,8 +87,15 @@ class InjectionService:
                 "Tuzzina returned an integration without identifier")
 
         # 4. Adapter selection. Unknown -> UnsupportedPlatform.
+        stage[0] = "adapter"
         adapter = get_adapter(identifier)
         caps = adapter.capabilities()
+        self._tracer.emit(
+            ADAPTER_SELECTED,
+            injection_id=injection_id,
+            integration_id=intent.integration_id,
+            identifier=identifier,
+            adapter=type(adapter).__name__)
 
         # 5a. Post-kind gate. Unknown post_types key -> let Tuzzina
         #     decide (its validation is authoritative); a reported
@@ -65,6 +120,7 @@ class InjectionService:
         # 6a. Mentions are inline text on FB+IG: append once, here,
         #     before shaping (shape_text owns final assembly, so no
         #     duplication by construction).
+        stage[0] = "translate"
         body = (intent.content or "").strip()
         if intent.mentions:
             handles = ["@" + str(m).lstrip("@").strip()
@@ -108,6 +164,20 @@ class InjectionService:
             settings["url"] = intent.link
 
         # 7. Single Tuzzina call. No retry here (client/Tuzzina own it).
+        stage[0] = "post"
+        self._tracer.emit(
+            POST_REQUEST,
+            injection_id=injection_id,
+            integration_id=intent.integration_id,
+            identifier=identifier,
+            mode=intent.mode,
+            post_kind=intent.post_kind,
+            publish_at=intent.publish_at,
+            has_media=bool(intent.media),
+            has_link=bool(intent.link),
+            has_hashtags=bool(intent.hashtags),
+            content_chars=len(intent.content or ""),
+            media_count=len(intent.media or []))
         posts = [{
             "integration": {"id": intent.integration_id},
             "value": [{"content": final_text, "image": shaped}],
@@ -115,6 +185,13 @@ class InjectionService:
         }]
         response = client.create_post(posts, intent.publish_at,
                                       post_type=intent.mode)
+        self._tracer.emit(
+            POST_RESPONSE,
+            injection_id=injection_id,
+            integration_id=intent.integration_id,
+            post_ids=_post_ids(response),
+            response_count=len(response) if isinstance(response,
+                                                      list) else 0)
         return {
             "integration_id": intent.integration_id,
             "identifier": identifier,

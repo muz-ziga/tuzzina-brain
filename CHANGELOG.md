@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.0 — Injection causal tracing (Phase 3.1)
+
+- New `src/injection/trace.py` (stdlib only: json, sys, uuid):
+  `NullTracer` (default, silent), `MemoryTracer` (tests),
+  `StderrTracer` (runtime; JSON lines on stderr so run.py stdout
+  stays parseable). `emit()` enforces an allowlist and raises on
+  any other field (fail-closed against secret leaks).
+- `InjectionService` accepts an optional tracer (default silent;
+  return values and execution order unchanged) and emits
+  `injection.start`, `injection.adapter_selected`,
+  `injection.post_request`, `injection.post_response` with one
+  uuid4 `injection_id` per `inject()` call. Failures emit
+  `injection.error` with error type + stage only, then re-raise
+  unchanged. Allowlisted fields only: no tokens, keys, cookies,
+  headers, bodies, or full user content (content length as int).
+- `run.py` passes `StderrTracer()` (one-line wiring change).
+- 14 new tests in `tests/test_trace.py`: correlation id
+  uniqueness + stability, all four success events in order,
+  failure event + unchanged re-raise, silent default, secret
+  rejection, stderr JSON shape, return-value identity.
+- 167/167 pass. No Tuzzina/Postiz/Meta/R2 changes. No new
+  dependencies. No live call performed by this change.
+
 ## 0.7.1 — Preserve source_ref through planning (attach fix)
 
 - `PlannedPost` carries `source_ref` from the package; G3 planner
