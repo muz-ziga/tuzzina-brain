@@ -45,10 +45,30 @@ class GenerationPolicy:
 
 
 @dataclass
+class MentionPolicy:
+    # Proven: facebook + instagram mentions are inline text
+    # (no mentionFormat in either provider). Kept as policy for
+    # future platforms where mentions need API handling.
+    style: Any = _MISSING
+
+
+@dataclass
+class MediaPolicy:
+    min_items: Any = _MISSING
+    max_items: Any = _MISSING
+
+
+@dataclass
 class PlanningPolicy:
     cadence: Any = _MISSING
     days: Any = _MISSING
     times: Any = _MISSING
+    daily_count: Any = _MISSING
+    weekly_count: Any = _MISSING
+    monthly_count: Any = _MISSING
+    start_time: Any = _MISSING
+    end_time: Any = _MISSING
+    spacing_minutes: Any = _MISSING
 
 
 @dataclass
@@ -69,6 +89,9 @@ class ChannelStrategy:
     brand: Brand = field(default_factory=Brand)
     hashtags: HashtagPolicy = field(default_factory=HashtagPolicy)
     links_policy: Any = _MISSING
+    mentions: MentionPolicy = field(default_factory=MentionPolicy)
+    media: MediaPolicy = field(default_factory=MediaPolicy)
+    sources: Any = _MISSING
     content: ContentPolicy = field(default_factory=ContentPolicy)
     generation: GenerationPolicy = field(default_factory=GenerationPolicy)
     planning: PlanningPolicy = field(default_factory=PlanningPolicy)

@@ -232,16 +232,55 @@ def resolve_strategy(project_cfg: dict, strategy,
     links = (strategy.links_policy
               if _is_set_s(strategy.links_policy) else proj_lp)
 
+    # Sources precedence: channel strategy sources win; campaign
+    # default sources are the fallback. An explicitly EMPTY channel
+    # list also falls back (empty = "no sources here"). Documented.
+    if _is_set_s(strategy.sources) and list(strategy.sources or []):
+        sources = [dict(s) for s in strategy.sources]
+        sources_from = "channel"
+    else:
+        sources = list(project_cfg.get("sources") or [])
+        sources_from = "campaign"
+
+    mentions = {"style": (strategy.mentions.style
+                          if _is_set_s(strategy.mentions.style)
+                          else "inline")}
+    media = {}
+    if _is_set_s(strategy.media.min_items):
+        media["min_items"] = int(strategy.media.min_items)
+    if _is_set_s(strategy.media.max_items):
+        media["max_items"] = int(strategy.media.max_items)
+
     extra_policies = {
         "content": _content_p(strategy.content),
         "generation": _generation_p(strategy.generation),
         "planning": _planning_p(strategy.planning),
     }
 
-    return _finalize(strategy.integration_id, channel_meta, brand_merged,
-                     hashtags_merged, links, project_cfg,
-                     dict(strategy.provider_overrides),
-                     dict(strategy.extras), extra_policies)
+    out = _finalize(strategy.integration_id, channel_meta, brand_merged,
+                    hashtags_merged, links, project_cfg,
+                    dict(strategy.provider_overrides),
+                    dict(strategy.extras), extra_policies)
+    out["sources"] = sources
+    out["sources_from"] = sources_from
+    out["mentions"] = mentions
+    out["media_policy"] = media
+    # Strategy planning merges over campaign schedule (channel wins
+    # per leaf; G3 reads only this merged schedule dict).
+    sched = dict(out.get("schedule") or {})
+    sp = strategy.planning
+    for k in ("days", "times", "daily_count", "weekly_count",
+              "monthly_count", "start_time", "end_time",
+              "spacing_minutes", "cadence"):
+        v = getattr(sp, k, None)
+        try:
+            is_set = _is_set_s(v)
+        except Exception:
+            is_set = v is not None
+        if is_set:
+            sched[k] = v
+    out["schedule"] = sched
+    return out
 
 
 def _content_p(c) -> dict:

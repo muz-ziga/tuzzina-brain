@@ -35,6 +35,10 @@ class CampaignTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_campaign(self._f("sources:\n - {type: website, url: x}\n"))
 
+    def test_sources_optional_fallback(self):
+        cfg = load_campaign(self._f("brand:\n  name: B\n"))
+        self.assertEqual(cfg["sources"], [])
+
     def test_bad_source_type(self):
         with self.assertRaises(ValueError):
             load_campaign(self._f(GOOD.replace("website", "tiktok")))

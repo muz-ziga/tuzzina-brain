@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.0 — Shared Core + Facebook/Instagram adapters
+
+- New `src/adapters/` package: `PlatformAdapter` interface
+  (`capabilities`, `shape_text`, `shape_media`, `apply_link`,
+  `default_settings`) + `get_adapter(identifier)` selection from
+  the Tuzzina integration identifier. Unknown identifiers raise
+  `UnsupportedPlatform` (no whitelist; we simply have no adapter).
+- `FacebookAdapter` (proven v2.23.0 values, each cited file:line):
+  max_length 63206, post/story, text+photos+mp4-reel, inline
+  hashtags/mentions, attach/cta/hide links, URL media delivery.
+- `InstagramAdapter` (proven v2.23.0 values, each cited file:line):
+  max_length 2200, post_type required, media required ≥1, carousel
+  2-10, story single picture, caption single-media only, inline
+  hashtags/mentions, links unsupported (attach ignored, cta text
+  only), URL media delivery.
+- Strategy gains per-channel `sources` (validated type/url/n);
+  precedence: channel strategy sources win, empty/missing falls
+  back to campaign default sources (tested both directions).
+- Strategy gains `mentions` (style, default inline — proven for
+  FB+IG) and `media` (`min_items`/`max_items`) policies.
+- G3 `plan()` accepts `daily/weekly/monthly_count` caps,
+  `start_time`/`end_time` daily window, `spacing_minutes` gap.
+  Pure slot calculation; no runtime/state/queue/cron.
+- G2 `build_package` accepts `limits={max_length}` and
+  `link_fn` from the adapter (backward compatible defaults).
+- `run.py` selects the adapter from Tuzzina's `identifier`,
+  enforces media policy (truncate to max, skip below min with
+  notice), shapes text via the adapter. Legacy two-arg mode kept.
+- `campaign.sources` now optional (fallback only).
+- 30 new tests (83 → 113): adapter caps, text shaping, media
+  rules, link policies, selection incl. unsupported, sources
+  precedence (3 ways), counts/spacing/window/timezone,
+  no-Tuzzina-imports, no-R2-direct, no-scheduler-constructs.
+- AGENTS.md documents the Core/Adapter split.
+
 ## 0.4.1 — Test portability fix (Linux/Python 3.12)
 
 - `tests/test_select.py`:

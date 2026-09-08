@@ -124,6 +124,12 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
         strat["hashtags"] = _hash_to(s.hashtags)
     if _is_set(s.links_policy):
         strat["links_policy"] = s.links_policy
+    if _is_set(s.mentions.style):
+        strat["mentions"] = {"style": s.mentions.style}
+    if _is_set(s.media.min_items) or _is_set(s.media.max_items):
+        strat["media"] = _media_to(s.media)
+    if _is_set(s.sources):
+        strat["sources"] = [dict(x) for x in s.sources]
     if _is_set(s.content.content_pillars) or \
             _is_set(s.content.sources_policy):
         strat["content"] = _content_to(s.content)
@@ -131,7 +137,12 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
             _is_set(s.generation.prompt_style):
         strat["generation"] = _generation_to(s.generation)
     if _is_set(s.planning.cadence) or _is_set(s.planning.days) or \
-            _is_set(s.planning.times):
+            _is_set(s.planning.times) or _is_set(s.planning.daily_count) or \
+            _is_set(s.planning.weekly_count) or \
+            _is_set(s.planning.monthly_count) or \
+            _is_set(s.planning.start_time) or \
+            _is_set(s.planning.end_time) or \
+            _is_set(s.planning.spacing_minutes):
         strat["planning"] = _planning_to(s.planning)
     if s.provider_overrides:
         strat["provider_overrides"] = dict(s.provider_overrides)
@@ -177,9 +188,19 @@ def _generation_to(g) -> dict:
     return out
 
 
+def _media_to(m) -> dict:
+    out = {}
+    if _is_set(m.min_items):
+        out["min_items"] = int(m.min_items)
+    if _is_set(m.max_items):
+        out["max_items"] = int(m.max_items)
+    return out
+
+
 def _planning_to(p) -> dict:
     out = {}
-    for k in ("cadence", "days", "times"):
+    for k in ("cadence", "days", "times", "daily_count", "weekly_count",
+              "monthly_count", "start_time", "end_time", "spacing_minutes"):
         v = getattr(p, k)
         if _is_set(v):
             out[k] = v
@@ -189,6 +210,7 @@ def _planning_to(p) -> dict:
 def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
     from channels.strategy import (Brand, ChannelStrategy, ContentPolicy,
                                     GenerationPolicy, HashtagPolicy,
+                                    MediaPolicy, MentionPolicy,
                                     PlanningPolicy, _MISSING)
 
     integ = cfg.get("integration_id", "")
@@ -207,6 +229,26 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
 
     def _opt_bool(v):
         return bool(v) if v is not None else _MISSING
+
+    def _opt_sources(v):
+        if v is None:
+            return _MISSING
+        if not isinstance(v, list):
+            raise _err("'strategy.sources' must be a list")
+        out = []
+        for i, s in enumerate(v):
+            if not isinstance(s, dict):
+                raise _err(f"'strategy.sources[{i}]' must be a mapping")
+            if s.get("type") not in ("website",):
+                raise _err(f"'strategy.sources[{i}].type' unsupported")
+            if not str(s.get("url", "")).strip():
+                raise _err(f"'strategy.sources[{i}].url' required")
+            n = s.get("n", 3)
+            if not isinstance(n, int) or n < 1:
+                raise _err(f"'strategy.sources[{i}].n' must be int >= 1")
+            out.append({"type": s["type"], "url": str(s["url"]).strip(),
+                        "n": int(n)})
+        return out
 
     b = strat_cfg.get("brand") or {}
     brand = Brand(
@@ -242,6 +284,25 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         cadence=_opt_str(p.get("cadence")),
         days=_opt_list(p.get("days")),
         times=_opt_list(p.get("times")),
+        daily_count=_opt_int(p.get("daily_count")),
+        weekly_count=_opt_int(p.get("weekly_count")),
+        monthly_count=_opt_int(p.get("monthly_count")),
+        start_time=_opt_str(p.get("start_time")),
+        end_time=_opt_str(p.get("end_time")),
+        spacing_minutes=_opt_int(p.get("spacing_minutes")),
+    )
+
+    mn = strat_cfg.get("mentions") or {}
+    if not isinstance(mn, dict):
+        raise _err("'strategy.mentions' must be a mapping")
+    mentions = MentionPolicy(style=_opt_str(mn.get("style")))
+
+    md = strat_cfg.get("media") or {}
+    if not isinstance(md, dict):
+        raise _err("'strategy.media' must be a mapping")
+    media = MediaPolicy(
+        min_items=_opt_int(md.get("min_items")),
+        max_items=_opt_int(md.get("max_items")),
     )
 
     po = strat_cfg.get("provider_overrides") or {}
@@ -256,6 +317,9 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         brand=brand,
         hashtags=hashtags,
         links_policy=strat_cfg.get("links_policy", _MISSING),
+        mentions=mentions,
+        media=media,
+        sources=_opt_sources(strat_cfg.get("sources")),
         content=content,
         generation=generation,
         planning=planning,

@@ -49,7 +49,15 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
                   text_gen: TextGenerator,
                   image_gen: ImageGenerator | None,
                   platform: str = "facebook",
-                  platform_settings: dict | None = None) -> ContentPackage:
+                  platform_settings: dict | None = None,
+                  limits: dict | None = None,
+                  link_fn=None) -> ContentPackage:
+    """limits (from the PlatformAdapter, optional):
+      max_length: truncate body to this many chars.
+    link_fn (from the PlatformAdapter, optional): replaces the
+      generic apply_link_policy so each platform owns link rules
+      (e.g. Instagram ignores attach). Defaults to the generic one.
+    Backward compatible: omitting limits/link_fn preserves behavior."""
     summary = normalize(item.text)
     text = text_gen.generate(item.title, summary, brand)
     text, banned_hit = apply_banned(text, brand.get("banned_words", []))
@@ -61,8 +69,12 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
     body = text
     if tags:
         body = f"{body}\n\n{' '.join(tags)}"
-    body = apply_link_policy(body, item.source_url, links_policy,
-                             brand.get("cta_style", ""))
+    linker = link_fn or apply_link_policy
+    body = linker(body, item.source_url, links_policy,
+                  brand.get("cta_style", ""))
+    cap = limits.get("max_length") if limits else None
+    if isinstance(cap, int) and cap > 0:
+        body = body[:cap]
     media: list = []
     if item.images:
         media.append({"kind": "url", "url": item.images[0],

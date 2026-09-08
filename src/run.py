@@ -60,11 +60,25 @@ def _run(campaign_path: str, strategy, channel_meta: dict, mode: str,
 
 def _execute(cfg: dict, mode: str, client: TuzzinaClient,
              integration_id: str) -> int:
+    from adapters import get_adapter
+    from adapters.base import UnsupportedPlatform
     text_gen, image_gen_obj = _build_generators(mode)
-    adapters = {"website": WebsiteAdapter()}
+    identifier = str(cfg.get("channel_meta", {}).get("identifier") or "")
+    try:
+        adapter = get_adapter(identifier)
+    except UnsupportedPlatform as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 4
+    print(f"adapter: {type(adapter).__name__} "
+          f"(identifier={identifier!r})")
+    caps = adapter.capabilities()
+    src_adapters = {"website": WebsiteAdapter()}
+    # Sources precedence: cfg["sources"] already resolved
+    # (channel strategy > campaign fallback) by resolve_strategy.
+    print(f"sources from: {cfg.get('sources_from', 'unknown')}")
     packages: list[ContentPackage] = []
     for src in cfg["sources"]:
-        res = adapters[src["type"]].extract(src["url"], src["n"])
+        res = src_adapters[src["type"]].extract(src["url"], src["n"])
         print(f"G1 {src['type']} {src['url']}: "
               f"{res.meta.get('returned')}/{res.meta.get('requested')} "
               f"(partial={res.meta.get('partial')})")
@@ -72,13 +86,38 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
             packages.append(build_package(
                 item, cfg["brand"], cfg["language"], cfg["hashtags"],
                 cfg["links_policy"], text_gen, image_gen_obj,
-                platform=str(cfg.get("channel_meta", {}).get(
-                    "identifier") or ""),
-                platform_settings=cfg["provider_overrides"]))
+                platform=identifier,
+                platform_settings=cfg["provider_overrides"],
+                limits={"max_length": caps.get("max_length")},
+                link_fn=adapter.apply_link))
     if not packages:
         print("no content extracted; nothing to do")
         return 1
-    planned = plan(packages, cfg["schedule"])
+    # Media policy (strategy) + adapter bounds (platform).
+    media_policy = cfg.get("media_policy") or {}
+    kept: list[ContentPackage] = []
+    for pkg in packages:
+        try:
+            shaped = adapter.shape_media(pkg.media)
+        except UnsupportedPlatform as e:
+            print(f"skip package {pkg.source_ref}: {e}")
+            continue
+        lo = media_policy.get("min_items")
+        hi = media_policy.get("max_items")
+        if isinstance(hi, int) and hi >= 0:
+            shaped = shaped[:hi]
+        if isinstance(lo, int) and lo > 0 and len(shaped) < lo:
+            print(f"skip package {pkg.source_ref}: "
+                  f"media below min_items={lo}")
+            continue
+        pkg.media = shaped
+        # Adapter text shaping (length cap, hashtag placement).
+        pkg.content = adapter.shape_text(pkg.content, pkg.hashtags)
+        kept.append(pkg)
+    if not kept:
+        print("no packages survived media policy; nothing to do")
+        return 1
+    planned = plan(kept, cfg["schedule"])
     print(f"G3 planned {len(planned)} posts")
 
     posts_payload = []

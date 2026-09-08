@@ -40,29 +40,32 @@ bridge to Tuzzina). At runtime, the brain calls
 exists, and uses Tuzzina's response (name, identifier, picture) as
 audit metadata — never as the source of identity.
 
-## Layering (G1/G2/G3 + Channel Strategy)
+## Layering (Core + Adapters)
 
 ```
-Tuzzina (Public API)
-   │
-   │  GET /public/v1/integrations  (channel discovery)
-   │  GET /public/v1/integration-settings/:id
-   │  POST /public/v1/upload-from-url
-   │  POST /public/v1/posts
+Tuzzina (Public API: integrations/upload/posts)
+   │  identifier per integration (facebook, instagram, ...)
    ▼
-Brain
-   │
-   │  select.py      ── CLI: read Tuzzina, pick one, save strategy
-   │  run.py        ── CLI: read Tuzzina, load strategy, run pipeline
-   │  brain-strategies/<integration_id>.yaml  (Brain-owned policy only)
-   │
-   │  G1 (sources) -> G2 (brand + policy merge) -> G3 (plan)
-   │
-   │  upload-to-R2 via Tuzzina Public API
-   │  create-posts via Tuzzina Public API
+get_adapter(identifier)          # src/adapters/ — thin, no DTO copies
+   │  FacebookAdapter | InstagramAdapter
+   │  unknown identifier -> UnsupportedPlatform (clean stop, no whitelist)
    ▼
-Tuzzina (Scheduler / Temporal / provider adapters)
+G2 Core (pipeline.py)            # shared: normalize/brand/tags/links/media
+   │  inputs from adapter: max_length, link_fn
+   ▼
+G3 Planner (planner.py)          # slots only: counts/window/spacing/TZ
+   ▼
+Tuzzina POST /posts              # execution/state owned by Postiz
 ```
+
+Rules:
+- Adapters cite pinned Postiz file:line per capability value.
+- Adapters NEVER import Tuzzina/Postiz code, NEVER touch R2,
+  NEVER run schedulers. Tests enforce all three.
+- Channel strategy (`brain-strategies/<id>.yaml`) carries
+  per-channel sources (precedence: channel > campaign fallback),
+  mentions/media policies, planning prefs. No channel identity.
+- campaign.sources is optional fallback only.
 
 G1 / G2 / G3 are ONE pipeline, shared across all channels. Channel
 Strategy is a policy layer that supplies the per-channel brand tone,

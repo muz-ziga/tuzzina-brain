@@ -113,6 +113,10 @@ def _ask_strategy_fields() -> dict:
     print("Generation policy:")
     provider = _ask("generation.provider (auto/openai/mock)", "auto")
     print()
+    print("Sources for THIS channel (per-channel, not shared):")
+    src_urls = _ask_list("source website URLs (comma-separated)", [])
+    src_n = _ask_int("items per source (n)", 3)
+    print()
     print("Planning policy (this run's schedule is taken from the "
           "campaign, the strategy's days/times are advisory):")
     cadence = _ask("planning.cadence (e.g. weekly, daily)", "")
@@ -128,17 +132,36 @@ def _ask_strategy_fields() -> dict:
         "generation": {"provider": provider},
         "planning": {"cadence": cadence},
         "links_policy": "hide",
+        "sources": [{"type": "website", "url": u, "n": src_n}
+                    for u in src_urls],
         "provider_overrides": {},
         "extras": {},
     }
 
 
 def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
+    from channels.strategy import (MediaPolicy, MentionPolicy, _MISSING)
     b = f.get("brand") or {}
     h = f.get("hashtags") or {}
     c = f.get("content") or {}
     g = f.get("generation") or {}
     p = f.get("planning") or {}
+    md = f.get("media") or {}
+    mn = f.get("mentions") or {}
+
+    def _mi(v):
+        return int(v) if v is not None else _MISSING
+
+    srcs = []
+    for s in f.get("sources") or []:
+        if not isinstance(s, dict):
+            continue
+        url = str(s.get("url", "")).strip()
+        if not url:
+            continue
+        n = s.get("n", 3)
+        srcs.append({"type": "website", "url": url,
+                     "n": int(n) if isinstance(n, int) and n >= 1 else 3})
     return ChannelStrategy(
         integration_id=integration_id,
         brand=Brand(
@@ -162,6 +185,14 @@ def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
         planning=PlanningPolicy(
             cadence=p.get("cadence") or "",
         ),
+        mentions=MentionPolicy(
+            style=mn.get("style") or "inline",
+        ),
+        media=MediaPolicy(
+            min_items=_mi(md.get("min_items")),
+            max_items=_mi(md.get("max_items")),
+        ),
+        sources=srcs,
         links_policy=f.get("links_policy", "hide"),
         provider_overrides=dict(f.get("provider_overrides") or {}),
         extras=dict(f.get("extras") or {}),

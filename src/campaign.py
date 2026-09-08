@@ -1,5 +1,7 @@
-"""Campaign YAML loading + validation. Only brand.name and
-sources[] are required; everything else has documented defaults."""
+"""Campaign YAML loading + validation. Only brand.name is required;
+sources[] is optional (channel strategy sources win; campaign sources
+are the fallback when the strategy has none). Everything else has
+documented defaults."""
 from __future__ import annotations
 import yaml
 
@@ -19,9 +21,9 @@ def load_campaign(path: str) -> dict:
     brand = cfg.get("brand") or {}
     if not isinstance(brand, dict) or not str(brand.get("name", "")).strip():
         raise _err("brand.name", "required, non-empty")
-    sources = cfg.get("sources")
-    if not isinstance(sources, list) or not sources:
-        raise _err("sources", "required, non-empty list")
+    sources = cfg.get("sources") or []
+    if not isinstance(sources, list):
+        raise _err("sources", "must be a list")
     for i, s in enumerate(sources):
         if not isinstance(s, dict):
             raise _err(f"sources[{i}]", "must be a mapping")
