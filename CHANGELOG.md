@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.0 — Injection Layer V1 (intent → adapter → Tuzzina payload)
+
+- New `src/injection/` package: `CanonicalIntent` (brain decision,
+  not a Tuzzina DTO copy), `InjectionService` (intent → live
+  integration lookup → adapter → payload → `TuzzinaClient`),
+  `capabilities.status()` lens (supported/unsupported/unknown),
+  `UnsupportedCapability` + `InvalidInjectionIntent` errors.
+- Service order is explicit: validate intent → resolve integration
+  LIVE by id (stale → TuzzinaError propagates) → platform FROM
+  Tuzzina's response → adapter → capability gates (refuse, never
+  invent) → translate → single `TuzzinaClient.create_post` call.
+- Hashtags/mentions travel separately and assemble once in the
+  adapter (0.5.1 ownership preserved; tested end-to-end).
+- Links: attach goes to `settings["url"]` only on positive support
+  signal, else omitted (Instagram). Mentions inline as `@handle`.
+- `settings` = adapter defaults + intent overrides, with `__type__`
+  and `post_type` forced from Tuzzina's identifier + intent kind.
+- `TuzzinaClient.create_post(posts, date, post_type)` added; the
+  same POST /posts endpoint `create_draft` always used.
+  `create_draft` now delegates (behavior identical).
+- 28 new tests in `tests/test_injection.py`: selection by id,
+  adapter mapping FB/IG, unsupported platform/capability, links
+  FB/IG, hashtag ownership + no-duplication, mentions, scheduled/
+  immediate/story intents, media refs, settings merge + identity
+  forcing, stale protection, capability helper, plus guard tests
+  (no Tuzzina/Postiz imports, no DB/R2, no scheduler/publisher,
+  no name-based selection, adapters do no HTTP).
+- No Tuzzina/Postiz/Meta/R2 changes. `run.py` live path untouched.
+
 ## 0.5.1 — Single hashtag ownership (duplicate fix)
 
 - `g2.pipeline.build_package` no longer merges hashtags into

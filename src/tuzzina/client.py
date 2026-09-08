@@ -72,10 +72,17 @@ class TuzzinaClient:
         return self._call("POST", "/public/v1/upload-from-url",
                           {"url": url})
 
-    def create_draft(self, posts: list, date: str) -> dict:
+    def create_post(self, posts: list, date: str,
+                    post_type: str = "draft") -> dict:
+        """POST /public/v1/posts with an explicit Tuzzina type
+        (draft|schedule|now). Same endpoint create_draft uses;
+        the type selects Tuzzina-side behavior."""
         return self._call("POST", "/public/v1/posts", {
-            "type": "draft", "shortLink": False, "date": date,
+            "type": post_type, "shortLink": False, "date": date,
             "tags": [], "posts": posts})
+
+    def create_draft(self, posts: list, date: str) -> dict:
+        return self.create_post(posts, date, post_type="draft")
 
     def integrations(self) -> list:
         """List Tuzzina integrations connected to the current org.
