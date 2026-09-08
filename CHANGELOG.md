@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0 — Migration Step 1: live capability/settings fetch (fetch-only primitive)
+
+- New `TuzzinaClient.get_integration_settings(integration_id)`
+  (`src/tuzzina/client.py`): read-only `GET
+  /public/v1/integration-settings/:id`, keyed by `integration_id`
+  only (no name/platform matching). Returns Tuzzina's
+  `{output: {rules, maxLength, settings, tools}}` unchanged: no
+  provider-schema validation, no DTO copy, no capability registry.
+- Explicitly NOT consumed yet: adapters, injection, Strategy, G2,
+  G3 untouched (STEP 1 is fetch-only foundation for later steps).
+- 6 new tests in `tests/test_tuzzina_client.py` (exact path + id,
+  single-GET read-only, unchanged passthrough, HTTP-error
+  propagation, empty-id guard without call, no secret logging).
+- 158/158 pass. No Tuzzina/Postiz changes. No production calls.
+
 ## 0.8.2 — Deployment readiness gaps (Phase 5.1, no behavior change)
 
 - `.gitignore`: added `brain-strategies/` so runtime strategy files

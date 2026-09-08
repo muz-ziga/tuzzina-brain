@@ -48,6 +48,15 @@ def fake_urlopen(req, timeout=None):
         ])
     if req.full_url.endswith("/public/v1/posts"):
         return FakeResp([])
+    if "/public/v1/integration-settings/" in req.full_url:
+        return FakeResp({"output": {
+            "rules": "Facebook posts can be text only.",
+            "maxLength": 63206,
+            "settings": {"type": "object",
+                         "properties": {"post_type": {"type": "string"}}},
+            "tools": [{"description": "t", "methodName": "m",
+                       "dataSchema": []}],
+        }})
     return FakeResp({}, 404)
 
 
@@ -114,6 +123,46 @@ class ClientTest(unittest.TestCase):
         c = TuzzinaClient("http://x/api", "k", retries=2)
         self.assertEqual(c.integrations(), [])
         self.assertEqual(n["i"], 2)
+
+    def test_settings_exact_path_and_id(self):
+        self.c.get_integration_settings("int9")
+        self.assertIn(
+            ("http://x/api/public/v1/integration-settings/int9", "GET"),
+            CALLS)
+
+    def test_settings_read_only_single_get(self):
+        self.c.get_integration_settings("int9")
+        self.assertEqual(len(CALLS), 1)
+        self.assertEqual(CALLS[0][1], "GET")
+
+    def test_settings_returned_unchanged(self):
+        r = self.c.get_integration_settings("int9")
+        self.assertEqual(r["output"]["maxLength"], 63206)
+        self.assertIn("rules", r["output"])
+        self.assertIn("settings", r["output"])
+        self.assertIn("tools", r["output"])
+
+    def test_settings_empty_id_raises_without_call(self):
+        with self.assertRaises(TuzzinaError):
+            self.c.get_integration_settings("")
+        self.assertEqual(CALLS, [])
+
+    def test_settings_http_error_propagates(self):
+        urllib.request.urlopen = lambda *a, **k: FakeResp({}, 404)
+        with self.assertRaises(TuzzinaError) as ctx:
+            self.c.get_integration_settings("int9")
+        self.assertIn("404", str(ctx.exception))
+
+    def test_settings_no_secret_logging(self):
+        import contextlib
+        secret = "secret-key-xyz-123"
+        c = TuzzinaClient("http://x/api", secret)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            c.get_integration_settings("int9")
+        self.assertNotIn(secret, out.getvalue())
+        self.assertNotIn(secret, err.getvalue())
 
 
 if __name__ == "__main__":

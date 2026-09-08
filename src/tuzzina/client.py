@@ -105,3 +105,19 @@ class TuzzinaClient:
                 return it
         raise TuzzinaError(
             f"integration {integration_id!r} not found in Tuzzina")
+
+    def get_integration_settings(self, integration_id: str) -> dict:
+        """Fetch one integration's live provider truth from Tuzzina.
+
+        GET /public/v1/integration-settings/:id returns
+        {output: {rules, maxLength, settings, tools}} (or a fallback
+        shape when the provider is unknown). The response is stored
+        as returned: the brain never validates provider schemas and
+        never mirrors them into static constants. Read-only; nothing
+        here is consumed by adapters/injection yet (STEP 1: fetch only).
+        """
+        if not integration_id:
+            raise TuzzinaError("integration_id is required")
+        data = self._call(
+            "GET", f"/public/v1/integration-settings/{integration_id}")
+        return data if isinstance(data, dict) else {}
