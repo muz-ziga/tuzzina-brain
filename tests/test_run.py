@@ -270,6 +270,24 @@ class InjectionPathTest(unittest.TestCase):
         self.assertEqual(rc, 4, msg=f"err={err}")
         self.assertNotIn("INJECTED", out)
 
+    def test_attach_policy_reaches_intent_without_crash(self):
+        # Regression: Phase 2 referenced p.source_ref which did not
+        # exist on PlannedPost, crashing every run with
+        # links_policy == "attach" (AttributeError). PlannedPost now
+        # carries source_ref from the package; the attach link must
+        # flow into the injected payload.
+        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+        camp = _write_campaign(tmp)
+        _write_strategy(tmp, "integ-fb-1", links_policy="attach")
+        items = [{"id": "integ-fb-1", "name": "Juzzir",
+                   "identifier": "facebook"}]
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp],
+            tmpdir=tmp, items=items)
+        self.assertEqual(rc, 0, msg=f"err={err}")
+        self.assertIn("INJECTED", out)
+
 
 if __name__ == "__main__":
     unittest.main()

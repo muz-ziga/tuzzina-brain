@@ -54,3 +54,4 @@ class PlannedPost:
     planned_at: str  # ISO datetime
     settings: dict
     tags: list = field(default_factory=list)
+    source_ref: str = ""  # origin URL of the source item (for attach policy)

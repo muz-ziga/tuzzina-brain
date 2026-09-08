@@ -117,5 +117,5 @@ def plan(packages: list[ContentPackage], schedule: dict) -> list[PlannedPost]:
         planned.append(PlannedPost(
             platform=pkg.platform, content=pkg.content, media=pkg.media,
             planned_at=slot, settings=dict(pkg.settings),
-            tags=list(pkg.hashtags)))
+            tags=list(pkg.hashtags), source_ref=pkg.source_ref))
     return planned

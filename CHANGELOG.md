@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1 — Preserve source_ref through planning (attach fix)
+
+- `PlannedPost` carries `source_ref` from the package; G3 planner
+  passes it through. `run.py` reads `p.source_ref` for the attach
+  link, so `links_policy == "attach"` runs no longer crash with
+  AttributeError.
+- 1 new test in `tests/test_run.py`
+  (`test_attach_policy_reaches_intent_without_crash`). 153/153 pass.
+- No Tuzzina/Postiz/Meta/R2 changes. No new dependencies.
+
 ## 0.7.0 — Phase 2: InjectionService is the live path
 
 - `run.py` no longer builds Tuzzina post payloads by hand. After
