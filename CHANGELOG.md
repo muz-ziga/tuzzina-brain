@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.13.0 — Migration Step 5: G2 intelligence boundary (audit + isolate)
+
+- Forensic verdict: G2 already holds decisions/policy only. No
+  execution removed because none duplicated Tuzzina: image bytes
+  went in Step 2, maxLength truth in Step 4, validity lives in
+  Tuzzina. No video execution exists in Brain (policy-only stands).
+- `OpenAITextGenerator` classified TEMPORARILY KEEP with an explicit
+  isolation boundary (module + class docstrings): it owns just the
+  LLM call (title/summary/brand in, text out) and must never acquire
+  scheduling, media, OAuth, publishing, or provider truth. Kept
+  because no machine-facing Tuzzina text endpoint accepts full Brain
+  context (no Public API text route, no MCP text tool, internal
+  /generator is session-authed and brand-unaware, Agent chat has no
+  deterministic contract). Deletion condition documented.
+- New `tests/test_g2_boundary.py` (7 tests): temporary status
+  documented, execution-duty isolation scan, Brain-only text
+  context, `--openai` wiring carries no bytes-capable image engine,
+  no video execution, media intent representable with zero
+  execution, Mock determinism.
+- No behavior change. G1/G3/Strategy/Injection/image-delegation/
+  scheduling/adapters untouched. 182/182 pass (was 175).
+  No Tuzzina/Postiz changes. No live calls. No UI. No new subsystem.
+
 ## 0.12.0 — Migration Step 4: slim platform adapters (translators only)
 
 - Deleted `capabilities()` from both adapters and the

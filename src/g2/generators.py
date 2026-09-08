@@ -4,7 +4,16 @@ tests/dry-runs. Image bytes are never generated locally in production:
 TuzzinaImageGenerator is a delegation marker routed by run.py to
 TuzzinaClient.generate_image (existing Tuzzina image tool owns the
 engine, credits, storage, and media reference). MetaAIImageGenerator:
-interface reserved, not implemented (see README)."""
+interface reserved, not implemented (see README).
+
+INTELLIGENCE BOUNDARY (Step 5): G2 owns decisions and policy only.
+The single TEMPORARY exception is OpenAITextGenerator, kept solely
+because no machine-facing Tuzzina text endpoint accepts full Brain
+context (no Public API text route, no MCP text tool, internal
+/generator is session-authed and brand-unaware, Agent chat has no
+deterministic contract). The temporary engine owns just the LLM
+call: no scheduling, media, OAuth, publishing, or provider truth.
+"""
 from __future__ import annotations
 import struct
 import zlib
@@ -46,6 +55,16 @@ class MockTextGenerator(TextGenerator):
 
 
 class OpenAITextGenerator(TextGenerator):
+    """TEMPORARY execution engine (see module boundary note).
+
+    Owns ONLY the LLM call. Never acquires: scheduling, media
+    handling/storage/upload, OAuth/integration state, publishing,
+    provider capabilities, or any Tuzzina execution duty. If a
+    machine-facing Tuzzina text endpoint accepting full Brain
+    context appears, this class is deleted and the decision layer
+    (title/summary/brand/prompt) delegates to it unchanged.
+    """
+
     def __init__(self, api_key: str = "", model: str = "gpt-4.1"):
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
