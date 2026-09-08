@@ -54,6 +54,7 @@ class RssItem:
     source_url: str = ""
     source_title: str = ""
     content_hash: str = ""
+    thumbnail: str = ""
 
 
 def _deny(reason: str) -> FeedError:
@@ -250,17 +251,33 @@ def _parse_atom(root) -> tuple[str, str, list]:
         if _local(entry.tag) != "entry":
             continue
         content = ""
+        videoid = ""
+        description = ""
+        thumbnail = ""
         for child in entry:
-            if _local(child.tag) == "content":
+            local = _local(child.tag)
+            if local == "content" and not content:
                 content = _text(child)
-                break
+            elif local == "videoId" and not videoid:
+                # yt:videoId: preferred stable identity when present
+                videoid = (child.text or "").strip()
+            elif local == "group":
+                # media:group (Media RSS): description + thumbnail
+                for g in child:
+                    glocal = _local(g.tag)
+                    if glocal == "description" and not description:
+                        description = _text(g).strip()
+                    elif glocal == "thumbnail" and not thumbnail:
+                        thumbnail = (g.get("url") or "").strip()
         raws.append({
             "title": _child_text(entry, "title"),
             "link": _atom_link(entry),
-            "guid": _child_text(entry, "id"),
+            "guid": videoid or _child_text(entry, "id"),
             "published": _atom_date(_child_text(entry, "published")),
             "updated": _atom_date(_child_text(entry, "updated")),
-            "summary": content or _child_text(entry, "summary"),
+            "summary": content or _child_text(entry, "summary") or
+            description,
+            "thumbnail": thumbnail,
         })
     return title, feed_link, raws
 
@@ -331,7 +348,8 @@ def normalize_item(raw: dict, source_url: str,
         published_at=raw.get("published") or "",
         updated_at=raw.get("updated") or "",
         source_url=source_url, source_title=source_title,
-        content_hash=content_hash(title, text))
+        content_hash=content_hash(title, text),
+        thumbnail=(raw.get("thumbnail") or "").strip())
 
 
 def fetch_feed(url: str) -> tuple[list, str, str]:
@@ -341,6 +359,21 @@ def fetch_feed(url: str) -> tuple[list, str, str]:
     title, link, raws = parse_feed(body)
     return ([normalize_item(r, url.strip(), title) for r in raws],
             title, link)
+
+
+def to_source_item(it: RssItem, source_type: str, platform: str,
+                   url_fallback: str) -> SourceItem:
+    """Shared RssItem -> SourceItem mapping. Thumbnails (when the
+    feed provides them, e.g. YouTube media:thumbnail) ride the
+    existing images list; no new media model."""
+    images = [it.thumbnail] if it.thumbnail else []
+    return SourceItem(
+        source_id=it.item_id, source_type=source_type,
+        source_url=it.url or url_fallback,
+        title=it.title[:200], text=it.text[:4000],
+        images=images, links=[],
+        published_at=it.published_at, platform=platform,
+        item_id=it.item_id, content_hash=it.content_hash)
 
 
 class RssAdapter(SourceAdapter):
@@ -363,13 +396,7 @@ class RssAdapter(SourceAdapter):
                 "reason": "fetch-failed"})
         out: list[SourceItem] = []
         for it in items[:n]:
-            out.append(SourceItem(
-                source_id=it.item_id, source_type="rss",
-                source_url=it.url or url.strip(),
-                title=it.title[:200], text=it.text[:4000],
-                images=[], links=[],
-                published_at=it.published_at, platform="rss",
-                item_id=it.item_id, content_hash=it.content_hash))
+            out.append(to_source_item(it, "rss", "rss", url.strip()))
         host = urllib.parse.urlparse(url.strip()).netloc
         return ExtractionResult(out, Identity(
             name=(title or host).strip()), {

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.15.0 — R2A: YouTube public channel collector (collection only)
+
+- New `src/g1/youtube.py`: `YouTubeFeedAdapter` (source type
+  "youtube") over the public channel Atom feed (live-proven R2,
+  no key/OAuth/API). Channel_id ONLY (`^UC[A-Za-z0-9_-]{22}$`,
+  fail-fast; no handle resolution, no URL override, no search).
+  Identity = yt:videoId, description from media:description,
+  thumbnails ride existing `images[]`, published/updated
+  preserved. Failure -> partial reason, never raises.
+- Extended `src/g1/rss.py` (shared, no fork): Media RSS
+  namespace (media:group/description/thumbnail), yt:videoId
+  preference, shared `to_source_item()` mapper (RssAdapter now
+  uses it; behavior identical plus thumbnails when present).
+- Monitoring/state untouched: same `collect()` + NEW/UNCHANGED/
+  UPDATED + commit lifecycle over the same RssItem contract.
+- KNOWN LIMIT (documented, no workaround): feed carries ~15
+  recent entries, no pagination; beyond-window videos between
+  polls can be missed.
+- 14 tests (`tests/test_youtube_collector.py`, real-shape
+  fixtures, fake transport): fields, identity, monitor
+  lifecycle, 15-entry completeness, failures, SSRF/channel
+  validation, no-auth constructs. 223/223 pass (was 209).
+  No FB/IG/research/cron/DB/UI/Tuzzina changes.
+
 ## 0.14.0 — R1: RSS collector + monitoring state (collection only)
 
 - New `src/g1/rss.py` (stdlib only: urllib, xml.etree, socket,
