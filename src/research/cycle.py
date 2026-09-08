@@ -38,6 +38,8 @@ from g2.pipeline import build_package
 from g3.planner import plan
 from injection.intent import build_intent
 from research.analysis import MockAnalysisModel
+from research.generation import (image_gen_for, plan_generation,
+                                 shape_item_for_g2)
 from research.models import MockResearchModel
 from research.monitor import (MemoryStateStore, NEW, UPDATED,
                               CollectionResult, collect)
@@ -62,6 +64,10 @@ class CycleResult:
     packages: list = field(default_factory=list)  # [ContentPackage]
     planned: list = field(default_factory=list)  # [PlannedPost]
     intents: list = field(default_factory=list)  # [CanonicalIntent]
+    # Video prompts with no executor: recorded, never attempted,
+    # never silently dropped (state still commits; execution phase
+    # owns future wiring).
+    video_deferred: list = field(default_factory=list)  # [str]
     committed: bool = False
     error: str = ""
 
@@ -171,10 +177,19 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             out.committed = len(pending) > 0
             return out
 
+        # Generation orchestration (R6): opportunity facts/angle
+        # shape G2 inputs; media intent gates the image engine so
+        # text-only stays text-only. Video has no executor: the
+        # request is recorded as deferred, explicitly, not run.
+        gen_plan = plan_generation(out.opportunity, list(out.items))
+        if gen_plan.video is not None:
+            out.video_deferred.append(gen_plan.video.prompt)
+        gen_image = image_gen_for(gen_plan, image_gen)
         for item in out.items:
+            shaped = shape_item_for_g2(item, gen_plan)
             out.packages.append(build_package(
-                item, brand, language, hs_cfg, links_policy,
-                text_gen, image_gen, platform=item.platform or
+                shaped, brand, language, hs_cfg, links_policy,
+                text_gen, gen_image, platform=item.platform or
                 "facebook", limits=None))
         out.planned = plan(out.packages, schedule)
         for p in out.planned:

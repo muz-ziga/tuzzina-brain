@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.19.0 — R6: generation orchestration (decision only)
+
+- New `src/research/generation.py`: `GenerationPlan`
+  (text request always when eligible; image iff
+  media_intent == image; video iff == video, intent-only) +
+  `plan_generation()` (pure) + `shape_item_for_g2()` (plan
+  title/text over preserved ids/images/refs/hashes) +
+  `image_gen_for()` (None unless image requested). Formats
+  stay post + none|image|video; no story/reel invention.
+- Cycle integration (`src/research/cycle.py` only): plan step
+  between analysis and G2; G2 now consumes opportunity-shaped
+  inputs; image engine gated so media:none stays text-only
+  (previously the pipeline added generator entries whenever an
+  engine was present — the R6 gap, now closed); video intents
+  recorded in `CycleResult.video_deferred`, never attempted,
+  never silently dropped; state commits normally.
+- No engine runs in the plan layer; text runs inside G2 as
+  before; media resolution stays in run.py; video has no
+  executor anywhere (documented). G2/G3/research/analysis/
+  strategy/Tuzzina semantics untouched.
+- 18 tests (`tests/test_generation_plan.py`, offline): plan
+  decisions, gating, deferral, shaping, policy preservation,
+  no-execution-constructs guard, determinism, no-Tuzzina-
+  contact. 311/311 pass (was 293). No cron/scheduler/DB/UI/
+  provider/model-registry/bytes/publishing.
+
 ## 0.18.0 — R5: end-to-end research cycle wiring (intelligence only)
 
 - New `src/research/cycle.py`: `run_cycle(sources, store,
