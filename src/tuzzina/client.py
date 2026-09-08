@@ -127,16 +127,17 @@ class TuzzinaClient:
         return data if isinstance(data, dict) else {}
 
     def _mcp_url(self) -> str:
-        """Root MCP endpoint of the same Tuzzina backend.
+        """MCP endpoint of the same Tuzzina backend, through the same
+        base URL as every other call (LIVE-PROVEN 1C).
 
-        The Public API base ends in /api (e.g.
-        http://127.0.0.1:4107/api); the MCP server is mounted at the
-        backend root, so the prefix is stripped. Same host, same
-        API key, no new credentials.
+        The Public API base carries the deployment's prefix (e.g.
+        http://127.0.0.1:4107/api) and the frontend proxy strips it
+        before the backend (Nest has no global prefix), so MCP lives
+        at base + "/mcp". Appending to the stripped root instead
+        hits the frontend auth guard (307 -> /auth). Do NOT strip.
+        Same host, same API key, no new credentials.
         """
-        root = self.base[:-len("/api")] if self.base.endswith("/api") \
-            else self.base
-        return root + "/mcp"
+        return self.base.rstrip("/") + "/mcp"
 
     def _rpc(self, url: str, payload: dict,
              session: dict) -> dict:
@@ -177,7 +178,7 @@ class TuzzinaClient:
     def generate_image(self, prompt: str) -> dict:
         """Delegate image generation to Tuzzina's existing image tool.
 
-        Speaks the already-exposed MCP endpoint (POST <root>/mcp,
+        Speaks the already-exposed MCP endpoint (POST base + "/mcp",
         API-key auth) and calls the existing generateImageTool with
         Brain's prompt decision. Tuzzina owns the engine, the
         credentials, the ai_images credits, the storage, and the
@@ -210,6 +211,16 @@ class TuzzinaClient:
                 f"Tuzzina image delegation failed: {call['error']}")
         result = (call.get("result") or {}) if isinstance(call, dict) \
             else {}
+        if isinstance(result, dict) and result.get("isError"):
+            detail = ""
+            for item in result.get("content") or []:
+                if isinstance(item, dict) and \
+                        isinstance(item.get("text"), str):
+                    detail = item["text"][:300]
+                    break
+            raise TuzzinaError(
+                "Tuzzina image delegation failed: "
+                f"{detail or 'tool error'}")
         structured = result.get("structuredContent")
         if isinstance(structured, dict) and structured.get("id") and \
                 structured.get("path"):

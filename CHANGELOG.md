@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.13.1 — Live-proven MCP failure fidelity (Phase 1C)
+
+- `TuzzinaClient.generate_image`: when the live tool result
+  carries `isError: true`, Brain now raises with the server's
+  cause text (capped) instead of the generic "no media reference"
+  message. Proven by the live MCP handshake: the real
+  `generateImageTool` failure arrives as `{result: {content:
+  [{text}], isError: true}}` with `TOOL_EXECUTION_FAILED` detail;
+  the old message masked it. Fail-closed behavior unchanged (no
+  fallback, no retry, no upload).
+- Same change corrects `_mcp_url` (proven live in the same
+  session): MCP is served through the deployment base URL
+  (`base + "/mcp"`); the stripped root hits the frontend auth
+  guard (307). Regression test updated to the live-proven URL.
+- Live finding (Tuzzina-side, not Brain): production image
+  generation currently fails inside `MediaService.generateImage`
+  (OpenAI HttpException, `TOOL_EXECUTION_FAILED`); `useCredit`
+  rolls the credit row back on throw, so zero credit consumed and
+  zero media rows created. Brain parser/envelope fully compatible.
+- Tests: isError fixture replaying the exact live shape. 183/183
+  pass (was 182). No Tuzzina changes. No UI.
+
 ## 0.13.0 — Migration Step 5: G2 intelligence boundary (audit + isolate)
 
 - Forensic verdict: G2 already holds decisions/policy only. No

@@ -214,9 +214,12 @@ class ClientTest(unittest.TestCase):
     def test_generate_image_hits_mcp_endpoint(self):
         MCP_CALLS.clear()
         self.c.generate_image("a calm sea at dawn")
-        self.assertTrue(any(c["url"] == "http://x/mcp"
+        # LIVE-PROVEN 1C: MCP is served through the same base URL
+        # (the deployment proxy strips the /api prefix); the
+        # stripped root hits the frontend auth guard (307).
+        self.assertTrue(any(c["url"] == "http://x/api/mcp"
                             for c in MCP_CALLS))
-        self.assertTrue(all(c["url"] == "http://x/mcp"
+        self.assertTrue(all(c["url"] == "http://x/api/mcp"
                             for c in MCP_CALLS))
 
     def test_generate_image_forwards_prompt(self):
@@ -265,6 +268,32 @@ class ClientTest(unittest.TestCase):
         with self.assertRaises(TuzzinaError) as ctx:
             self.c.generate_image("x")
         self.assertIn("credit exhausted", str(ctx.exception))
+        self.assertFalse(any("/public/v1/upload" in u for u, _ in CALLS))
+
+    def test_generate_image_iserror_surfaces_server_cause(self):
+        # LIVE-PROVEN 1C: the real tool failure arrives as
+        # {result: {content: [{text}], isError: true}} with the
+        # server cause inside text. Brain must surface it, not mask
+        # it behind the generic no-reference message.
+        def iserror_call(req, timeout=None):
+            payload = json.loads(req.data.decode())
+            if payload.get("method") == "tools/call":
+                cause = {"message": "AI generation failed, please "
+                                    "try again later.",
+                         "domain": "TOOL", "category": "USER",
+                         "code": "TOOL_EXECUTION_FAILED"}
+                return FakeResp({
+                    "jsonrpc": "2.0", "id": payload.get("id"),
+                    "result": {
+                        "content": [{"type": "text",
+                                     "text": json.dumps(cause)}],
+                        "isError": True}})
+            return _fake_mcp(req)
+        urllib.request.urlopen = iserror_call
+        with self.assertRaises(TuzzinaError) as ctx:
+            self.c.generate_image("x")
+        self.assertIn("TOOL_EXECUTION_FAILED", str(ctx.exception))
+        self.assertNotIn("no media reference", str(ctx.exception))
         self.assertFalse(any("/public/v1/upload" in u for u, _ in CALLS))
 
     def test_generate_image_no_secret_logging(self):
