@@ -26,6 +26,9 @@ def _make_client(items=None):
     c.upload_from_url = lambda url: {"id": "m1", "path": url}
     c.upload_bytes = lambda data, name, mime: {
         "id": "m2", "path": f"https://pub.r2.dev/{name}"}
+    c.get_integration_settings = lambda iid: {
+        "output": {"rules": "r", "maxLength": 63206,
+                   "settings": {}, "tools": []}}
     c.create_draft = lambda posts, date: [{"postId": "p1"}]
     c.create_post = lambda posts, date, post_type="draft": [{"postId": "p1"}]
     return c
@@ -333,6 +336,44 @@ class ResolveMediaTest(unittest.TestCase):
         from g2 import generators as G
         with self.assertRaises(RuntimeError):
             G.TuzzinaImageGenerator().generate_png("x")
+
+
+class LiveMaxLengthTest(unittest.TestCase):
+    """_live_max_length: live provider bound for pre-truncation,
+    fetched once per run outside pure policy code. Unavailable or
+    malformed -> None (Tuzzina validation stays authoritative)."""
+
+    def _client(self, settings=None, boom=False):
+        from tuzzina.client import TuzzinaClient, TuzzinaError
+        c = TuzzinaClient("http://x/api", "k")
+
+        def get_settings(iid):
+            if boom:
+                raise TuzzinaError("HTTP 500 down")
+            return settings
+
+        c.get_integration_settings = get_settings
+        return c
+
+    def test_live_value_used(self):
+        import run as run_mod
+        c = self._client({"output": {"maxLength": 2200}})
+        self.assertEqual(run_mod._live_max_length(c, "int1"), 2200)
+
+    def test_unavailable_degrades_to_none(self):
+        import run as run_mod
+        c = self._client(boom=True)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            self.assertIsNone(run_mod._live_max_length(c, "int1"))
+
+    def test_malformed_shape_degrades_to_none(self):
+        import run as run_mod
+        for bad in (None, {}, {"output": {}},
+                    {"output": {"maxLength": "long"}},
+                    {"output": {"maxLength": -5}}):
+            c = self._client(bad)
+            self.assertIsNone(run_mod._live_max_length(c, "int1"))
 
 
 class InjectionPathTest(unittest.TestCase):

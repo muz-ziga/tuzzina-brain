@@ -6,9 +6,11 @@ Strict order, each step explicit:
      (stale/missing -> TuzzinaError propagates, never masked)
   3. read the platform identifier FROM Tuzzina's response
   4. select the adapter (UnsupportedPlatform propagates)
-  5. capability gates (UnsupportedCapability, never invented payload)
-  6. translate via the adapter (pure text/media/settings shaping)
-  7. send via TuzzinaClient (the ONLY place HTTP happens)
+  5. translate via the adapter (pure text/media/settings shaping).
+     Provider validity (post kinds, media rules, lengths) is owned
+     by Tuzzina: its POST /posts validation refuses authoritatively,
+     and those errors propagate as TuzzinaError, never masked.
+  6. send via TuzzinaClient (the ONLY place HTTP happens)
 
 The service itself performs NO HTTP, runs NO scheduler, manages
 NO tokens, stores NOTHING, retries NOTHING (retry policy lives in
@@ -16,8 +18,7 @@ TuzzinaClient/Tuzzina).
 """
 from __future__ import annotations
 from adapters import get_adapter
-from injection.capabilities import status
-from injection.errors import InvalidInjectionIntent, UnsupportedCapability
+from injection.errors import InvalidInjectionIntent
 from injection.intent import MODES, POST_KINDS, CanonicalIntent
 from injection.trace import (ADAPTER_SELECTED, ERROR, POST_REQUEST,
                              POST_RESPONSE, START, NullTracer,
@@ -89,33 +90,12 @@ class InjectionService:
         # 4. Adapter selection. Unknown -> UnsupportedPlatform.
         stage[0] = "adapter"
         adapter = get_adapter(identifier)
-        caps = adapter.capabilities()
         self._tracer.emit(
             ADAPTER_SELECTED,
             injection_id=injection_id,
             integration_id=intent.integration_id,
             identifier=identifier,
             adapter=type(adapter).__name__)
-
-        # 5a. Post-kind gate. Unknown post_types key -> let Tuzzina
-        #     decide (its validation is authoritative); a reported
-        #     list that lacks the kind -> refuse explicitly.
-        reported = caps.get("post_types", None)
-        if isinstance(reported, (list, tuple, set)) and \
-                intent.post_kind not in reported:
-            raise UnsupportedCapability(
-                f"{identifier} does not support post_kind="
-                f"{intent.post_kind!r}")
-
-        # 5b. Story needs an attachment on platforms that say so
-        #     (FB: story_needs_attachment). Refuse instead of sending
-        #     a payload Tuzzina would have to reject.
-        media_cfg = caps.get("media") if isinstance(
-            caps.get("media"), dict) else {}
-        if intent.post_kind == "story" and not intent.media and \
-                media_cfg.get("story_needs_attachment"):
-            raise UnsupportedCapability(
-                f"{identifier} story requires at least one media item")
 
         # 6a. Mentions are inline text on FB+IG: append once, here,
         #     before shaping (shape_text owns final assembly, so no
@@ -156,12 +136,11 @@ class InjectionService:
             settings.update(intent.settings)
         settings["__type__"] = identifier
         settings["post_type"] = intent.post_kind
-        # Links: attach goes to settings["url"] ONLY on positive
-        # support signal. Anything else (unsupported/unknown) omits
-        # the URL field entirely -- never invented.
-        if (intent.links_policy or "hide") == "attach" and intent.link \
-                and status(caps, "links") == "supported":
-            settings["url"] = intent.link
+        # Links: the adapter translates the policy into the payload
+        # shape (FB: settings.url on attach; IG: omitted). Anything
+        # the adapter drops is never invented here.
+        settings.update(adapter.link_setting(
+            intent.links_policy or "hide", intent.link or ""))
 
         # 7. Single Tuzzina call. No retry here (client/Tuzzina own it).
         stage[0] = "post"

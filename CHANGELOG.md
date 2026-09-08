@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.12.0 — Migration Step 4: slim platform adapters (translators only)
+
+- Deleted `capabilities()` from both adapters and the
+  `injection/capabilities.py` status lens: no static maxLength
+  (63206/2200), post_types, media min/max/carousel flags, or
+  media_delivery mirrors remain anywhere in `src` (verified by
+  grep). Adapters keep translation only: text assembly, media
+  passthrough, link branching, `link_setting()`, and the
+  `default_settings()` skeleton required by the API contract.
+- Removed Brain's second validation layer: the post-kind gate
+  and story-attachment gate in `InjectionService` are gone.
+  Tuzzina's POST /posts validation refuses authoritatively and
+  its errors propagate as TuzzinaError (a text-only story now
+  flows to Tuzzina instead of being refused on pinnable data).
+- Live bound: `_execute` fetches `maxLength` once per run via
+  the existing `get_integration_settings` (outside pure policy
+  code) for pre-truncation; unavailable/malformed -> no cut,
+  Tuzzina stays authoritative. Not consumed inside adapters
+  (they stay sync, deterministic, network-free) and not per
+  post (Tuzzina owns refusal).
+- `shape_text` assembles without truncation; `shape_media` passes
+  refs through (IG empty/carousel enforcement removed).
+- Tests: translator proofs, anti-registry guards, link_setting,
+  live-bound + fallback, refusal-ownership change. 175/175 pass
+  (was 171). G1/G3/image/scheduling untouched. No Tuzzina/Postiz
+  changes. No live calls. No UI. No new subsystem.
+
 ## 0.11.0 — Migration Step 3: policy-only Strategy (provider_overrides removed)
 
 - Removed `provider_overrides` from `ChannelStrategy`

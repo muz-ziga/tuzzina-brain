@@ -142,15 +142,19 @@ class PlanningCountsTest(unittest.TestCase):
 
 
 class TextShapingTest(unittest.TestCase):
-    def test_facebook_long(self):
+    def test_facebook_long_assembly(self):
+        # STEP 4: adapters assemble text; they carry no length
+        # constants. Tuzzina validates length authoritatively.
         from adapters.facebook import FacebookAdapter
         out = FacebookAdapter().shape_text("x" * 70000, ["#a"])
-        self.assertLessEqual(len(out), 63206)
+        self.assertIn("#a", out)
+        self.assertEqual(len(out), 70000 + 4)
 
-    def test_instagram_long(self):
+    def test_instagram_long_assembly(self):
         from adapters.instagram import InstagramAdapter
         out = InstagramAdapter().shape_text("x" * 5000, ["#a"])
-        self.assertLessEqual(len(out), 2200)
+        self.assertIn("#a", out)
+        self.assertEqual(len(out), 5000 + 4)
 
     def test_instagram_no_attach(self):
         from adapters.instagram import InstagramAdapter

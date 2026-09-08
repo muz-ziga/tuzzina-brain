@@ -59,6 +59,26 @@ def _resolve_media(client: TuzzinaClient, m: dict) -> dict:
     return client.upload_bytes(blob, fname, "image/png")
 
 
+def _live_max_length(client: TuzzinaClient, integration_id: str):
+    """Live provider maxLength for pre-truncation (one read per run).
+
+    Called before intents are produced, never inside pure policy
+    code. Unavailable/invalid -> None (no pre-truncation; Tuzzina
+    validation stays authoritative either way). Adapters carry no
+    length constants, so there is nothing stale to fall back to.
+    """
+    try:
+        out = (client.get_integration_settings(integration_id)
+               or {}).get("output") or {}
+        n = out.get("maxLength")
+        return n if isinstance(n, int) and n > 0 else None
+    except Exception:
+        print("warning: live provider settings unavailable; "
+              "skipping pre-truncation (Tuzzina validates)",
+              file=sys.stderr)
+        return None
+
+
 def _execute(cfg: dict, mode: str, client: TuzzinaClient,
              integration_id: str, post_mode: str = "draft",
              dry_run: bool = False) -> int:
@@ -72,7 +92,7 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
         return 4
     print(f"adapter: {type(adapter).__name__} "
           f"(identifier={identifier!r})")
-    caps = adapter.capabilities()
+    max_length = _live_max_length(client, integration_id)
     src_adapters = {"website": WebsiteAdapter()}
     # Sources precedence: cfg["sources"] already resolved
     # (channel strategy > campaign fallback) by resolve_strategy.
@@ -88,7 +108,7 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
                 item, cfg["brand"], cfg["language"], cfg["hashtags"],
                 cfg["links_policy"], text_gen, image_gen_obj,
                 platform=identifier,
-                limits={"max_length": caps.get("max_length")},
+                limits={"max_length": max_length},
                 link_fn=adapter.apply_link))
     if not packages:
         print("no content extracted; nothing to do")

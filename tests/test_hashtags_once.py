@@ -38,7 +38,7 @@ def _final_with_tags(platform):
                         cfg["hashtags"], cfg["links_policy"],
                         G.MockTextGenerator(), G.MockImageGenerator(),
                         platform=platform, platform_settings={},
-                        limits={"max_length": adapter.capabilities()["max_length"]},
+                        limits=None,
                         link_fn=adapter.apply_link)
     out = adapter.shape_text(pkg.content, pkg.hashtags)
     return out, pkg.hashtags

@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from adapters.base import UnsupportedPlatform
-from injection.errors import InvalidInjectionIntent, UnsupportedCapability
+from injection.errors import InvalidInjectionIntent
 from injection.intent import build_intent
 from injection.service import InjectionService
 from injection.trace import (ADAPTER_SELECTED, ERROR, POST_REQUEST,
@@ -105,23 +105,25 @@ class EventOrderTest(unittest.TestCase):
                                  POST_RESPONSE])
 
     def test_failure_event_emitted(self):
+        # Provider refusal now comes from Tuzzina, not Brain: use a
+        # Brain-vocabulary failure (empty content) for the error path.
         tracer = MemoryTracer()
-        with self.assertRaises(UnsupportedCapability):
+        with self.assertRaises(InvalidInjectionIntent):
             InjectionService(tracer=tracer).inject(
-                fb_intent(post_kind="story", media=[]),
+                fb_intent(content="   "),
                 FakeClient([FB_RECORD]))
         errs = [e for e in tracer.events if e["event"] == ERROR]
         self.assertEqual(len(errs), 1)
-        self.assertEqual(errs[0]["error_type"], "UnsupportedCapability")
+        self.assertEqual(errs[0]["error_type"], "InvalidInjectionIntent")
         self.assertIn("injection_id", errs[0])
 
     def test_failure_reraises_unchanged(self):
         tracer = MemoryTracer()
-        with self.assertRaises(UnsupportedCapability) as ctx:
+        with self.assertRaises(InvalidInjectionIntent) as ctx:
             InjectionService(tracer=tracer).inject(
-                fb_intent(post_kind="story", media=[]),
+                fb_intent(content="   "),
                 FakeClient([FB_RECORD]))
-        self.assertIn("story", str(ctx.exception))
+        self.assertIn("content", str(ctx.exception))
 
     def test_null_tracer_default_is_silent(self):
         # Existing callers that pass no tracer keep byte-identical

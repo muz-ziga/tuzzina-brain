@@ -35,8 +35,9 @@ class CanonicalIntent:
     hashtags: list = field(default_factory=list)
     # Handles without "@" (service normalizes). Inline for FB+IG.
     mentions: list = field(default_factory=list)
-    # Platform shape: "post" | "story". Validated against the
-    # adapter's reported post_types at inject time.
+    # Platform shape: "post" | "story". Brain-vocabulary enum
+    # enforced at inject time; whether a platform accepts the kind
+    # is validated authoritatively by Tuzzina.
     post_kind: str = "post"
     # ISO datetime string. Required always (Tuzzina requires date
     # even for drafts). For mode="now" it SHOULD be ~now, but

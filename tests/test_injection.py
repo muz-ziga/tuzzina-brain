@@ -7,8 +7,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from adapters.base import UnsupportedPlatform
-from injection.capabilities import status
-from injection.errors import InvalidInjectionIntent, UnsupportedCapability
+from injection.errors import InvalidInjectionIntent
 from injection.intent import CanonicalIntent, build_intent
 from injection.service import InjectionService
 
@@ -194,12 +193,16 @@ class RefusalTest(unittest.TestCase):
                 fb_intent(integration_id="int-tt-1"), c)
         self.assertEqual(c.posts_calls, [])
 
-    def test_unsupported_capability_story_without_media(self):
+    def test_story_without_media_flows_to_tuzzina(self):
+        # STEP 4: Brain performs no provider refusal. A text-only
+        # story is translated and sent; Tuzzina's POST validation
+        # owns the refusal and its error propagates from the client.
         c = FakeClient([FB_RECORD])
-        with self.assertRaises(UnsupportedCapability):
-            InjectionService().inject(
-                fb_intent(post_kind="story", media=[]), c)
-        self.assertEqual(c.posts_calls, [])
+        out = InjectionService().inject(
+            fb_intent(post_kind="story", media=[]), c)
+        self.assertEqual(out["post_kind"], "story")
+        settings = c.posts_calls[0]["posts"][0]["settings"]
+        self.assertEqual(settings["post_type"], "story")
 
     def test_invalid_intent_empty_content(self):
         c = FakeClient([FB_RECORD])
@@ -222,16 +225,16 @@ class RefusalTest(unittest.TestCase):
             InjectionService().inject(
                 fb_intent(media=[{"noid": 1}]), c)
 
-    def test_capability_status_helper(self):
+    def test_link_setting_translation(self):
+        # The adapter (not a capability table) decides the link
+        # payload shape: FB carries settings.url on attach.
         from adapters.facebook import FacebookAdapter
-        caps = FacebookAdapter().capabilities()
-        self.assertEqual(status(caps, "post_types"), "supported")
-        self.assertEqual(status(caps, "links"), "supported")
-        self.assertEqual(status(caps, "nope"), "unknown")
-        self.assertEqual(status({"a": False}, "a"), "unsupported")
-        self.assertEqual(status({"a": "unsupported"}, "a"), "unsupported")
-        self.assertEqual(status({"a": []}, "a"), "unsupported")
-        self.assertEqual(status("x", "a"), "unknown")
+        from adapters.instagram import InstagramAdapter
+        self.assertEqual(
+            FacebookAdapter().link_setting("attach", "https://x"),
+            {"url": "https://x"})
+        self.assertEqual(
+            InstagramAdapter().link_setting("attach", "https://x"), {})
 
 
 class OwnershipTest(unittest.TestCase):
@@ -293,14 +296,14 @@ class GuardTest(unittest.TestCase):
             if ln.strip().startswith(("import ", "from ")))
 
     def test_no_tuzzina_postiz_imports(self):
-        for rel in ("intent.py", "errors.py", "capabilities.py",
+        for rel in ("intent.py", "errors.py",
                     "service.py", "__init__.py"):
             blob = self._imports_of(rel)
             for bad in ("gitroom", "postiz", "tuzzina", "nestjs"):
                 self.assertNotIn(bad, blob, rel)
 
     def test_no_db_r2_access(self):
-        for rel in ("intent.py", "errors.py", "capabilities.py",
+        for rel in ("intent.py", "errors.py",
                     "service.py"):
             src = self._code_lines(rel).lower()
             for bad in ("psycopg", "sqlalchemy", "sqlite", "boto3",
@@ -309,7 +312,7 @@ class GuardTest(unittest.TestCase):
                 self.assertNotIn(bad, src, rel)
 
     def test_no_scheduler_publisher(self):
-        for rel in ("intent.py", "errors.py", "capabilities.py",
+        for rel in ("intent.py", "errors.py",
                     "service.py"):
             src = self._src(rel)
             for bad in ("apscheduler", "celery", "Temporal", "temporal",

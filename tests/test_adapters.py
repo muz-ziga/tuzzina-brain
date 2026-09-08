@@ -10,23 +10,21 @@ from adapters.facebook import FacebookAdapter
 from adapters.instagram import InstagramAdapter
 
 
-class FacebookCapabilitiesTest(unittest.TestCase):
-    def test_caps(self):
-        c = FacebookAdapter().capabilities()
-        self.assertEqual(c["max_length"], 63206)
-        self.assertEqual(c["post_types"], ["post", "story"])
-        self.assertTrue(c["media"]["text_only_allowed"])
-        self.assertTrue(c["media"]["photos"])
-        self.assertTrue(c["media"]["video_mp4_to_reel"])
-        self.assertEqual(c["hashtags"], "inline")
-        self.assertEqual(c["mentions"], "inline")
-        self.assertEqual(c["links"], "attach_allowed")
-        self.assertEqual(c["media_delivery"], "url")
+class FacebookTranslatorTest(unittest.TestCase):
+    def test_no_capability_registry(self):
+        # STEP 4: adapters are translators, not provider-truth stores.
+        a = FacebookAdapter()
+        self.assertFalse(hasattr(a, "capabilities"))
+        for stale in ("max_length", "maxLength", "post_types",
+                      "media_delivery", "story_needs_attachment"):
+            self.assertFalse(hasattr(a, stale),
+                             f"stale provider truth leaked: {stale}")
 
-    def test_text_shaping(self):
+    def test_text_assembly_unbounded(self):
+        # No length constant lives here; Tuzzina validates length.
         a = FacebookAdapter()
         self.assertIn("#x", a.shape_text("hi", ["#x"]))
-        self.assertEqual(len(a.shape_text("y" * 70000, [])), 63206)
+        self.assertEqual(len(a.shape_text("y" * 70000, [])), 70000)
 
     def test_link_policies(self):
         a = FacebookAdapter()
@@ -39,39 +37,46 @@ class FacebookCapabilitiesTest(unittest.TestCase):
         self.assertEqual(a.shape_media([]), [])
         self.assertEqual(len(a.shape_media([{"kind": "url"}])), 1)
 
+    def test_link_setting(self):
+        a = FacebookAdapter()
+        self.assertEqual(a.link_setting("attach", "http://u"),
+                         {"url": "http://u"})
+        self.assertEqual(a.link_setting("hide", "http://u"), {})
+        self.assertEqual(a.link_setting("attach", ""), {})
+
     def test_default_settings(self):
         self.assertEqual(FacebookAdapter().default_settings(),
                          {"__type": "facebook", "post_type": "post"})
 
 
-class InstagramCapabilitiesTest(unittest.TestCase):
-    def test_caps(self):
-        c = InstagramAdapter().capabilities()
-        self.assertEqual(c["max_length"], 2200)
-        self.assertEqual(c["post_types"], ["post", "story"])
-        self.assertTrue(c["post_type_required"])
-        self.assertTrue(c["media"]["required"])
-        self.assertEqual(c["media"]["carousel_min"], 2)
-        self.assertEqual(c["media"]["carousel_max"], 10)
-        self.assertTrue(c["media"]["story_single_picture"])
-        self.assertEqual(c["hashtags"], "inline")
-        self.assertEqual(c["mentions"], "inline")
-        self.assertEqual(c["links"], "unsupported")
-        self.assertEqual(c["media_delivery"], "url")
+class InstagramTranslatorTest(unittest.TestCase):
+    def test_no_capability_registry(self):
+        a = InstagramAdapter()
+        self.assertFalse(hasattr(a, "capabilities"))
+        for stale in ("max_length", "maxLength", "post_types",
+                      "post_type_required", "carousel_max",
+                      "media_delivery", "caption_single_media_only"):
+            self.assertFalse(hasattr(a, stale),
+                             f"stale provider truth leaked: {stale}")
 
-    def test_text_shaping(self):
+    def test_text_assembly_unbounded(self):
         a = InstagramAdapter()
         self.assertIn("#x", a.shape_text("hi", ["#x"]))
-        self.assertEqual(len(a.shape_text("y" * 5000, [])), 2200)
+        self.assertEqual(len(a.shape_text("y" * 5000, [])), 5000)
 
-    def test_media_required(self):
-        with self.assertRaises(UnsupportedPlatform):
-            InstagramAdapter().shape_media([])
-
-    def test_carousel_cap(self):
+    def test_link_setting(self):
         a = InstagramAdapter()
+        # Instagram has no link field; attach is meaningless here.
+        self.assertEqual(a.link_setting("attach", "http://u"), {})
+        self.assertEqual(a.link_setting("cta", "http://u"), {})
+
+    def test_media_passthrough(self):
+        # Media validity is owned by Tuzzina: refs pass through,
+        # including empty (Tuzzina refuses authoritatively).
+        a = InstagramAdapter()
+        self.assertEqual(a.shape_media([]), [])
         self.assertEqual(len(a.shape_media([{"k": i} for i in range(12)])),
-                         10)
+                         12)
 
     def test_link_policy(self):
         a = InstagramAdapter()
