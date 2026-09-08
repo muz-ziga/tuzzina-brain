@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.17.0 — R4: content opportunity analysis ("should we cover it?")
+
+- New `src/research/analysis.py`: `AnalysisModel` interface
+  (`analyze(result, policy, items=None) -> ContentOpportunity`),
+  `ContentOpportunity` (eligible, topic, angle, rationale,
+  FACT-only facts, source_item_ids, format, media_intent,
+  audience, language, priority, confidence, constraints,
+  model, meta). One call yields at most one opportunity;
+  item-level novelty stays in research/monitor.py.
+- `MockAnalysisModel` (deterministic: eligible iff >=1 FACT and
+  pillar fit; facts never launder inference; media via explicit
+  prefer, visual material, or min_items demand — video only via
+  explicit prefer). `OpenAIAnalysisModel` (own prompt/contract,
+  strict validation incl. known-ids, eligible-requires-facts,
+  enum checks; timeout/model/invalid-output -> AnalysisError).
+  Policy is a plain Brain-vocabulary dict; provider-shaped keys
+  are ignored by construction (tested with poisoned policy).
+- Constraints carry G2-must-respect language/audience/pillar;
+  confidence reuses high|medium|low. No caption/hashtag/CTA/
+  schedule/media-id in output (G2 owns those downstream).
+- 31 tests (`tests/test_analysis_model.py`, faked transport,
+  offline): all 18 required cases + boundary guards (no
+  execution duties, single transport call, no secrets, no
+  registries, roles in separate files). 277/277 pass (was
+  246). G1/R1/R2A/R3/G2/G3/Strategy/Injection/engines/
+  Tuzzina untouched. No cron/DB/publish/generation.
+
 ## 0.16.0 — R3: structured Research Model ("what did we find?")
 
 - New `src/research/models.py`: `ResearchModel` interface
