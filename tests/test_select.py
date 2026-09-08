@@ -10,17 +10,14 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
-# Insert src/ at the front of sys.path. Note: on Linux the stdlib
-# `select` is a C builtin (no __file__, loaded by BuiltinImporter)
-# that gets pulled into sys.modules very early (urllib, subprocess).
-# A plain `import select` will always resolve to the cached stdlib
-# entry because BuiltinImporter is consulted before path-based
-# finders. Path inserts do NOT help in that case.
-#
-# The fix used here is to load src/select.py directly by file path
-# under a different module name, bypassing the stdlib cache.
+# Insert src/ at the front of sys.path for project imports.
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-_SELECT_PY = Path(__file__).parent.parent / "src" / "select.py"
+
+# The strategy-selection CLI lives at src/strategy_select.py.
+# (Never src/select.py: that name shadows Python's stdlib `select`
+# on import and breaks any fresh process importing socket/urllib
+# afterwards with a circular ImportError.)
+_SELECT_PY = Path(__file__).parent.parent / "src" / "strategy_select.py"
 
 
 def _load_select_mod():

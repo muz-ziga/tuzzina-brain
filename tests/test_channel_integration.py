@@ -4,9 +4,10 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from channels.profile import (Brand, ChannelProfile, HashtagPolicy,
-                              resolve)
-from channels.loader import load_channel_profile
+from channels.profile import resolve_strategy
+from channels.strategy import (Brand, ChannelStrategy, ContentPolicy,
+                                GenerationPolicy, HashtagPolicy,
+                                MediaPolicy, MentionPolicy, PlanningPolicy)
 from g2 import generators as G
 from g2.pipeline import build_package
 from contracts import SourceItem
@@ -27,6 +28,28 @@ def _project():
     }
 
 
+def _strategy(**kw):
+    d = dict(
+        integration_id="integ-fb-1",
+        brand=Brand(tone="informative, slightly playful",
+                    audience="music producers, Arabic creators",
+                    cta_style="Try free"),
+        hashtags=HashtagPolicy(enabled=True, max=3,
+                               preferred=["juzzir", "mastering"]),
+        links_policy="hide",
+        mentions=MentionPolicy(),
+        media=MediaPolicy(),
+        sources=[],
+        content=ContentPolicy(),
+        generation=GenerationPolicy(),
+        planning=PlanningPolicy(),
+        provider_overrides={"post_type": "post"},
+        extras={},
+    )
+    d.update(kw)
+    return ChannelStrategy(**d)
+
+
 def _item():
     return SourceItem(source_id="s1", source_type="website",
                       source_url="https://www.juzzir.com/x",
@@ -37,90 +60,56 @@ def _item():
 
 class IntegrationTest(unittest.TestCase):
     def test_resolved_payload_matches_facebook_dto(self):
-        ch = ChannelProfile(
-            integration_id="integ-fb-1",
-            brand=Brand(tone="informative, slightly playful",
-                        audience="music producers, Arabic creators",
-                        cta_style="Try free"),
-            hashtags=HashtagPolicy(enabled=True, max=3,
-                                    preferred=["juzzir", "mastering"]),
-            links_policy="hide",
-            provider_overrides={"post_type": "post"},
-        )
+        ch = _strategy()
         meta = {"identifier": "facebook", "name": "Juzzir",
-                "integration_id": "integ-fb-1"}  # Tuzzina-side id (same as brain YAML)
-        cfg = resolve(_project(), ch, channel_meta=meta)
+                "integration_id": "integ-fb-1"}
+        cfg = resolve_strategy(_project(), ch, channel_meta=meta)
         pkg = build_package(_item(), cfg["brand"], cfg["language"],
                             cfg["hashtags"], cfg["links_policy"],
                             G.MockTextGenerator(), G.MockImageGenerator(),
                             platform=meta["identifier"],
                             platform_settings=cfg["provider_overrides"])
-        # Tuzzina Facebook DTO accepts these
         self.assertEqual(pkg.platform, "facebook")
         self.assertEqual(pkg.settings["__type"], "facebook")
         self.assertEqual(pkg.settings["post_type"], "post")
-        # Channel hashtag policy applied
         self.assertEqual(len(pkg.hashtags), 3)
         self.assertIn("#juzzir", pkg.hashtags)
         self.assertIn("#mastering", pkg.hashtags)
-        # Brand channel-overridden tone reached generator
         self.assertIn("informative, slightly playful", pkg.content)
-        # Links policy hides source URL
         self.assertNotIn("juzzir.com/x", pkg.content)
-        # Media fallback to mock generator
         self.assertEqual(pkg.media[0]["kind"], "generator")
-        # integration_id flows through
         self.assertEqual(cfg["integration_id"], "integ-fb-1")
 
     def test_project_defaults_still_work_without_channel_overrides(self):
-        ch = ChannelProfile(
-            integration_id="integ-fb-2",
-            brand=Brand(), hashtags=HashtagPolicy(),
-            links_policy=None,  # unset sentinel
-        )
+        ch = _strategy(brand=Brand(), hashtags=HashtagPolicy())
         meta = {"identifier": "facebook"}
-        cfg = resolve(_project(), ch, channel_meta=meta)
+        cfg = resolve_strategy(_project(), ch, channel_meta=meta)
         pkg = build_package(_item(), cfg["brand"], cfg["language"],
                             cfg["hashtags"], cfg["links_policy"],
                             G.MockTextGenerator(), G.MockImageGenerator(),
                             platform=meta["identifier"],
                             platform_settings=cfg["provider_overrides"])
-        # Project's preferred words used because channel preferred_words is empty
         self.assertIn("#juzzir", pkg.hashtags)
-        # Hashtags capped at 5 (project's per_platform.facebook.max)
         self.assertLessEqual(len(pkg.hashtags), 5)
-        # Platform settings forwarded
         self.assertEqual(pkg.settings["__type"], "facebook")
 
-    def test_yaml_loader_integration(self):
+    def test_strategy_store_roundtrip_integration(self):
         import tempfile
-        yaml_text = """
-integration_id: integ-1
-brand:
-  tone: "loud"
-  preferred_words: ["juzzir"]
-  cta_style: "Try free"
-hashtags:
-  max: 2
-  preferred: ["juzzir"]
-links_policy: hide
-provider_overrides:
-  post_type: post
-"""
-        f = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
-        f.write(yaml_text)
-        f.close()
-        ch = load_channel_profile(f.name)
+        from channels.strategy_store import save, load
+        tmp = tempfile.mkdtemp(prefix="tbra_integ_")
+        s = _strategy()
+        save(s, base_dir=tmp)
+        loaded = load("integ-fb-1", base_dir=tmp)
         meta = {"identifier": "facebook"}
-        cfg = resolve(_project(), ch, channel_meta=meta)
-        self.assertEqual(cfg["brand"]["tone"], "loud")  # channel wins
-        self.assertEqual(cfg["brand"]["audience"],
-                         "general Arabic audience")     # project default
-        self.assertEqual(cfg["hashtags"]["per_platform"]["facebook"]["max"], 2)
+        cfg = resolve_strategy(_project(), loaded, channel_meta=meta)
+        self.assertEqual(cfg["brand"]["tone"],
+                         "informative, slightly playful")
+        self.assertEqual(cfg["hashtags"]["per_platform"]["facebook"]["max"],
+                         3)
         self.assertEqual(cfg["hashtags"]["per_platform"]["facebook"]
-                         ["preferred"], ["juzzir"])
+                         ["preferred"], ["juzzir", "mastering"])
         self.assertEqual(cfg["provider_overrides"]["post_type"], "post")
-        self.assertEqual(cfg["integration_id"], "integ-1")
+        self.assertEqual(cfg["integration_id"], "integ-fb-1")
 
 
 if __name__ == "__main__":

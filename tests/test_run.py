@@ -78,13 +78,15 @@ def _write_campaign(tmpdir):
     return p
 
 
-def _run_run(argv, *, tmpdir, items):
+def _run_run(argv, *, tmpdir, items, strict_client=None):
     os.environ["TUZZINA_API_KEY"] = "k"
     import importlib
     import run as run_mod
     orig_website = run_mod.WebsiteAdapter
 
     def _fake_build(base, key):
+        if strict_client is not None:
+            return strict_client
         return _make_client(items)
 
     orig_build = getattr(run_mod, "_build_client", None)
@@ -187,23 +189,92 @@ class RunByIntegrationTest(unittest.TestCase):
         self.assertNotEqual(rc, 0, msg=f"err={err}")
 
 
-class LegacyModeStillWorksTest(unittest.TestCase):
-    def test_legacy_two_positional_args(self):
-        # The original flow with a strategy.yaml at an explicit path
-        # still works. This is the "old shape" ChannelProfile loader.
-        tmp = tempfile.mkdtemp(prefix="tbra_run_")
+class DryRunTest(unittest.TestCase):
+    """--dry-run performs the full read path (strategy load,
+    integration lookup, G1/G2/G3, intent building, adapter
+    translation) with ZERO writes: no upload, no create_post."""
+
+    def _write_strategy(self, tmpdir, iid="integ-fb-1"):
+        from channels.strategy import (Brand, ChannelStrategy,
+                                        ContentPolicy, GenerationPolicy,
+                                        HashtagPolicy, PlanningPolicy)
+        from channels.strategy_store import save
+        save(ChannelStrategy(
+            integration_id=iid,
+            brand=Brand(tone="loud"),
+            hashtags=HashtagPolicy(enabled=True, max=2),
+            links_policy="hide",
+            content=ContentPolicy(),
+            generation=GenerationPolicy(),
+            planning=PlanningPolicy(),
+        ), base_dir=tmpdir)
+
+    def _strict_client(self, items):
+        # Any write attempt raises; get_integration read allowed.
+        client = _make_client(items)
+        client.upload_from_url = _boom("upload_from_url")
+        client.upload_bytes = _boom("upload_bytes")
+        client.create_post = _boom("create_post")
+        client.create_draft = _boom("create_draft")
+        return client
+
+    def test_dry_run_performs_zero_writes(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_dry_")
         camp = _write_campaign(tmp)
-        strat_yaml = os.path.join(tmp, "strat.yaml")
-        with open(strat_yaml, "w", encoding="utf-8") as f:
-            f.write("integration_id: integ-fb-1\nbrand:\n  tone: loud\n"
-                    "hashtags:\n  enabled: true\n  max: 3\n"
-                    "links_policy: hide\n"
-                    "provider_overrides:\n  post_type: post\n")
+        self._write_strategy(tmp)
         items = [{"id": "integ-fb-1", "name": "Juzzir",
                    "identifier": "facebook"}]
-        rc, out, err = _run_run([camp, strat_yaml], tmpdir=tmp, items=items)
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp, "--dry-run"],
+            tmpdir=tmp, items=items,
+            strict_client=self._strict_client(items))
+        self.assertEqual(rc, 0, msg=f"err={err}")
+        self.assertIn("DRY-RUN", out)
+        self.assertNotIn("INJECTED", out)
+
+    def test_dry_run_output_is_safe(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_dry_")
+        camp = _write_campaign(tmp)
+        self._write_strategy(tmp)
+        items = [{"id": "integ-fb-1", "name": "Juzzir",
+                   "identifier": "facebook"}]
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp, "--dry-run"],
+            tmpdir=tmp, items=items,
+            strict_client=self._strict_client(items))
+        self.assertEqual(rc, 0, msg=f"err={err}")
+        # Safe metadata shown...
+        for key in ("integration_id", "identifier", "mode",
+                     "post_kind", "publish_at", "adapter"):
+            self.assertIn(key, out)
+        # ...secrets never shown.
+        blob = (out + err).lower()
+        for bad in ("apikey", "api_key", "authorization", "bearer",
+                    "secret", "token", "cookie", "password"):
+            self.assertNotIn(bad, blob)
+
+    def test_normal_mode_still_writes(self):
+        # Regression: --dry-run must not leak into the normal path.
+        tmp = tempfile.mkdtemp(prefix="tbra_dry_")
+        camp = _write_campaign(tmp)
+        self._write_strategy(tmp)
+        items = [{"id": "integ-fb-1", "name": "Juzzir",
+                   "identifier": "facebook"}]
+        rc, out, err = _run_run(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp],
+            tmpdir=tmp, items=items)
         self.assertEqual(rc, 0, msg=f"err={err}")
         self.assertIn("INJECTED", out)
+        self.assertNotIn("DRY-RUN", out)
+
+
+def _boom(name):
+    def _raise(*a, **k):
+        raise AssertionError(f"dry-run must never call {name}")
+    return _raise
 
 
 class InjectionPathTest(unittest.TestCase):

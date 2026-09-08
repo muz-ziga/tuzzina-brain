@@ -1,6 +1,5 @@
-"""run.py: campaign + (strategy.yaml | --strategy-by-integration) -> Tuzzina.
-Usage A (legacy): TUZZINA_API_KEY=... python3 src/run.py <campaign.yaml> <strategy.yaml> [--mock|--openai]
-Usage B (canonical): TUZZINA_API_KEY=... python3 src/run.py <campaign.yaml> --strategy-by-integration <integration_id> [--mock|--openai]
+"""run.py: campaign + strategy-by-integration -> Tuzzina.
+Usage: TUZZINA_API_KEY=... python3 src/run.py <campaign.yaml> --strategy-by-integration <integration_id> [--mock|--openai] [--post-mode draft|schedule|now] [--dry-run]
 
 The strategy carries Brain-owned policy only. The integration's name,
 platform, picture, OAuth and DTOs are read from Tuzzina at runtime.
@@ -15,8 +14,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from campaign import load_campaign
-from channels.loader import load_channel_profile
-from channels.profile import resolve, resolve_strategy
+from channels.profile import resolve_strategy
 from channels.strategy_store import load as load_strategy
 from contracts import ContentPackage
 from g1.website import WebsiteAdapter
@@ -44,7 +42,8 @@ def _build_generators(mode: str):
 
 
 def _execute(cfg: dict, mode: str, client: TuzzinaClient,
-             integration_id: str, post_mode: str = "draft") -> int:
+             integration_id: str, post_mode: str = "draft",
+             dry_run: bool = False) -> int:
     from adapters import get_adapter
     text_gen, image_gen_obj = _build_generators(mode)
     identifier = str(cfg.get("channel_meta", {}).get("identifier") or "")
@@ -104,6 +103,10 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
     planned = plan(kept, cfg["schedule"])
     print(f"G3 planned {len(planned)} posts")
 
+    if dry_run:
+        return _dry_run_report(cfg, planned, integration_id, identifier,
+                               adapter, post_mode)
+
     # Injection path (the ONLY publish path): each planned post
     # becomes a CanonicalIntent consumed by InjectionService, which
     # resolves the integration live, selects the adapter from
@@ -151,6 +154,40 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
     return 0
 
 
+def _dry_run_report(cfg: dict, planned: list, integration_id: str,
+                    identifier: str, adapter, post_mode: str) -> int:
+    """Dry-run display only. Reads planned posts and prints a safe
+    summary per post. Performs ZERO writes: no upload, no
+    upload-from-url, no create_post, no InjectionService call.
+    Only safe metadata is shown (lengths/counts/keys, never content
+    bodies beyond length, never secrets)."""
+    overrides = cfg.get("provider_overrides") or {}
+    pk = overrides.get("post_type")
+    post_kind = pk if pk in ("post", "story") else "post"
+    print(f"DRY-RUN {len(planned)} post(s) [mode={post_mode}]: "
+          f"no writes performed")
+    for i, p in enumerate(planned, 1):
+        kinds = sorted({str(m.get("kind", "?"))
+                        for m in (p.media or []) if isinstance(m, dict)})
+        print(json.dumps({
+            "n": i,
+            "integration_id": integration_id,
+            "identifier": identifier,
+            "adapter": type(adapter).__name__,
+            "mode": post_mode,
+            "post_kind": post_kind,
+            "publish_at": p.planned_at,
+            "content_chars": len(p.content or ""),
+            "hashtags": len(p.tags or []),
+            "media_count": len(p.media or []),
+            "media_kinds": kinds,
+            "has_link": bool(
+                (cfg.get("links_policy", "hide") == "attach")),
+            "settings_keys": sorted(str(k) for k in overrides),
+        }, ensure_ascii=False))
+    return 0
+
+
 def main(argv=None) -> int:
     try:
         return _main(argv)
@@ -169,10 +206,7 @@ def _main(argv=None) -> int:
     p = argparse.ArgumentParser(
         description="Brain run: campaign + strategy -> Tuzzina")
     p.add_argument("campaign", help="Path to campaign.yaml")
-    p.add_argument("strategy", nargs="?",
-                   help="Path to strategy.yaml (legacy mode; or omit "
-                        "and use --strategy-by-integration)")
-    p.add_argument("--strategy-by-integration", default=None,
+    p.add_argument("--strategy-by-integration", required=True,
                    help="Tuzzina integration id whose Brain strategy "
                         "(brain-strategies/<id>.yaml) should be used. "
                         "Channel identity is read from Tuzzina, not "
@@ -187,17 +221,12 @@ def _main(argv=None) -> int:
                    default="draft",
                    help="Tuzzina post type for injected posts "
                         "(default: draft)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Plan and display only: runs G1/G2/G3 and shows "
+                        "what would be injected, with ZERO writes "
+                        "(no upload, no posts). get_integration read "
+                        "is still performed to resolve the channel.")
     args = p.parse_args(argv)
-
-    if args.strategy and args.strategy_by_integration:
-        print("error: pass either <strategy.yaml> or "
-              "--strategy-by-integration, not both", file=sys.stderr)
-        return 2
-    if not args.strategy and not args.strategy_by_integration:
-        print("usage: run.py <campaign.yaml> <strategy.yaml>\n"
-              "       run.py <campaign.yaml> --strategy-by-integration "
-              "<id>", file=sys.stderr)
-        return 2
 
     campaign = load_campaign(args.campaign)
 
@@ -221,27 +250,8 @@ def _main(argv=None) -> int:
         print(f"channel: name={integ.get('name')!r} "
               f"id={integ.get('id')} platform={integ.get('identifier')!r}")
         cfg = resolve_strategy(campaign, strategy, channel_meta=channel_meta)
-        # CRITICAL: the platform inside the resolved config is set
-        # by the runtime channel_meta, not by the strategy. A future
-        # audit must confirm channel_meta['identifier'] is what Tuzzina
-        # returned, not what the YAML claims.
         return _execute(cfg, args.mode, client, args.strategy_by_integration,
-                        post_mode=args.post_mode)
-
-    # Legacy mode: explicit strategy.yaml
-    profile = load_channel_profile(args.strategy)
-    integ = client.get_integration(profile.integration_id)
-    channel_meta = {
-        "integration_id": integ.get("id"),
-        "name": integ.get("name"),
-        "identifier": integ.get("identifier"),
-        "picture": integ.get("picture"),
-    }
-    print(f"channel: name={integ.get('name')!r} "
-          f"id={integ.get('id')} platform={integ.get('identifier')!r}")
-    cfg = resolve(campaign, profile, channel_meta=channel_meta)
-    return _execute(cfg, args.mode, client, profile.integration_id,
-                    post_mode=args.post_mode)
+                        post_mode=args.post_mode, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

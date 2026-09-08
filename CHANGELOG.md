@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1 — Channel identity source-of-truth hardening (Phase 4 - stabilization)
+
+- src/channels/profile.py: removed ChannelProfile legacy class and resolve() legacy path; resolve_strategy() is now the single resolver (channel wins via sentinel, extra_policies removed as dead data).
+- Deleted src/channels/loader.py and channels/juzzir.facebook.yaml legacy channel definition (duplicated Tuzzina identity via name/platform/VALID_PLATFORMS).
+- Renamed src/select.py -> src/strategy_select.py to avoid shadowing Python stdlib select on Linux (caused circular ImportError breaking 3 tests on production).
+- src/run.py: removed legacy two-arg <campaign> <strategy> mode; canonical --strategy-by-integration is now the sole path (validates via get_integration, platform from Tuzzina).
+- tests/test_channel_profile.py: removed (12 legacy tests for deleted code).
+- tests/test_channel_integration.py and tests/test_run.py updated to new ChannelStrategy/resolve_strategy flow; 152/152 pass (was 153 with legacy file).
+- No Tuzzina/Postiz/Meta/R2 changes. No new dependencies. No scheduler/publisher/DB/R2 code.
+
 ## 0.8.0 — Injection causal tracing (Phase 3.1)
 
 - New `src/injection/trace.py` (stdlib only: json, sys, uuid):

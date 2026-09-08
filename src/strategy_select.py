@@ -6,7 +6,7 @@ No Tuzzina write happens during selection. select.py NEVER calls
 POST endpoints. run.py is the only entry that creates posts.
 
 Usage:
-  TUZZINA_API_KEY=... python3 src/select.py
+  TUZZINA_API_KEY=... python3 src/strategy_select.py
 
 The list of integrations is read at startup. If you add a new
 channel in Tuzzina, re-run select.py.
