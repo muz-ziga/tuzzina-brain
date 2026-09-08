@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.1 — Single hashtag ownership (duplicate fix)
+
+- `g2.pipeline.build_package` no longer merges hashtags into
+  `pkg.content`. `pkg.content` is plain generated text (+links);
+  `pkg.hashtags` carries tags separately. Final assembly belongs
+  to `PlatformAdapter.shape_text`, so each tag appears exactly
+  once per platform rules.
+- No new hashtag logic, no rule changes. Order note: body is now
+  text → links → hashtags (was text → hashtags → links).
+- 6 new tests in `tests/test_hashtags_once.py`: exactly-once for
+  Facebook and Instagram, clean content without tags, empty tags
+  add nothing, preferred/max policy intact, package-content
+  contract (no `#` in `pkg.content`).
+
 ## 0.5.0 — Shared Core + Facebook/Instagram adapters
 
 - New `src/adapters/` package: `PlatformAdapter` interface

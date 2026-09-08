@@ -66,11 +66,12 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
     preferred = ((hs_cfg.get("per_platform") or {}).get(platform) or
                 {}).get("preferred", brand.get("preferred_words", []))
     tags = make_hashtags(item.title, summary, preferred, max_tags)
-    body = text
-    if tags:
-        body = f"{body}\n\n{' '.join(tags)}"
+    # NOTE: hashtags are NOT merged into body here. pkg.content stays
+    # plain generated text; pkg.hashtags carries the tags separately.
+    # The PlatformAdapter (shape_text) owns final assembly, so tags
+    # appear exactly once per platform rules.
     linker = link_fn or apply_link_policy
-    body = linker(body, item.source_url, links_policy,
+    body = linker(text, item.source_url, links_policy,
                   brand.get("cta_style", ""))
     cap = limits.get("max_length") if limits else None
     if isinstance(cap, int) and cap > 0:
