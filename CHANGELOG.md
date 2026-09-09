@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.23.0 — Phase 7: one-shot cycle CLI for automation triggers
+
+- New `src/run_cycle.py`: machine entry for unattended runs
+  (campaign + strategy-by-integration -> full research cycle
+  -> media resolve + inject, unless --dry-run). Flags:
+  --mock/--openai, --post-mode, --dry-run (zero writes AND
+  forces the memory state store), --run-id (default generated),
+  --state-store memory|tuzzina. Live runs require --openai;
+  --mock with live writes is refused (exit 2).
+- Machine contract: the LAST stdout line is always
+  `BRAIN_RESULT {...}` (run_id, status, sources_checked,
+  items_new, eligible, intents, post_ids, committed, error);
+  exit codes mirror run.py (0 ok incl. no-op, 1 cycle error,
+  2 config, 3 Tuzzina, 4 platform).
+- Reuses run.py loaders/client/generators/media-resolve and
+  the research cycle unchanged (no duplication); research
+  and analysis models follow the --mock/--openai mode.
+  Per-role multi-vendor selection stays constructor-level
+  (adapters ready; server-side assignment resolution is a
+  future seam, documented in-code).
+- 8 tests (`tests/test_run_cycle.py`, faked client/transport):
+  envelope, exit codes, store selection, run-id, mock-live
+  refusal, dry-run zero-write proof, live post_ids, tuzzina
+  commit path, secrecy. 399/399 pass (was 391). Proven live
+  locally: real CLI --dry-run --mock against a stub API ->
+  exit 0 with a valid envelope. No scheduler/cron/daemon in
+  Brain; no publishing/state changes beyond the cycle's own
+  rules.
+
 ## 0.22.0 — Phase 6: durable monitoring state (no local DB)
 
 - New `src/tuzzina/state_store.py`: `TuzzinaStateStore`
