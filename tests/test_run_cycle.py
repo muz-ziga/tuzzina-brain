@@ -227,7 +227,7 @@ class CycleCliCase(unittest.TestCase):
         orig_text = G.OpenAITextGenerator
         orig_models = rc_mod._build_models
         class FakeText(G.TextGenerator):
-            def generate(self, title, summary, brand):
+            def generate(self, title, summary, brand, policy=None):
                 return "Hello world post"
         G.OpenAITextGenerator = lambda *a, **k: FakeText()
         rc_mod._build_models = lambda mode: (MockResearchModel(),
@@ -293,7 +293,7 @@ class CycleCliCase(unittest.TestCase):
         orig_text = G.OpenAITextGenerator
         orig_models = rc_mod._build_models
         class FakeText(G.TextGenerator):
-            def generate(self, title, summary, brand):
+            def generate(self, title, summary, brand, policy=None):
                 return "Hello world post"
         G.OpenAITextGenerator = lambda *a, **k: FakeText()
         rc_mod._build_models = lambda mode: (MockResearchModel(),
@@ -413,7 +413,7 @@ class RoleEnvCase(unittest.TestCase):
         orig_text = G.OpenAITextGenerator
         orig_models = rc_mod._build_models
         class FakeText(G.TextGenerator):
-            def generate(self, title, summary, brand):
+            def generate(self, title, summary, brand, policy=None):
                 return "Hello world post"
         G.OpenAITextGenerator = lambda *a, **k: FakeText()
         rc_mod._build_models = lambda mode: (MockResearchModel(),

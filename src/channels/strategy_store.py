@@ -128,6 +128,8 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
         strat["mentions"] = {"style": s.mentions.style}
     if _is_set(s.media.min_items) or _is_set(s.media.max_items):
         strat["media"] = _media_to(s.media)
+    if _is_set(s.visual.visual_rules) or _is_set(s.visual.video_rules):
+        strat["visual"] = _visual_to(s.visual)
     if _is_set(s.sources):
         strat["sources"] = [dict(x) for x in s.sources]
     if _is_set(s.content.content_pillars) or \
@@ -152,7 +154,7 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
 def _brand_to(b) -> dict:
     out = {}
     for k in ("tone", "audience", "banned_words", "preferred_words",
-              "cta_style"):
+              "cta_style", "voice"):
         v = getattr(b, k)
         if _is_set(v):
             out[k] = list(v) if k in ("banned_words", "preferred_words") else v
@@ -195,6 +197,15 @@ def _media_to(m) -> dict:
     return out
 
 
+def _visual_to(v) -> dict:
+    out = {}
+    if _is_set(v.visual_rules):
+        out["visual_rules"] = list(v.visual_rules)
+    if _is_set(v.video_rules):
+        out["video_rules"] = list(v.video_rules)
+    return out
+
+
 def _planning_to(p) -> dict:
     out = {}
     for k in ("cadence", "days", "times", "daily_count", "weekly_count",
@@ -209,7 +220,7 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
     from channels.strategy import (Brand, ChannelStrategy, ContentPolicy,
                                     GenerationPolicy, HashtagPolicy,
                                     MediaPolicy, MentionPolicy,
-                                    PlanningPolicy, _MISSING)
+                                    PlanningPolicy, VisualPolicy, _MISSING)
 
     integ = cfg.get("integration_id", "")
     strat_cfg = cfg.get("strategy") or {}
@@ -255,6 +266,7 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         banned_words=_opt_list(b.get("banned_words")),
         preferred_words=_opt_list(b.get("preferred_words")),
         cta_style=_opt_str(b.get("cta_style")),
+        voice=_opt_str(b.get("voice")),
     )
 
     h = strat_cfg.get("hashtags") or {}
@@ -303,6 +315,19 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         max_items=_opt_int(md.get("max_items")),
     )
 
+    vi = strat_cfg.get("visual") or {}
+    if not isinstance(vi, dict):
+        raise _err("'strategy.visual' must be a mapping")
+    for _vk in ("visual_rules", "video_rules"):
+        _vv = vi.get(_vk)
+        if _vv is not None and (not isinstance(_vv, list) or
+                                not all(isinstance(x, str) for x in _vv)):
+            raise _err(f"'strategy.visual.{_vk}' must be a list of strings")
+    visual = VisualPolicy(
+        visual_rules=_opt_list(vi.get("visual_rules")),
+        video_rules=_opt_list(vi.get("video_rules")),
+    )
+
     if "provider_overrides" in strat_cfg:
         raise _err("'strategy.provider_overrides' was removed: provider "
                    "settings belong to Tuzzina, not to Brain strategy")
@@ -321,5 +346,6 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         content=content,
         generation=generation,
         planning=planning,
+        visual=visual,
         extras=dict(extras),
     )

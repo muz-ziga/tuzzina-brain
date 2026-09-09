@@ -50,7 +50,7 @@ class TemporaryEngineTest(unittest.TestCase):
         # Text generation receives Brain context, never provider data.
         sig = inspect.signature(G.OpenAITextGenerator.generate)
         self.assertEqual(list(sig.parameters),
-                         ["self", "title", "summary", "brand"])
+                         ["self", "title", "summary", "brand", "policy"])
         out = G.MockTextGenerator().generate(
             "Title here", "Some summary body.", {
                 "tone": "bold", "maxLength": 63206,

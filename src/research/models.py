@@ -75,9 +75,13 @@ class ResearchResult:
 
 class ResearchModel(ABC):
     @abstractmethod
-    def research(self, items: list) -> ResearchResult:
+    def research(self, items: list,
+                 policy: dict | None = None) -> ResearchResult:
         """Interpret already-collected SourceItems. Pure decision
-        over input data: no fetch, no state, no Tuzzina."""
+        over input data: no fetch, no state, no Tuzzina. `policy`
+        is the optional merged Channel Strategy profile; live
+        models render it into the prompt via the Content Skill,
+        mocks accept-and-ignore it (deterministic output)."""
 
 
 def _trace_id(item) -> str:
@@ -144,7 +148,8 @@ class MockResearchModel(ResearchModel):
     as claim, lead excerpt, trace id) plus one INFERENCE naming the
     shared top topic across all inputs. No network, no randomness."""
 
-    def research(self, items: list) -> ResearchResult:
+    def research(self, items: list,
+                 policy: dict | None = None) -> ResearchResult:
         items = _check_items(list(items))
         findings: list[Finding] = []
         for it in items:
@@ -195,7 +200,8 @@ class OpenAIResearchModel(ResearchModel):
         self._adapter = adapter
         self.model = getattr(adapter, "model", model)
 
-    def research(self, items: list) -> ResearchResult:
+    def research(self, items: list,
+                 policy: dict | None = None) -> ResearchResult:
         items = _check_items(list(items))[:MAX_ITEMS]
         blocks, truncated = [], False
         for it in items:
@@ -216,6 +222,10 @@ class OpenAIResearchModel(ResearchModel):
             "anything you conclude, with confidence low unless two or "
             "more items support it. Every finding MUST list only input "
             "IDs. No other keys, no prose outside the JSON.")
+        from channels.instructions import build as _skill
+        skill = _skill(policy)
+        if skill:
+            prompt += "\n\n" + skill
         body_text = "\n\n---\n\n".join(blocks)
         try:
             from llm.adapters import LLMError

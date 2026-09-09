@@ -22,8 +22,9 @@ from abc import ABC, abstractmethod
 
 class TextGenerator(ABC):
     @abstractmethod
-    def generate(self, title: str, summary: str, brand: dict) -> str:
-        ...
+    def generate(self, title: str, summary: str, brand: dict,
+                 policy: dict | None = None) -> str:
+        """Brain-context text; live engines may render policy skill."""
 
 
 class ImageGenerator(ABC):
@@ -43,7 +44,8 @@ def _words(text: str, limit: int = 40) -> list[str]:
 
 
 class MockTextGenerator(TextGenerator):
-    def generate(self, title: str, summary: str, brand: dict) -> str:
+    def generate(self, title: str, summary: str, brand: dict,
+                 policy: dict | None = None) -> str:
         tone = (brand.get("tone") or "").strip()
         head = f"{title}".strip()
         body = summary.strip()[:220]
@@ -79,10 +81,15 @@ class OpenAITextGenerator(TextGenerator):
             adapter = OpenAIAdapter(api_key, model)
         self._adapter = adapter
 
-    def generate(self, title: str, summary: str, brand: dict) -> str:
+    def generate(self, title: str, summary: str, brand: dict,
+                 policy: dict | None = None) -> str:
         sys = ("Write one Arabic social post, max 500 chars. "
                f"Tone: {brand.get('tone', 'neutral')}. "
                f"Audience: {brand.get('audience', 'general')}. No hashtags.")
+        from channels.instructions import build as _skill
+        skill = _skill(policy)
+        if skill:
+            sys += "\n\n" + skill
         return self._adapter.complete(
             sys, f"Title: {title}\nSummary: {summary}",
             temperature=0.7, max_tokens=400,

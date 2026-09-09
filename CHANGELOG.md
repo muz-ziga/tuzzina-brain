@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.26.0 — Phase 11: provider-agnostic content generation skill
+
+- New `src/channels/instructions.py`: pure builder rendering the
+  merged Channel Strategy profile into a "Channel instructions"
+  block (voice, pillars, CTA, image/visual/video rules, creation
+  policy, language). Empty policy -> "" (legacy prompts
+  byte-identical); unknown/secret-shaped keys never rendered.
+- Strategy extension: `brand.voice` + `strategy.visual`
+  (`visual_rules`, `video_rules`) with merge (profile.py),
+  YAML roundtrip (strategy_store.py), and select-flow
+  passthrough (strategy_select.py). No secrets, no scheduling,
+  no provider catalogs — plain policy data only.
+- Skill threaded into all five prompt sites: research
+  (`OpenAIResearchModel.research(items, policy=None)`),
+  analysis (`OpenAIAnalysisModel` context), text
+  (`TextGenerator.generate(..., policy=None)` + pipeline
+  `build_package(..., policy=None)`), image + video
+  (`plan_generation(..., policy=None)` prompts and the
+  pipeline delegated image prompt). Mocks accept-and-ignore
+  (deterministic outputs unchanged); run.py/cycle.py pass the
+  resolved strategy profile through.
+- 15 tests (build/roundtrip/merge/live-prompt presence/legacy
+  parity/mock parity/plan/pipeline/chain/fail-closed/secrecy).
+  457/457 pass (was 442). No scheduler/cron/DB/publishing
+  changes; Tuzzina untouched (execution owner).
+
 ## 0.25.0 — Phase 9: runtime role resolution + usage enforcement
 
 - `run_cycle.py`: `--openai` resolves Research/Analysis/Text

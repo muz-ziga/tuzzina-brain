@@ -48,10 +48,11 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
                   hs_cfg: dict, links_policy: str,
                   text_gen: TextGenerator,
                   image_gen: ImageGenerator | None,
-                  platform: str = "facebook",
-                  platform_settings: dict | None = None,
-                  limits: dict | None = None,
-                  link_fn=None) -> ContentPackage:
+                   platform: str = "facebook",
+                   platform_settings: dict | None = None,
+                   limits: dict | None = None,
+                   link_fn=None,
+                   policy: dict | None = None) -> ContentPackage:
     """limits (from the PlatformAdapter, optional):
       max_length: truncate body to this many chars.
     link_fn (from the PlatformAdapter, optional): replaces the
@@ -59,7 +60,7 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
       (e.g. Instagram ignores attach). Defaults to the generic one.
     Backward compatible: omitting limits/link_fn preserves behavior."""
     summary = normalize(item.text)
-    text = text_gen.generate(item.title, summary, brand)
+    text = text_gen.generate(item.title, summary, brand, policy)
     text, banned_hit = apply_banned(text, brand.get("banned_words", []))
     max_tags = int(((hs_cfg.get("per_platform") or {}).get(
         platform) or {}).get("max", 5)) if hs_cfg.get("enabled") else 0
@@ -81,8 +82,13 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
         media.append({"kind": "url", "url": item.images[0],
                       "source": "extracted"})
     elif image_gen is not None:
+        from channels.instructions import build as _skill
+        _iprompt = f"{item.title} :: {summary[:200]}"
+        _skill_block = _skill(policy)
+        if _skill_block:
+            _iprompt += "\n" + _skill_block
         media.append({"kind": "generator", "generator": image_gen,
-                      "prompt": f"{item.title} :: {summary[:200]}"})
+                      "prompt": _iprompt})
     settings = {"__type": platform}
     if platform_settings:
         for k, v in platform_settings.items():

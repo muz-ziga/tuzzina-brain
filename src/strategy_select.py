@@ -139,7 +139,8 @@ def _ask_strategy_fields() -> dict:
 
 
 def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
-    from channels.strategy import (MediaPolicy, MentionPolicy, _MISSING)
+    from channels.strategy import (MediaPolicy, MentionPolicy,
+                                    VisualPolicy, _MISSING)
     b = f.get("brand") or {}
     h = f.get("hashtags") or {}
     c = f.get("content") or {}
@@ -147,6 +148,7 @@ def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
     p = f.get("planning") or {}
     md = f.get("media") or {}
     mn = f.get("mentions") or {}
+    vi = f.get("visual") or {}
 
     def _mi(v):
         return int(v) if v is not None else _MISSING
@@ -169,6 +171,7 @@ def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
             banned_words=list(b.get("banned_words") or []),
             preferred_words=list(b.get("preferred_words") or []),
             cta_style=b.get("cta_style") or "Learn more",
+            voice=b.get("voice") or "",
         ),
         hashtags=HashtagPolicy(
             enabled=bool(h.get("enabled", True)),
@@ -190,6 +193,10 @@ def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
         media=MediaPolicy(
             min_items=_mi(md.get("min_items")),
             max_items=_mi(md.get("max_items")),
+        ),
+        visual=VisualPolicy(
+            visual_rules=list(vi.get("visual_rules") or []),
+            video_rules=list(vi.get("video_rules") or []),
         ),
         sources=srcs,
         links_policy=f.get("links_policy", "hide"),

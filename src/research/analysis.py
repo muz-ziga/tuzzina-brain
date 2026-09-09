@@ -274,6 +274,10 @@ class OpenAIAnalysisModel(AnalysisModel):
             f"pillars={view['pillars']}\n"
             f"SUMMARY: {(getattr(result, 'summary', '') or '')[:500]}\n"
             f"FINDINGS:\n" + "\n".join(parts))
+        from channels.instructions import build as _skill
+        skill = _skill(policy)
+        if skill:
+            context += "\n" + skill
         if len(context) > MAX_PROMPT_CHARS:
             context = context[:MAX_PROMPT_CHARS]
             truncated = True

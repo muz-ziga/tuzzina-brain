@@ -203,7 +203,7 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             out.committed = len(pending) > 0
             return out
 
-        out.research = research_model.research(out.items)
+        out.research = research_model.research(out.items, policy)
         out.opportunity = analysis_model.analyze(
             out.research, policy, list(out.items))
         if not out.opportunity.eligible:
@@ -238,7 +238,8 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
         # request is recorded as deferred, explicitly, not run.
         gen_plan = plan_generation(
             out.opportunity, list(out.items),
-            video_config=(policy.get("media") or {}))
+            video_config=(policy.get("media") or {}),
+            policy=policy)
         gen_plan.format = fmt
         if gen_plan.video is not None:
             out.video_deferred.append(gen_plan.video.prompt)
@@ -265,7 +266,7 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             out.packages.append(build_package(
                 shaped, brand, language, hs_cfg, links_policy,
                 text_gen, gen_image, platform=item.platform or
-                "facebook", limits=None))
+                "facebook", limits=None, policy=policy))
         out.planned = plan(out.packages, schedule)
         for p in out.planned:
             out.intents.append(build_intent(

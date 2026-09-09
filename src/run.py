@@ -109,7 +109,7 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
                 cfg["links_policy"], text_gen, image_gen_obj,
                 platform=identifier,
                 limits={"max_length": max_length},
-                link_fn=adapter.apply_link))
+                link_fn=adapter.apply_link, policy=cfg))
     if not packages:
         print("no content extracted; nothing to do")
         return 1

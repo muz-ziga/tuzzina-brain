@@ -68,6 +68,7 @@ def resolve_strategy(project_cfg: dict, strategy,
                                list(proj_brand.get("preferred_words") or [])),
         "cta_style": _b(lambda b: b.cta_style,
                         proj_brand.get("cta_style", "Learn more")),
+        "voice": _b(lambda b: b.voice, proj_brand.get("voice", "")),
         "colors": [],
         "logo_url": "",
     }
@@ -111,6 +112,27 @@ def resolve_strategy(project_cfg: dict, strategy,
     if _is_set_s(strategy.media.max_items):
         media["max_items"] = int(strategy.media.max_items)
 
+    # Content/generation/visual policy: channel strategy is the
+    # source (campaign carries none today); absent stays default.
+    content = {
+        "content_pillars": list(strategy.content.content_pillars)
+        if _is_set_s(strategy.content.content_pillars) else [],
+        "sources_policy": strategy.content.sources_policy
+        if _is_set_s(strategy.content.sources_policy) else "",
+    }
+    generation = {
+        "provider": strategy.generation.provider
+        if _is_set_s(strategy.generation.provider) else "auto",
+        "prompt_style": strategy.generation.prompt_style
+        if _is_set_s(strategy.generation.prompt_style) else "",
+    }
+    visual = {
+        "visual_rules": list(strategy.visual.visual_rules)
+        if _is_set_s(strategy.visual.visual_rules) else [],
+        "video_rules": list(strategy.visual.video_rules)
+        if _is_set_s(strategy.visual.video_rules) else [],
+    }
+
     out = _finalize(strategy.integration_id, channel_meta, brand_merged,
                     hashtags_merged, links, project_cfg,
                     dict(strategy.extras))
@@ -118,6 +140,9 @@ def resolve_strategy(project_cfg: dict, strategy,
     out["sources_from"] = sources_from
     out["mentions"] = mentions
     out["media_policy"] = media
+    out["content"] = content
+    out["generation"] = generation
+    out["visual"] = visual
     # Strategy planning merges over campaign schedule (channel wins
     # per leaf; G3 reads only this merged schedule dict).
     sched = dict(out.get("schedule") or {})

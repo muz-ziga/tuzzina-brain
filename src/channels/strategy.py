@@ -23,6 +23,9 @@ class Brand:
     banned_words: Any = _MISSING
     preferred_words: Any = _MISSING
     cta_style: Any = _MISSING
+    # Writing persona/style ("direct", "warm expert", ...). Plain
+    # strategy data — never an audio/TTS provider configuration.
+    voice: Any = _MISSING
 
 
 @dataclass
@@ -56,6 +59,15 @@ class MentionPolicy:
 class MediaPolicy:
     min_items: Any = _MISSING
     max_items: Any = _MISSING
+
+
+@dataclass
+class VisualPolicy:
+    # Content/visual style rules (composition, mood, identity).
+    # Plain strategy data: Brain renders these into generation
+    # prompts; Tuzzina still owns media transport/storage.
+    visual_rules: Any = _MISSING
+    video_rules: Any = _MISSING
 
 
 @dataclass
@@ -96,6 +108,7 @@ class ChannelStrategy:
     content: ContentPolicy = field(default_factory=ContentPolicy)
     generation: GenerationPolicy = field(default_factory=GenerationPolicy)
     planning: PlanningPolicy = field(default_factory=PlanningPolicy)
+    visual: VisualPolicy = field(default_factory=VisualPolicy)
     extras: dict = field(default_factory=dict)
 
 

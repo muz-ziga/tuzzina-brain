@@ -113,9 +113,9 @@ class CountingResearch(MockResearchModel):
     def __init__(self):
         self.calls = 0
 
-    def research(self, items):
+    def research(self, items, policy=None):
         self.calls += 1
-        return super().research(items)
+        return super().research(items, policy)
 
 
 class CountingAnalysis(MockAnalysisModel):
@@ -128,7 +128,7 @@ class CountingAnalysis(MockAnalysisModel):
 
 
 class BoomResearch(MockResearchModel):
-    def research(self, items):
+    def research(self, items, policy=None):
         raise ResearchError("boom")
 
 
@@ -298,7 +298,7 @@ class CycleCase(unittest.TestCase):
 
     def test_g2_failure_blocks_commit(self):
         class BoomText:
-            def generate(self, title, summary, brand):
+            def generate(self, title, summary, brand, policy=None):
                 raise RuntimeError("g2-boom")
 
         store = MemoryStateStore()

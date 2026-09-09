@@ -69,18 +69,29 @@ class GenerationPlan:
     meta: dict = field(default_factory=dict)
 
 
-def _prompt_for(topic: str, facts: list) -> str:
+def _prompt_for(topic: str, facts: list,
+                policy: dict | None = None) -> str:
     first = (facts[0] if facts else "")[:200]
-    return f"{topic} :: {first}".strip(" :")
+    base = f"{topic} :: {first}".strip(" :")
+    if policy:
+        from channels.instructions import build as _skill
+        skill = _skill(policy)
+        if skill:
+            return base + "\n" + skill
+    return base
 
 
 def plan_generation(opportunity, items=None,
-                    video_config=None) -> GenerationPlan:
+                    video_config=None,
+                    policy: dict | None = None) -> GenerationPlan:
     """Decide generation requests. Ineligible/no opportunity ->
     empty plan (all None); the caller stops before G2.
     `video_config` is an optional plain dict carrying Tuzzina
     template selection ({video_type, output, video_params});
-    absent/empty keeps the previous intent-only behavior."""
+    absent/empty keeps the previous intent-only behavior.
+    `policy` is the optional merged Channel Strategy profile;
+    its Content Skill block is appended to image/video prompts
+    (text prompts are shaped downstream in G2)."""
     if opportunity is None or not getattr(opportunity, "eligible",
                                           False):
         return GenerationPlan()
@@ -99,12 +110,13 @@ def plan_generation(opportunity, items=None,
     image = None
     video = None
     if media == "image":
-        image = ImageRequest(prompt=_prompt_for(topic, facts))
+        image = ImageRequest(
+            prompt=_prompt_for(topic, facts, policy))
     elif media == "video":
         cfg = video_config if isinstance(video_config, dict) else {}
         params = cfg.get("video_params")
         video = VideoRequest(
-            prompt=_prompt_for(topic, facts),
+            prompt=_prompt_for(topic, facts, policy),
             video_type=str(cfg.get("video_type") or ""),
             output=str(cfg.get("output") or ""),
             params=dict(params) if isinstance(params, dict) else {})
