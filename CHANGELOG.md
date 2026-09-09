@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.22.0 — Phase 6: durable monitoring state (no local DB)
+
+- New `src/tuzzina/state_store.py`: `TuzzinaStateStore`
+  (durable `StateStore` over Tuzzina-owned rows via two narrow
+  Public API endpoints; 404 loads as fresh, other failures
+  raise; no caching, no secrets, last-write-wins documented)
+  plus defensive `state_to_dict`/`state_from_dict` (unknown
+  keys dropped, wrong types fall back).
+- `TuzzinaClient` gains `get_research_state` /
+  `save_research_state` (GET+PUT
+  `/public/v1/research-state/:sourceId`, URL-encoded ids,
+  PUT idempotent).
+- `research/monitor.py`: shared `classify_candidates()`
+  (pure NEW/UNCHANGED/UPDATED over pre-normalized entries);
+  `collect()` reuses it (semantics byte-identical, suite
+  proves it).
+- `research/cycle.py`: website path now classifies through
+  the shared helper (identity = canonical page URL, hash =
+  title+text) instead of always-NEW; pending website state
+  commits on the same clean-end rule as feeds.
+- 15 tests (`tests/test_tuzzina_state_store.py`, faked
+  transport): contract, HTTP paths/methods, 404-fresh,
+  roundtrip durability, encoding, secrecy, isolation,
+  classify parity. 391/391 pass (was 376). No scheduler/
+  queue/cron/DB-in-Brain/publishing changes.
+
 ## 0.21.0 — Phase 2: video delegation via existing Tuzzina pipeline
 
 - New `TuzzinaClient.generate_video(video_type, output,

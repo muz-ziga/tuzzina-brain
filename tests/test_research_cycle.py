@@ -43,9 +43,9 @@ YT2 = """<?xml version="1.0"?><feed xmlns:yt="http://www.youtube.com/xml/schemas
 </media:group></entry>
 </feed>"""
 
-PAGE = """<html><head><title>Harbor article</title></head><body>
+PAGE_HOLDER = {"html": """<html><head><title>Harbor article</title></head><body>
 <p>Static page about the harbor festival boats and music.</p>
-</body></html>"""
+</body></html>"""}
 
 CID = "UCBR8-60-B28hp2BmDPdntcQ"
 YTURL = ("https://www.youtube.com/feeds/videos.xml?channel_id=" + CID)
@@ -94,7 +94,8 @@ class FakeOpener:
 def _website_fake(req, timeout=None):
     FETCHED.append(req.full_url)
     if req.full_url == "http://site.test/article":
-        return FakeResp(PAGE, {"Content-Type": "text/html"},
+        return FakeResp(PAGE_HOLDER["html"],
+                        {"Content-Type": "text/html"},
                         req.full_url)
     raise urllib.error.HTTPError(req.full_url, 404, "e", {}, None)
 
@@ -312,16 +313,30 @@ class CycleCase(unittest.TestCase):
         self.assertNotEqual(out.error, "")
         self.assertFalse(out.committed)
 
-    def test_website_always_new_documented(self):
+    def test_website_monitoring_lifecycle(self):
+        # Phase 6: website pages share the monitor (identity =
+        # canonical URL, hash = title+text). Same rules as feeds.
+        from research.monitor import MemoryStateStore
         src = {"type": "website", "url": "http://site.test/article"}
-        out1 = self._run([src])
-        out2 = self._run([src])
-        # No stable page identity exists, so no dedup is possible:
-        # each cycle treats extracted pages as NEW (like run.py).
+        store = MemoryStateStore()
+        out1 = self._run([src], store=store)
         self.assertEqual(len(out1.items), 1)
-        self.assertEqual(len(out2.items), 1)
-        self.assertFalse(out1.committed)  # no monitor state involved
+        self.assertTrue(out1.committed)
         self.assertEqual(out1.error, "")
+        out2 = self._run([src], store=store)
+        self.assertEqual(out2.items, [])
+        self.assertTrue(out2.committed)
+        PAGE_HOLDER["html"] = PAGE_HOLDER["html"].replace(
+            "boats and music", "boats, music, and fireworks")
+        try:
+            out3 = self._run([src], store=store)
+        finally:
+            PAGE_HOLDER["html"] = PAGE_HOLDER["html"].replace(
+                "boats, music, and fireworks", "boats and music")
+        # UPDATED is classified distinctly, never returned as NEW.
+        self.assertEqual(out3.items, [])
+        self.assertTrue(out3.committed)
+        self.assertEqual(out3.error, "")
 
     def test_offline_deterministic(self):
         kw = dict(policy=dict(POLICY), schedule=dict(SCHEDULE), now=NOW,

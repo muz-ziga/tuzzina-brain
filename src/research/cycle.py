@@ -1,9 +1,8 @@
 """End-to-end research cycle (R5): one deterministic pass over
 configured sources through the already-built layers.
 
-  collect (rss/youtube via monitor, website via extract)
-  -> NEW gate (UPDATED never auto-new; website has no dedup —
-     pages are always NEW, documented limitation)
+  collect (rss/youtube via monitor, website via shared classify)
+  -> NEW gate (UPDATED never auto-new)
   -> research (ResearchModel over NEW SourceItems)
   -> analysis (AnalysisModel + Brain policy)
   -> eligible ? G2 (existing policy) -> G3 (existing planner)
@@ -31,8 +30,13 @@ from dataclasses import dataclass, field
 
 from contracts import SourceItem
 from g1.rss import to_source_item
+from g1.rss import canonical_url as _canonical_url
+from g1.rss import content_hash as _content_hash
 from g1.website import WebsiteAdapter
 from g1.youtube import YouTubeFeedAdapter, youtube_feed_url
+from research.monitor import (NEW, UPDATED, CollectionResult,
+                              ClassifiedItem, MemoryStateStore,
+                              classify_candidates, collect)
 from g2.generators import MockImageGenerator, MockTextGenerator
 from g2.pipeline import build_package
 from g3.planner import plan
@@ -41,8 +45,6 @@ from research.analysis import MockAnalysisModel
 from research.generation import (image_gen_for, plan_generation,
                                  shape_item_for_g2)
 from research.models import MockResearchModel
-from research.monitor import (MemoryStateStore, NEW, UPDATED,
-                              CollectionResult, collect)
 
 
 @dataclass
@@ -103,12 +105,31 @@ def _collect_youtube(source: dict, store, now: str,
     return items, res
 
 
-def _collect_website(source: dict, n: int) -> list:
-    # No stable identity exists for pages, so no dedup is possible
-    # here (NOT a second dedup engine — just the absence of one).
-    # Every extracted page counts as NEW, like run.py does today.
-    res = WebsiteAdapter().extract(source["url"], n)
-    return res.items
+def _collect_website(source: dict, n: int, *, store,
+                   now: str):
+    """Website pages through the SHARED classify step (same
+    NEW/UNCHANGED/UPDATED rules as feeds). Identity is the
+    canonical page URL; the hash covers title+text. UPDATED pages
+    are classified distinctly and never returned as NEW."""
+    url = (source.get("url") or "").strip()
+    source_id = (source.get("source_id") or "").strip() or url
+    res = WebsiteAdapter().extract(url, n)
+    state = store.load(source_id)
+    candidates = []
+    for it in res.items:
+        ident = _canonical_url(it.source_id or "") or \
+            it.source_id or url
+        candidates.append({
+            "carrier": it, "item_id": ident,
+            "content_hash": _content_hash(it.title or "",
+                                          it.text or ""),
+            "published_at": it.published_at or ""})
+    classified, pending = classify_candidates(source_id, candidates,
+                                              state, now)
+    items = [carrier for carrier, kind in classified if kind == NEW]
+    out = [ClassifiedItem(carrier, kind)
+           for carrier, kind in classified]
+    return items, CollectionResult(source_id, out, now, "", pending)
 
 
 def run_cycle(sources: list, *, store=None, policy: dict | None = None,
@@ -162,9 +183,11 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             elif stype == "website":
                 if not (source.get("url") or "").strip():
                     raise ValueError("website-source-missing-url")
-                items = _collect_website(source, n)
+                items, res = _collect_website(source, n, store=store,
+                                              now=now)
                 rep = SourceReport("website", source["url"].strip(),
-                                   True, "", len(items), len(items))
+                                   True, "", len(res.items), len(items))
+                pending.append(res)
             else:
                 raise ValueError(f"unknown-source-type:{stype or '?'}")
             out.sources.append(rep)

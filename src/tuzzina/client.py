@@ -111,6 +111,37 @@ class TuzzinaClient:
         raise TuzzinaError(
             f"integration {integration_id!r} not found in Tuzzina")
 
+    def get_research_state(self, source_id: str) -> dict | None:
+        """Load durable monitoring state for one source. Returns the
+        stored state dict, or None when no row exists (HTTP 404).
+        Any other failure raises TuzzinaError."""
+        if not source_id or not str(source_id).strip():
+            raise TuzzinaError("source_id is required")
+        path = "/public/v1/research-state/" + urllib.parse.quote(
+            str(source_id), safe="")
+        try:
+            data = self._call("GET", path)
+        except TuzzinaError as e:
+            if str(e).startswith("HTTP 404 "):
+                return None
+            raise
+        if isinstance(data, dict) and isinstance(
+                data.get("state"), dict):
+            return data["state"]
+        return None
+
+    def save_research_state(self, source_id: str, state: dict) -> dict:
+        """Persist monitoring state (upsert). Raises TuzzinaError
+        on failure; PUT is idempotent so a retry cannot corrupt."""
+        if not source_id or not str(source_id).strip():
+            raise TuzzinaError("source_id is required")
+        if not isinstance(state, dict):
+            raise TuzzinaError("state must be a mapping")
+        path = "/public/v1/research-state/" + urllib.parse.quote(
+            str(source_id), safe="")
+        data = self._call("PUT", path, {"state": state})
+        return data if isinstance(data, dict) else {}
+
     def get_integration_settings(self, integration_id: str) -> dict:
         """Fetch one integration's live provider truth from Tuzzina.
 

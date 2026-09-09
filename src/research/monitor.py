@@ -97,6 +97,50 @@ class CollectionResult:
         store.save(self._pending)
 
 
+def classify_candidates(source_id: str, candidates: list,
+                        state: SourceState, now: str):
+    """Classify pre-normalized candidates against staged state.
+
+    candidates: iterable of {carrier, item_id, content_hash,
+    published_at}. Pure: touches neither network nor store.
+    Returns ([(carrier, kind)], staged_state). Entries without an
+    item_id are skipped entirely (never NEW, never marked).
+    Same transition rules as collect(); shared by feed and
+    website paths so NEW/UNCHANGED/UPDATED mean one thing."""
+    pending = deepcopy(state)
+    pending.source_id = source_id or pending.source_id
+    pending.last_checked_at = now
+    if not pending.first_seen_at:
+        pending.first_seen_at = now
+    out: list[tuple] = []
+    for cand in candidates or []:
+        item_id = (cand.get("item_id") or "") if isinstance(
+            cand, dict) else ""
+        if not item_id:
+            continue
+        chash = cand.get("content_hash") or ""
+        pub = cand.get("published_at") or ""
+        prev = pending.seen.get(item_id)
+        if prev is None:
+            pending.seen[item_id] = {"hash": chash,
+                                     "first_seen": now}
+            if pub and (not pending.last_seen_published_at or
+                        pub > pending.last_seen_published_at):
+                pending.last_seen_published_at = pub
+                pending.last_seen_item_id = item_id
+            out.append((cand.get("carrier"), NEW))
+        elif not isinstance(prev, dict) or \
+                prev.get("hash") != chash:
+            pending.seen[item_id] = {
+                "hash": chash,
+                "first_seen": (prev.get("first_seen", now)
+                               if isinstance(prev, dict) else now)}
+            out.append((cand.get("carrier"), UPDATED))
+        else:
+            out.append((cand.get("carrier"), UNCHANGED))
+    return out, pending
+
+
 def _parse_dt(s: str):
     try:
         d = datetime.fromisoformat((s or "").strip().replace(
@@ -136,32 +180,19 @@ def collect(source: dict, *, store: StateStore, now: str,
                 cutoff = base - timedelta(days=int(horizon_days))
         except Exception:
             cutoff = None
-    out: list[ClassifiedItem] = []
+    entries = []
     for it in items[:max(0, int(max_items))]:
         if cutoff is not None and it.published_at:
             dt = _parse_dt(it.published_at)
             if dt is not None and dt < cutoff:
                 continue  # outside the polling window: not new,
                 # not marked (window is fixed, so it stays excluded)
-        prev = pending.seen.get(it.item_id)
-        if prev is None:
-            pending.seen[it.item_id] = {"hash": it.content_hash,
-                                        "first_seen": now}
-            if it.published_at and (
-                    not pending.last_seen_published_at or
-                    it.published_at > pending.last_seen_published_at):
-                pending.last_seen_published_at = it.published_at
-                pending.last_seen_item_id = it.item_id
-            out.append(ClassifiedItem(it, NEW))
-        elif not isinstance(prev, dict) or \
-                prev.get("hash") != it.content_hash:
-            pending.seen[it.item_id] = {"hash": it.content_hash,
-                                        "first_seen": (prev.get(
-                                            "first_seen", now)
-                                            if isinstance(
-                                                prev, dict) else now)}
-            out.append(ClassifiedItem(it, UPDATED))
-        else:
-            out.append(ClassifiedItem(it, UNCHANGED))
+        entries.append({"carrier": it, "item_id": it.item_id,
+                        "content_hash": it.content_hash,
+                        "published_at": it.published_at})
+    classified, pending = classify_candidates(source_id, entries,
+                                              state, now)
+    out = [ClassifiedItem(carrier, kind)
+           for carrier, kind in classified]
     pending.last_error = ""
     return CollectionResult(source_id, out, now, "", pending)
