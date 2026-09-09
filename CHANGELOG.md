@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.21.0 — Phase 2: video delegation via existing Tuzzina pipeline
+
+- New `TuzzinaClient.generate_video(video_type, output,
+  prompt, params, timeout=600)` (`src/tuzzina/client.py`):
+  single-attempt POST /public/v1/generate-video {type, output,
+  customParams} (never retried — a retry could double-spend
+  ai_videos credits), long timeout (Tuzzina polls the provider
+  inside the request), returns stored {id, path}. Fail-closed
+  TuzzinaError on HTTP/timeout/malformed/no-ref; no fallback,
+  no bytes, no upload, no provider calls from Brain.
+- `VideoRequest` gains opaque `video_type` (Tuzzina TEMPLATE
+  identifier, validated server-side — no Brain catalog),
+  `output`, and `params` (into customParams untouched);
+  `plan_generation()` accepts optional `video_config`.
+- Cycle wiring (`src/research/cycle.py` only): video config
+  from policy media section; optional `video_resolve` callable
+  executes the request (execution phase binds the client);
+  success records {id, path} in `CycleResult.video_media`;
+  failure fails the cycle with zero state advance; absent
+  executor keeps prior defer-and-commit behavior.
+- Type selection (`veo3` vs `image-text-slides`) already works
+  caller-side today (verified fresh against current Tuzzina:
+  `type` passthrough, no code change needed anywhere).
+- 21 tests (`tests/test_video_delegation.py`, faked
+  transport): contract, passthrough, failures, timeout,
+  no-retry, no-leakage, cycle attach/fail/skip. 376/376 pass
+  (was 355). Image/text/research/analysis untouched.
+  LIVE: BLOCKED — prod holds only OPENAI_API_KEY; neither
+  video template has credentials (env-name scan, zero calls,
+  zero spend).
+
 ## 0.20.0 — Phase 1: multi-provider LLM execution core
 
 - New `src/llm/adapters.py`: `complete(system, user, *,

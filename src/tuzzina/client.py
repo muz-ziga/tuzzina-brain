@@ -5,6 +5,7 @@ Retries on connection errors/timeouts only (never on HTTP responses,
 so a retry can never duplicate a created post)."""
 from __future__ import annotations
 import json
+import socket
 import time
 import urllib.parse
 import urllib.request
@@ -239,3 +240,66 @@ class TuzzinaClient:
                         "path": str(data["path"])}
         raise TuzzinaError(
             "Tuzzina image delegation returned no media reference")
+
+    def generate_video(self, video_type: str, output: str, prompt: str,
+                       params: dict | None = None,
+                       timeout: int = 600) -> dict:
+        """Delegate video generation to Tuzzina's existing public
+        video pipeline.
+
+        POST /public/v1/generate-video {type, output, customParams}
+        with API-key auth. `video_type` is an opaque Tuzzina
+        TEMPLATE identifier (selected by Brain config, validated
+        by Tuzzina — Brain holds no template catalog); `output`
+        is vertical|horizontal; `params` rides into customParams
+        untouched alongside the prompt. Tuzzina owns providers,
+        credentials, ai_videos credits, storage, and the returned
+        {id, path} reference. Brain never sees video bytes and
+        performs no upload.
+
+        Single attempt, never retried (a retry could double-spend
+        credits). Long default timeout: Tuzzina polls the provider
+        inside the request, so generation takes minutes, not
+        seconds. Fail-closed: any error raises TuzzinaError; no
+        local fallback, no provider substitution.
+        """
+        if not str(video_type or "").strip():
+            raise TuzzinaError("video_type is required")
+        if not prompt or not str(prompt).strip():
+            raise TuzzinaError("prompt is required")
+        custom = dict(params) if isinstance(params, dict) else {}
+        custom["prompt"] = str(prompt)
+        payload = json.dumps({
+            "type": str(video_type), "output": str(output or ""),
+            "customParams": custom}).encode()
+        url = self.base + "/public/v1/generate-video"
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Authorization": self.key,
+                     "Content-Type": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(req,
+                                       timeout=timeout) as r:
+                raw = r.read().decode()
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode()[:300]
+            except Exception:
+                detail = ""
+            raise TuzzinaError(
+                f"HTTP {e.code} /public/v1/generate-video: {detail}")
+        except (TimeoutError, socket.timeout):
+            raise
+        except Exception as e:
+            raise TuzzinaError(f"video delegation failed: {e}")
+        try:
+            data = json.loads(raw) if raw else {}
+        except Exception:
+            raise TuzzinaError(
+                "Tuzzina video delegation returned malformed response")
+        if not isinstance(data, dict) or not data.get("id") or \
+                not data.get("path"):
+            raise TuzzinaError(
+                "Tuzzina video delegation returned no media reference")
+        return {"id": str(data["id"]), "path": str(data["path"])}

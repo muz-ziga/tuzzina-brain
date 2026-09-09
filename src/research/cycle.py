@@ -65,9 +65,12 @@ class CycleResult:
     planned: list = field(default_factory=list)  # [PlannedPost]
     intents: list = field(default_factory=list)  # [CanonicalIntent]
     # Video prompts with no executor: recorded, never attempted,
-    # never silently dropped (state still commits; execution phase
-    # owns future wiring).
+    # never silently dropped (state still commits; the execution
+    # phase resolves them when a video_resolve callable is given).
     video_deferred: list = field(default_factory=list)  # [str]
+    # Resolved video references [{id, path}] from an executed
+    # VideoRequest. Empty unless video_resolve succeeded.
+    video_media: list = field(default_factory=list)
     committed: bool = False
     error: str = ""
 
@@ -112,9 +115,14 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
               schedule: dict | None = None, now: str = "",
               text_gen=None, image_gen=None, research_model=None,
               analysis_model=None, mode: str = "draft",
-              integration_id: str = "") -> CycleResult:
+              integration_id: str = "",
+              video_resolve=None) -> CycleResult:
     """Run ONE research cycle. All roles injectable; Mocks are the
-    default so the cycle is deterministic and fully offline."""
+    default so the cycle is deterministic and fully offline.
+    `video_resolve`, when given, is a caller-supplied callable
+    (VideoRequest) -> {id, path} executed for a video plan (the
+    execution phase passes a TuzzinaClient-bound one); without it
+    video stays deferred and the cycle commits normally."""
     out = CycleResult()
     pending: list[CollectionResult] = []
     try:
@@ -181,9 +189,28 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
         # shape G2 inputs; media intent gates the image engine so
         # text-only stays text-only. Video has no executor: the
         # request is recorded as deferred, explicitly, not run.
-        gen_plan = plan_generation(out.opportunity, list(out.items))
+        gen_plan = plan_generation(
+            out.opportunity, list(out.items),
+            video_config=(policy.get("media") or {}))
         if gen_plan.video is not None:
             out.video_deferred.append(gen_plan.video.prompt)
+            if video_resolve is not None:
+                # Executed video: failure fails the cycle (no state
+                # advance, no fake ref). Success records {id, path}.
+                try:
+                    ref = video_resolve(gen_plan.video)
+                except Exception as e:
+                    out.error = f"{type(e).__name__}: {e}"
+                    out.committed = False
+                    return out
+                if not isinstance(ref, dict) or not ref.get("id") \
+                        or not ref.get("path"):
+                    out.error = "ValueError: video resolve " \
+                        "returned no media reference"
+                    out.committed = False
+                    return out
+                out.video_media.append(
+                    {"id": str(ref["id"]), "path": str(ref["path"])})
         gen_image = image_gen_for(gen_plan, image_gen)
         for item in out.items:
             shaped = shape_item_for_g2(item, gen_plan)

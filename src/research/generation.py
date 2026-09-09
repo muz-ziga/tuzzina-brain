@@ -45,7 +45,16 @@ class ImageRequest:
 
 @dataclass
 class VideoRequest:
-    prompt: str  # intent only; no executor exists (defer, don't run)
+    prompt: str
+    # Tuzzina template selector + output shape + opaque template
+    # params. All three are caller-supplied strings/dicts that
+    # Tuzzina validates: `video_type` is a TEMPLATE identifier
+    # (never a provider/model catalog — Brain stores no such
+    # table), `output` is vertical|horizontal, `params` rides
+    # into Tuzzina customParams untouched.
+    video_type: str = ""
+    output: str = ""
+    params: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -62,9 +71,13 @@ def _prompt_for(topic: str, facts: list) -> str:
     return f"{topic} :: {first}".strip(" :")
 
 
-def plan_generation(opportunity, items=None) -> GenerationPlan:
+def plan_generation(opportunity, items=None,
+                    video_config=None) -> GenerationPlan:
     """Decide generation requests. Ineligible/no opportunity ->
-    empty plan (all None); the caller stops before G2."""
+    empty plan (all None); the caller stops before G2.
+    `video_config` is an optional plain dict carrying Tuzzina
+    template selection ({video_type, output, video_params});
+    absent/empty keeps the previous intent-only behavior."""
     if opportunity is None or not getattr(opportunity, "eligible",
                                           False):
         return GenerationPlan()
@@ -85,7 +98,13 @@ def plan_generation(opportunity, items=None) -> GenerationPlan:
     if media == "image":
         image = ImageRequest(prompt=_prompt_for(topic, facts))
     elif media == "video":
-        video = VideoRequest(prompt=_prompt_for(topic, facts))
+        cfg = video_config if isinstance(video_config, dict) else {}
+        params = cfg.get("video_params")
+        video = VideoRequest(
+            prompt=_prompt_for(topic, facts),
+            video_type=str(cfg.get("video_type") or ""),
+            output=str(cfg.get("output") or ""),
+            params=dict(params) if isinstance(params, dict) else {})
     return GenerationPlan(
         text=TextRequest(title=topic, summary=summary),
         image=image, video=video, media_intent=media,
