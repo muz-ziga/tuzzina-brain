@@ -142,6 +142,26 @@ class TuzzinaClient:
         data = self._call("PUT", path, {"state": state})
         return data if isinstance(data, dict) else {}
 
+    def get_content_distribution(self, integration_id: str):
+        """Load the integration's content distribution config
+        ({formats: {name: count}, enabled}) or None when none is
+        configured (unconstrained: pre-Phase-8 behavior). Counts
+        are planning guidance; Tuzzina validates executability."""
+        if not integration_id or not str(integration_id).strip():
+            raise TuzzinaError("integration_id is required")
+        path = "/public/v1/content-distribution/" + urllib.parse.quote(
+            str(integration_id), safe="")
+        try:
+            data = self._call("GET", path)
+        except TuzzinaError as e:
+            if str(e).startswith("HTTP 404 "):
+                return None
+            raise
+        if isinstance(data, dict) and isinstance(
+                data.get("formats"), dict):
+            return data
+        return None
+
     def get_integration_settings(self, integration_id: str) -> dict:
         """Fetch one integration's live provider truth from Tuzzina.
 

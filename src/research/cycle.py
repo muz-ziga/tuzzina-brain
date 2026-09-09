@@ -73,6 +73,10 @@ class CycleResult:
     # Resolved video references [{id, path}] from an executed
     # VideoRequest. Empty unless video_resolve succeeded.
     video_media: list = field(default_factory=list)
+    # Selected executable format (research.formats vocabulary) +
+    # gate reason. Empty when no eligible opportunity ran.
+    format: str = ""
+    format_reason: str = ""
     committed: bool = False
     error: str = ""
 
@@ -208,6 +212,26 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             out.committed = len(pending) > 0
             return out
 
+        # Format gate (Phase 8): the opportunity's executable
+        # shape must be allowed by the integration distribution.
+        # Disallowed => clean stop with reason (commits, like
+        # ineligible). No silent downgrade exists in this phase.
+        # Provider-level support stays Tuzzina-validated.
+        from research.formats import (allowed_from_distribution,
+                                      select_format)
+        allowed = allowed_from_distribution(policy.get("distribution"))
+        fmt, freason = select_format(
+            out.opportunity.media_intent, links_policy, allowed)
+        if fmt is None:
+            for res in pending:
+                res.commit(store)
+            out.committed = len(pending) > 0
+            out.error = ""
+            out.format_reason = freason
+            return out
+        out.format = fmt
+        out.format_reason = freason
+
         # Generation orchestration (R6): opportunity facts/angle
         # shape G2 inputs; media intent gates the image engine so
         # text-only stays text-only. Video has no executor: the
@@ -215,6 +239,7 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
         gen_plan = plan_generation(
             out.opportunity, list(out.items),
             video_config=(policy.get("media") or {}))
+        gen_plan.format = fmt
         if gen_plan.video is not None:
             out.video_deferred.append(gen_plan.video.prompt)
             if video_resolve is not None:

@@ -51,6 +51,14 @@ def fake_urlopen(req, timeout=None):
         ])
     if req.full_url.endswith("/public/v1/posts"):
         return FakeResp([])
+    if "/public/v1/content-distribution/" in req.full_url:
+        if req.full_url.endswith("/int9"):
+            return FakeResp({
+                "integration_id": "int9",
+                "formats": {"text": 10, "text+image": 5},
+                "enabled": True,
+            })
+        return FakeResp({}, 404)
     if "/public/v1/integration-settings/" in req.full_url:
         return FakeResp({"output": {
             "rules": "Facebook posts can be text only.",
@@ -210,6 +218,31 @@ class ClientTest(unittest.TestCase):
             c.get_integration_settings("int9")
         self.assertNotIn(secret, out.getvalue())
         self.assertNotIn(secret, err.getvalue())
+
+    def test_distribution_exact_path_and_id(self):
+        self.c.get_content_distribution("int9")
+        self.assertIn(
+            ("http://x/api/public/v1/content-distribution/int9", "GET"),
+            CALLS)
+
+    def test_distribution_returned(self):
+        r = self.c.get_content_distribution("int9")
+        self.assertEqual(r["formats"], {"text": 10, "text+image": 5})
+        self.assertTrue(r["enabled"])
+
+    def test_distribution_absent_is_none(self):
+        self.assertIsNone(self.c.get_content_distribution("unknown-id"))
+
+    def test_distribution_empty_id_raises_without_call(self):
+        with self.assertRaises(TuzzinaError):
+            self.c.get_content_distribution("  ")
+        self.assertEqual(CALLS, [])
+
+    def test_distribution_http_error_propagates(self):
+        urllib.request.urlopen = lambda *a, **k: FakeResp({}, 500)
+        with self.assertRaises(TuzzinaError) as ctx:
+            self.c.get_content_distribution("int9")
+        self.assertIn("500", str(ctx.exception))
 
     def test_generate_image_hits_mcp_endpoint(self):
         MCP_CALLS.clear()

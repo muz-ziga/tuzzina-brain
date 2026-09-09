@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.24.0 — Phase 8: content format allowlist gate
+
+- New `src/research/formats.py`: closed executable vocabulary
+  (`text`, `text+image`, `text+video`, `link+text` — derived
+  1:1 from Tuzzina post primitives; no `story`/bare-`image`
+  invention) + pure `format_for()` mapping + `select_format()`
+  allowlist check + `allowed_from_distribution()` (count > 0
+  allows; explicitly empty denies; missing row unconstrained).
+- `GenerationPlan.format` (additive) + `CycleResult.format` /
+  `format_reason` observability; `run_cycle` gates after
+  eligibility — disallowed formats stop cleanly (commit, no
+  error, reason recorded), never silently downgraded.
+  Provider-level support stays Tuzzina-validated.
+- `TuzzinaClient.get_content_distribution()` (GET
+  `/public/v1/content-distribution/:id`, 404 -> None) +
+  `run_cycle.py` attaches live distribution to policy
+  (fetch failure warns, continues unconstrained).
+- 17 tests: formats unit, cycle gate (allow/block/empty),
+  client contract, CLI end-to-end gating. 433/433 pass (was
+  399). No scheduler/queue/cron/publishing changes; Strategy
+  untouched; counts stored but cross-run caps deferred
+  (documented, needs usage counters).
+
 ## 0.23.0 — Phase 7: one-shot cycle CLI for automation triggers
 
 - New `src/run_cycle.py`: machine entry for unattended runs

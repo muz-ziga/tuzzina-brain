@@ -368,5 +368,46 @@ class CycleCase(unittest.TestCase):
                  pb.tags, pb.source_ref))
 
 
+class FormatGateCase(CycleCase):
+    def _pol(self, formats):
+        pol = dict(POLICY)
+        pol["distribution"] = {"formats": dict(formats)}
+        return pol
+
+    def test_gate_allows_matching_format(self):
+        out = self._run([self._yt()],
+                        policy=self._pol({"text+image": 5}))
+        self.assertEqual(out.error, "")
+        self.assertEqual(out.format, "text+image")
+        self.assertEqual(out.format_reason, "allowed")
+        self.assertTrue(len(out.intents) > 0)
+        self.assertTrue(out.committed)
+
+    def test_gate_blocks_disallowed_format_cleanly(self):
+        rm, am = CountingResearch(), CountingAnalysis()
+        out = self._run([self._yt()],
+                        policy=self._pol({"text": 10}),
+                        research_model=rm, analysis_model=am)
+        # Research + analysis still ran (gate is after analysis);
+        # generation never started: no silent downgrade to text.
+        self.assertEqual((rm.calls, am.calls), (1, 1))
+        self.assertTrue(out.opportunity.eligible)
+        self.assertEqual(out.packages, [])
+        self.assertEqual(out.intents, [])
+        self.assertEqual(out.format, "")
+        self.assertEqual(out.format_reason,
+                         "format-not-allowed:text+image")
+        self.assertTrue(out.committed)  # reviewed = processed
+        self.assertEqual(out.error, "")
+
+    def test_gate_allows_text(self):
+        out = self._run([self._rss()],
+                        policy=self._pol({"text": 10,
+                                          "text+image": 0}))
+        self.assertEqual(out.error, "")
+        self.assertEqual(out.format, "text")
+        self.assertTrue(len(out.intents) > 0)
+
+
 if __name__ == "__main__":
     unittest.main()

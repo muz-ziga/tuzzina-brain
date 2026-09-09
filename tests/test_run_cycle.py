@@ -16,7 +16,7 @@ import run_cycle as rc_mod
 from tuzzina.client import TuzzinaError
 
 
-def _make_client(items=None, state=None, calls=None):
+def _make_client(items=None, state=None, calls=None, distribution=None):
     from tuzzina.client import TuzzinaClient
     c = TuzzinaClient("http://x/api", "k")
     c.integrations = lambda: items or []
@@ -45,6 +45,12 @@ def _make_client(items=None, state=None, calls=None):
     c.save_research_state = lambda sid, st: (
         calls.append(("save_state", sid)) or
         state.update({sid: dict(st)}) or {"sourceId": sid})
+    c.get_content_distribution = lambda iid: (
+        {"integration_id": iid,
+         "formats": dict(distribution) if distribution is not None
+         else {"text": 10, "text+image": 5, "text+video": 3,
+               "link+text": 2},
+         "enabled": True})
     return c
 
 
@@ -104,7 +110,8 @@ ITEMS = [{"id": "integ-fb-1", "name": "Juzzir",
           "identifier": "facebook", "picture": "p"}]
 
 
-def _run_cli(argv, *, state=None, calls=None, openai_key=""):
+def _run_cli(argv, *, state=None, calls=None, openai_key="",
+             distribution=None):
     calls = calls if calls is not None else []
     state = state if state is not None else {}
     os.environ["TUZZINA_API_KEY"] = "k"
@@ -116,7 +123,7 @@ def _run_cli(argv, *, state=None, calls=None, openai_key=""):
     import research.cycle as cyc_mod
     orig_website = cyc_mod.WebsiteAdapter
     rc_mod._build_client = lambda base, key: _make_client(
-        ITEMS, state, calls)
+        ITEMS, state, calls, distribution=distribution)
     cyc_mod.WebsiteAdapter = FakeWebsite
     buf_out, buf_err = io.StringIO(), io.StringIO()
     try:
@@ -182,6 +189,24 @@ class CycleCliCase(unittest.TestCase):
              "--strategy-base-dir", tmp, "--run-id", "r2"])
         self.assertEqual(rc, 2)
         self.assertEqual(_result(out)["error"], "mock-live-refused")
+
+    def test_distribution_gate_end_to_end(self):
+        # FakeWebsite yields a text item; the fake distribution
+        # allows only text+image -> the cycle stops cleanly with
+        # zero intents and no writes (dry-run).
+        tmp, camp = self._case()
+        calls: list = []
+        rc, out, err = _run_cli(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp, "--dry-run",
+             "--run-id", "r-dist"],
+            calls=calls, distribution={"text+image": 5})
+        self.assertEqual(rc, 0, msg=err)
+        res = _result(out)
+        self.assertEqual(res["status"], "no-op")
+        self.assertEqual(res["items_new"], 1)
+        kinds = [k for k, _ in calls]
+        self.assertNotIn("create_post", kinds)
 
     def test_live_run_posts_and_reports_ids(self):
         # Live (non-dry) run with all three roles stubbed offline:

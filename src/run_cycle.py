@@ -135,6 +135,18 @@ def _main(argv=None) -> int:
     print(f"run_id={run_id} channel: name={integ.get('name')!r} "
           f"id={integ.get('id')} platform={integ.get('identifier')!r}")
     cfg = resolve_strategy(campaign, strategy, channel_meta=channel_meta)
+    # Per-integration distribution (allowed formats + desired mix)
+    # is Tuzzina-owned config, not campaign/strategy policy: fetch
+    # live and attach. Absent/invalid -> unconstrained (existing
+    # behavior); the cycle gates on it when present.
+    try:
+        cfg["distribution"] = client.get_content_distribution(
+            args.strategy_by_integration) or {}
+    except Exception as e:
+        print(f"run_id={run_id} warning: distribution unavailable "
+              f"({type(e).__name__}); continuing unconstrained",
+              file=sys.stderr)
+        cfg["distribution"] = {}
 
     text_gen, image_gen_obj = _build_generators(args.mode)
     research_model, analysis_model = _build_models(args.mode)

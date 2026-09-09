@@ -63,6 +63,9 @@ class GenerationPlan:
     image: object = None  # ImageRequest | None
     video: object = None  # VideoRequest | None
     media_intent: str = "none"
+    # Executable format token (research.formats vocabulary),
+    # assigned by the caller after the allowlist gate.
+    format: str = ""
     meta: dict = field(default_factory=dict)
 
 
