@@ -316,15 +316,17 @@ class BoundaryCase(unittest.TestCase):
                     "saveFile", "sqlite", "postgres", "publish_now",
                     ".publish(", "schedule_post", "generate_image",
                     "generate_video", "StateStore", "monitor",
-                    "fetch_feed", "urlopen(req"):
-            if bad == "urlopen(req":
-                continue  # pinned separately below
+                    "fetch_feed", "urlopen(req", "chat/completions",
+                    "api.openai.com"):
             self.assertNotIn(bad, code, bad)
 
-    def test_single_transport_call(self):
-        code = self._code("research/analysis.py")
-        self.assertEqual(code.count("urlopen(req"), 1)
-        self.assertIn("chat/completions", code)
+    def test_transport_delegated_to_adapter(self):
+        # Phase 1: role modules own prompts+validation only; the
+        # single HTTP call lives in llm/adapters.py.
+        import pathlib
+        blob = (pathlib.Path(__file__).parent.parent / "src" /
+                "llm" / "adapters.py").read_text(encoding="utf-8")
+        self.assertEqual(blob.count("urlopen(req"), 1)
 
     def test_no_secrets(self):
         code = self._code("research/analysis.py")

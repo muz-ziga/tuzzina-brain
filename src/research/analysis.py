@@ -219,15 +219,21 @@ class MockAnalysisModel(AnalysisModel):
 
 
 class OpenAIAnalysisModel(AnalysisModel):
-    """Analysis role over OpenAI chat (own prompt/contract; R3
-    transport style only). Strict validation; failures raise
+    """Analysis role (own prompt/contract). Transport runs through
+    an injected llm adapter (default: OpenAI). The `adapter`
+    carries its own credential+model; an explicitly passed adapter
+    wins entirely. Strict validation; failures raise
     AnalysisError and change nothing."""
 
-    def __init__(self, api_key: str = "", model: str = "gpt-4.1"):
-        if not api_key:
-            raise AnalysisError("OPENAI_API_KEY is not set")
-        self.api_key = api_key
-        self.model = model
+    def __init__(self, api_key: str = "", model: str = "gpt-4.1",
+                 adapter=None):
+        if adapter is None:
+            if not api_key:
+                raise AnalysisError("OPENAI_API_KEY is not set")
+            from llm.adapters import OpenAIAdapter
+            adapter = OpenAIAdapter(api_key, model)
+        self._adapter = adapter
+        self.model = getattr(adapter, "model", model)
 
     def analyze(self, result, policy: dict,
                 items: list | None = None) -> ContentOpportunity:
@@ -273,23 +279,15 @@ class OpenAIAnalysisModel(AnalysisModel):
             truncated = True
         else:
             truncated = False
-        body = json.dumps({
-            "model": self.model, "temperature": 0.2, "max_tokens": 800,
-            "messages": [{"role": "system", "content": prompt},
-                         {"role": "user", "content": context}],
-        }).encode()
         try:
-            from urllib.request import Request, urlopen
-            req = Request(
-                "https://api.openai.com/v1/chat/completions", data=body,
-                headers={"Authorization": f"Bearer {self.api_key}",
-                         "Content-Type": "application/json"})
-            with urlopen(req, timeout=90) as r:
-                raw = r.read().decode()
+            from llm.adapters import LLMError
+            raw = self._adapter.complete(
+                prompt, context, temperature=0.2, max_tokens=800,
+                timeout=90)
         except (TimeoutError, socket.timeout):
             raise AnalysisError("model-timeout")
-        except Exception as e:
-            raise AnalysisError(f"model-error: {type(e).__name__}")
+        except LLMError as e:
+            raise AnalysisError(f"model-error: {e}")
         return self._validate(raw, known, truncated)
 
     def _validate(self, raw: str, known: set,

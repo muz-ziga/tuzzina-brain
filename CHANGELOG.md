@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.20.0 — Phase 1: multi-provider LLM execution core
+
+- New `src/llm/adapters.py`: `complete(system, user, *,
+  temperature, max_tokens, timeout) -> str` contract +
+  `_post_json` (HTTP+JSON+timeout+status normalization only,
+  fail-fast, timeouts propagate raw) + `OpenAIAdapter`
+  (Bearer, messages[], choices extraction) + `AnthropicAdapter`
+  (x-api-key + version header, top-level system, required
+  max_tokens, content[] extraction, stop_reason gating:
+  non-end_turn is loud, never trusted) + closed `ADAPTERS`
+  dispatch (`resolve_adapter`; unknown keys fail closed; code
+  pointers only, no models/capabilities/limits).
+- Research/Analysis/Text roles refactored onto adapters with
+  UNCHANGED interfaces, prompts, validators, timeouts, and
+  error categories (adapter=`None` builds the same OpenAI
+  default as before; explicit adapter wins entirely). All
+  role assignment is constructor-level: each role independently
+  takes adapter+credential+model (proven: three simultaneous
+  distinct assignments; text OpenAI->Anthropic and research
+  Anthropic->OpenAI switch with zero other-role changes).
+- Vendor protocol details exist ONLY in `llm/adapters.py`
+  (grep-verified). 44 tests (`tests/test_llm_adapters.py`,
+  faked transport, zero live calls): both protocols, refusal
+  semantics, dispatch closure, independence, switching,
+  contract stability, secrecy. 355/355 pass (was 311).
+  No Tuzzina/Postiz/registry/DB/UI/cron/image/video changes.
+
 ## 0.19.0 — R6: generation orchestration (decision only)
 
 - New `src/research/generation.py`: `GenerationPlan`

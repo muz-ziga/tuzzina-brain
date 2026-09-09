@@ -238,10 +238,17 @@ class BoundaryCase(unittest.TestCase):
                     "generate_video"):
             self.assertNotIn(bad, code, bad)
 
-    def test_transport_is_single_chat_call(self):
+    def test_transport_delegated_to_adapter(self):
+        # Phase 1: role modules own prompts+validation only; the
+        # single HTTP call lives in llm/adapters.py.
         code = self._code("research/models.py")
-        self.assertEqual(code.count("urlopen(req"), 1)
-        self.assertIn("chat/completions", code)
+        self.assertEqual(code.count("urlopen(req"), 0)
+        self.assertNotIn("chat/completions", code)
+        self.assertNotIn("api.openai.com", code)
+        import pathlib
+        blob = (pathlib.Path(__file__).parent.parent / "src" /
+                "llm" / "adapters.py").read_text(encoding="utf-8")
+        self.assertEqual(blob.count("urlopen(req"), 1)
 
     def test_no_secrets(self):
         # "Bearer" scheme word is required API syntax (key itself is

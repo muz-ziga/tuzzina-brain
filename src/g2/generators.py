@@ -63,32 +63,30 @@ class OpenAITextGenerator(TextGenerator):
     machine-facing Tuzzina text endpoint accepting full Brain
     context appears, this class is deleted and the decision layer
     (title/summary/brand/prompt) delegates to it unchanged.
+
+    Transport runs through an injected llm adapter (default:
+    OpenAI). The `adapter` carries its own credential+model; an
+    explicitly passed adapter wins entirely (role-level api_key /
+    model are used only to build the default).
     """
 
-    def __init__(self, api_key: str = "", model: str = "gpt-4.1"):
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set")
-        self.api_key = api_key
-        self.model = model
+    def __init__(self, api_key: str = "", model: str = "gpt-4.1",
+                 adapter=None):
+        if adapter is None:
+            if not api_key:
+                raise RuntimeError("OPENAI_API_KEY is not set")
+            from llm.adapters import OpenAIAdapter
+            adapter = OpenAIAdapter(api_key, model)
+        self._adapter = adapter
 
     def generate(self, title: str, summary: str, brand: dict) -> str:
-        import json
-        from urllib.request import Request, urlopen
         sys = ("Write one Arabic social post, max 500 chars. "
                f"Tone: {brand.get('tone', 'neutral')}. "
                f"Audience: {brand.get('audience', 'general')}. No hashtags.")
-        body = json.dumps({
-            "model": self.model, "temperature": 0.7, "max_tokens": 400,
-            "messages": [{"role": "system", "content": sys},
-                         {"role": "user",
-                          "content": f"Title: {title}\nSummary: {summary}"}],
-        }).encode()
-        req = Request("https://api.openai.com/v1/chat/completions", data=body,
-                      headers={"Authorization": f"Bearer {self.api_key}",
-                               "Content-Type": "application/json"})
-        with urlopen(req, timeout=60) as r:
-            d = json.loads(r.read().decode())
-        return d["choices"][0]["message"]["content"].strip()
+        return self._adapter.complete(
+            sys, f"Title: {title}\nSummary: {summary}",
+            temperature=0.7, max_tokens=400,
+            timeout=60).strip()
 
 
 def _chunk(tag: bytes, data: bytes) -> bytes:
