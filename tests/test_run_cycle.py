@@ -16,7 +16,8 @@ import run_cycle as rc_mod
 from tuzzina.client import TuzzinaError
 
 
-def _make_client(items=None, state=None, calls=None, distribution=None):
+def _make_client(items=None, state=None, calls=None, distribution=None,
+                 usage=None):
     from tuzzina.client import TuzzinaClient
     c = TuzzinaClient("http://x/api", "k")
     c.integrations = lambda: items or []
@@ -51,6 +52,12 @@ def _make_client(items=None, state=None, calls=None, distribution=None):
          else {"text": 10, "text+image": 5, "text+video": 3,
                "link+text": 2},
          "enabled": True})
+    def _usage(iid, day):
+        calls.append(("get_usage", day))
+        if isinstance(usage, BaseException):
+            raise usage
+        return dict(usage or {})
+    c.get_content_usage = _usage
     return c
 
 
@@ -111,7 +118,7 @@ ITEMS = [{"id": "integ-fb-1", "name": "Juzzir",
 
 
 def _run_cli(argv, *, state=None, calls=None, openai_key="",
-             distribution=None):
+             distribution=None, usage=None):
     calls = calls if calls is not None else []
     state = state if state is not None else {}
     os.environ["TUZZINA_API_KEY"] = "k"
@@ -123,7 +130,7 @@ def _run_cli(argv, *, state=None, calls=None, openai_key="",
     import research.cycle as cyc_mod
     orig_website = cyc_mod.WebsiteAdapter
     rc_mod._build_client = lambda base, key: _make_client(
-        ITEMS, state, calls, distribution=distribution)
+        ITEMS, state, calls, distribution=distribution, usage=usage)
     cyc_mod.WebsiteAdapter = FakeWebsite
     buf_out, buf_err = io.StringIO(), io.StringIO()
     try:
@@ -222,7 +229,7 @@ class CycleCliCase(unittest.TestCase):
         class FakeText(G.TextGenerator):
             def generate(self, title, summary, brand):
                 return "Hello world post"
-        G.OpenAITextGenerator = lambda key, model="m": FakeText()
+        G.OpenAITextGenerator = lambda *a, **k: FakeText()
         rc_mod._build_models = lambda mode: (MockResearchModel(),
                                              MockAnalysisModel())
         try:
@@ -288,7 +295,7 @@ class CycleCliCase(unittest.TestCase):
         class FakeText(G.TextGenerator):
             def generate(self, title, summary, brand):
                 return "Hello world post"
-        G.OpenAITextGenerator = lambda key, model="m": FakeText()
+        G.OpenAITextGenerator = lambda *a, **k: FakeText()
         rc_mod._build_models = lambda mode: (MockResearchModel(),
                                              MockAnalysisModel())
         try:
@@ -316,6 +323,176 @@ class CycleCliCase(unittest.TestCase):
             "TUZZINA_API_KEY is not set", ""))
         for bad in ("sk-", "Bearer", "OPENAI_API_KEY="):
             self.assertNotIn(bad, blob)
+
+
+ROLE_ENV_KEYS = [f"BRAIN_{r}_{s}" for r in
+                 ("RESEARCH", "ANALYSIS", "TEXT")
+                 for s in ("ADAPTER", "KEY", "MODEL")]
+
+
+class RoleEnvCase(unittest.TestCase):
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in ROLE_ENV_KEYS}
+        for k in ROLE_ENV_KEYS:
+            os.environ.pop(k, None)
+        self._saved_shared = os.environ.get("OPENAI_API_KEY")
+        os.environ["OPENAI_API_KEY"] = "sk-shared"
+
+    def tearDown(self):
+        for k in ROLE_ENV_KEYS:
+            if self._saved[k] is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = self._saved[k]
+        if self._saved_shared is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = self._saved_shared
+
+    def test_openai_defaults_without_role_env(self):
+        rm, am = rc_mod._build_models("--openai")
+        from llm.adapters import OpenAIAdapter
+        self.assertIsInstance(rm._adapter, OpenAIAdapter)
+        self.assertIsInstance(am._adapter, OpenAIAdapter)
+        self.assertEqual(rm._adapter.api_key, "sk-shared")
+        self.assertEqual(rm._adapter.model, "gpt-4.1")
+
+    def test_per_role_switch(self):
+        os.environ["BRAIN_TEXT_ADAPTER"] = "anthropic"
+        os.environ["BRAIN_TEXT_KEY"] = "sk-ant-text"
+        os.environ["BRAIN_TEXT_MODEL"] = "claude-x"
+        tg = rc_mod._build_text_gen("--openai")
+        from llm.adapters import AnthropicAdapter
+        self.assertIsInstance(tg._adapter, AnthropicAdapter)
+        self.assertEqual(tg._adapter.api_key, "sk-ant-text")
+        self.assertEqual(tg._adapter.model, "claude-x")
+        rm, am = rc_mod._build_models("--openai")
+        from llm.adapters import OpenAIAdapter
+        self.assertIsInstance(rm._adapter, OpenAIAdapter)
+        self.assertIsInstance(am._adapter, OpenAIAdapter)
+
+    def test_missing_key_fails_closed(self):
+        os.environ.pop("OPENAI_API_KEY", None)
+        with self.assertRaises(ValueError) as ctx:
+            rc_mod._build_models("--openai")
+        self.assertIn("KEY", str(ctx.exception))
+        with self.assertRaises(ValueError):
+            rc_mod._build_text_gen("--openai")
+
+    def test_unknown_adapter_fails_closed(self):
+        os.environ["BRAIN_RESEARCH_ADAPTER"] = "gemini"
+        os.environ["BRAIN_RESEARCH_KEY"] = "k"
+        with self.assertRaises(ValueError) as ctx:
+            rc_mod._build_models("--openai")
+        self.assertIn("unknown-llm-adapter", str(ctx.exception))
+
+    def test_mock_ignores_role_env(self):
+        os.environ["BRAIN_TEXT_ADAPTER"] = "anthropic"
+        os.environ["BRAIN_TEXT_KEY"] = "sk-ant-text"
+        from research.models import MockResearchModel
+        from research.analysis import MockAnalysisModel
+        from g2.generators import MockTextGenerator
+        rm, am = rc_mod._build_models("--mock")
+        self.assertIsInstance(rm, MockResearchModel)
+        self.assertIsInstance(am, MockAnalysisModel)
+        self.assertIsInstance(rc_mod._build_text_gen("--mock"),
+                              MockTextGenerator)
+
+    def test_roles_resolved_in_envelope_without_secrets(self):
+        tmp, camp = self._case() if hasattr(self, "_case") else (None, None)
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="tbra_roles_")
+        with open(os.path.join(tmp, "camp.yaml"), "w",
+                  encoding="utf-8") as f:
+            f.write(CAMPAIGN)
+        _write_strategy(tmp)
+        os.environ["BRAIN_TEXT_MODEL"] = "gpt-4.1-custom"
+        import g2.generators as G
+        from research.models import MockResearchModel
+        from research.analysis import MockAnalysisModel
+        orig_text = G.OpenAITextGenerator
+        orig_models = rc_mod._build_models
+        class FakeText(G.TextGenerator):
+            def generate(self, title, summary, brand):
+                return "Hello world post"
+        G.OpenAITextGenerator = lambda *a, **k: FakeText()
+        rc_mod._build_models = lambda mode: (MockResearchModel(),
+                                             MockAnalysisModel())
+        try:
+            rc, out, err = _run_cli(
+                [os.path.join(tmp, "camp.yaml"),
+                 "--strategy-by-integration", "integ-fb-1",
+                 "--strategy-base-dir", tmp, "--openai",
+                 "--dry-run", "--run-id", "r-roles"],
+                openai_key="sk-shared")
+        finally:
+            G.OpenAITextGenerator = orig_text
+            rc_mod._build_models = orig_models
+            os.environ.pop("BRAIN_TEXT_MODEL", None)
+        self.assertEqual(rc, 0, msg=err)
+        res = _result(out)
+        roles = {r["role"]: r for r in res["roles_resolved"]}
+        self.assertEqual(roles["text"]["model"], "gpt-4.1-custom")
+        self.assertEqual(roles["text"]["adapter"], "openai")
+        self.assertNotIn("credential", json.dumps(res))
+        self.assertNotIn("sk-shared", out + err)
+
+
+class UsageGateCase(unittest.TestCase):
+    def _case(self):
+        tmp = tempfile.mkdtemp(prefix="tbra_use_")
+        with open(os.path.join(tmp, "camp.yaml"), "w",
+                  encoding="utf-8") as f:
+            f.write(CAMPAIGN)
+        _write_strategy(tmp)
+        return tmp, os.path.join(tmp, "camp.yaml")
+
+    def test_exhausted_format_blocks(self):
+        tmp, camp = self._case()
+        calls: list = []
+        rc, out, err = _run_cli(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp, "--dry-run",
+             "--run-id", "r-use"],
+            calls=calls,
+            distribution={"text": 1},
+            usage={"text": 1})
+        self.assertEqual(rc, 0, msg=err)
+        res = _result(out)
+        self.assertEqual(res["status"], "no-op")
+        self.assertEqual(res["usage"]["used"], {"text": 1})
+        self.assertEqual(res["usage"]["remaining"], {"text": 0})
+        self.assertEqual(res["intents"], 0)
+
+    def test_remaining_capacity_proceeds(self):
+        tmp, camp = self._case()
+        calls: list = []
+        rc, out, err = _run_cli(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp, "--dry-run",
+             "--run-id", "r-use2"],
+            calls=calls,
+            distribution={"text": 2},
+            usage={"text": 1})
+        self.assertEqual(rc, 0, msg=err)
+        res = _result(out)
+        self.assertEqual(res["usage"]["remaining"], {"text": 1})
+        self.assertGreater(res["intents"], 0)
+
+    def test_usage_failure_preserves_targets(self):
+        tmp, camp = self._case()
+        calls: list = []
+        rc, out, err = _run_cli(
+            [camp, "--strategy-by-integration", "integ-fb-1",
+             "--strategy-base-dir", tmp, "--dry-run",
+             "--run-id", "r-use3"],
+            calls=calls,
+            distribution={"text": 1},
+            usage=RuntimeError("down"))
+        self.assertEqual(rc, 0)
+        res = _result(out)
+        self.assertGreater(res["intents"], 0)
+        self.assertIn("usage unavailable", err)
 
 
 if __name__ == "__main__":

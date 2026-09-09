@@ -36,7 +36,7 @@ from tuzzina.state_store import TuzzinaStateStore
 from research.cycle import run_cycle
 from research.monitor import MemoryStateStore
 from adapters.base import UnsupportedPlatform
-from run import _build_client, _build_generators, _resolve_media
+from run import _build_client, _resolve_media
 
 
 def _post_ids(response) -> list:
@@ -51,20 +51,59 @@ def _post_ids(response) -> list:
 
 
 def _build_models(mode: str):
-    """Role models for the cycle. --openai wires the real OpenAI
-    trio on one env key; anything else stays Mock (deterministic,
-    offline). Per-role multi-vendor selection is supported by the
-    Phase 1 adapters but has no CLI surface yet: assignments live
-    server-side (Phase 3) and need a resolution endpoint before a
-    trigger can pass them. Documented, not silently defaulted."""
+    """Role models for the cycle.
+
+    --mock wires Mocks (deterministic, offline; role env is
+    ignored by design — mock runs never touch vendors).
+    --openai wires real roles, each resolved independently:
+    BRAIN_<ROLE>_ADAPTER (default "openai"), BRAIN_<ROLE>_KEY
+    (default: shared OPENAI_API_KEY), BRAIN_<ROLE>_MODEL
+    (default "gpt-4.1") for ROLE in RESEARCH/ANALYSIS/TEXT.
+    Missing key or unknown adapter raises ValueError (exit 2):
+    no silent fallback to an unrelated default.
+    Per-role switching needs nothing more: adapters are
+    constructed from the resolved triple and injected."""
     from research.models import MockResearchModel, OpenAIResearchModel
     from research.analysis import MockAnalysisModel, OpenAIAnalysisModel
-    if mode == "--openai":
-        oai = os.environ.get("OPENAI_API_KEY", "")
-        if not oai:
-            raise SystemExit("OPENAI_API_KEY is not set; use --mock")
-        return OpenAIResearchModel(oai), OpenAIAnalysisModel(oai)
-    return MockResearchModel(), MockAnalysisModel()
+    from llm.adapters import resolve_adapter
+    if mode != "--openai":
+        return MockResearchModel(), MockAnalysisModel()
+    shared_key = os.environ.get("OPENAI_API_KEY", "")
+    built = []
+    for role, cls in (("RESEARCH", OpenAIResearchModel),
+                      ("ANALYSIS", OpenAIAnalysisModel)):
+        prefix = f"BRAIN_{role}_"
+        adapter_key = (os.environ.get(prefix + "ADAPTER") or
+                       "openai").strip()
+        key = os.environ.get(prefix + "KEY") or shared_key
+        if not key:
+            raise ValueError(f"{prefix}KEY is not set (and no "
+                             f"shared OPENAI_API_KEY)")
+        model = os.environ.get(prefix + "MODEL") or "gpt-4.1"
+        adapter_cls = resolve_adapter(adapter_key)
+        built.append(cls(adapter=adapter_cls(key, model)))
+    return built[0], built[1]
+
+
+def _build_text_gen(mode: str):
+    """Text generator honoring the same per-role env contract
+    (BRAIN_TEXT_ADAPTER/KEY/MODEL). Separated from run._build_
+    generators so the cycle path never inherits legacy defaults
+    silently; behavior for unset env is identical."""
+    from g2.generators import MockTextGenerator, OpenAITextGenerator
+    from llm.adapters import resolve_adapter
+    if mode != "--openai":
+        return MockTextGenerator()
+    shared_key = os.environ.get("OPENAI_API_KEY", "")
+    adapter_key = (os.environ.get("BRAIN_TEXT_ADAPTER") or
+                   "openai").strip()
+    key = os.environ.get("BRAIN_TEXT_KEY") or shared_key
+    if not key:
+        raise ValueError("BRAIN_TEXT_KEY is not set (and no shared "
+                         "OPENAI_API_KEY)")
+    model = os.environ.get("BRAIN_TEXT_MODEL") or "gpt-4.1"
+    return OpenAITextGenerator(
+        adapter=resolve_adapter(adapter_key)(key, model))
 
 
 def _emit_result(result: dict) -> None:
@@ -102,7 +141,8 @@ def _main(argv=None) -> int:
     run_id = args.run_id.strip() or uuid.uuid4().hex
     result = {"run_id": run_id, "status": "error", "sources_checked": 0,
               "items_new": 0, "eligible": False, "intents": 0,
-              "post_ids": [], "committed": False, "error": ""}
+              "post_ids": [], "committed": False, "error": "",
+              "roles_resolved": [], "usage": {"used": {}, "remaining": {}}}
 
     if args.mode == "--mock" and not args.dry_run:
         # Mock image bytes must never reach real storage or posts.
@@ -148,8 +188,49 @@ def _main(argv=None) -> int:
               file=sys.stderr)
         cfg["distribution"] = {}
 
-    text_gen, image_gen_obj = _build_generators(args.mode)
+    # Capacity enforcement: remaining = target - used(today, UTC).
+    # Computed here so the cycle gate stays pure policy. A usage
+    # failure preserves Phase 8 behavior (targets as allowlist);
+    # only a clean read narrows the gate.
+    dist = cfg.get("distribution") or {}
+    targets = dist.get("formats") if isinstance(dist, dict) else None
+    if isinstance(targets, dict) and targets:
+        try:
+            from datetime import datetime, timezone
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            used = client.get_content_usage(
+                args.strategy_by_integration, day) or {}
+            used = {f: int(used.get(f, 0)) for f in targets
+                    if isinstance(targets.get(f), int)}
+            remaining = {f: max(0, int(targets[f]) - used.get(f, 0))
+                         for f in used}
+            cfg["distribution"] = {"formats": remaining,
+                                   "enabled": dist.get("enabled", True)}
+            result["usage"] = {"used": used, "remaining": remaining}
+        except Exception as e:
+            print(f"run_id={run_id} warning: usage unavailable "
+                  f"({type(e).__name__}); enforcing targets only",
+                  file=sys.stderr)
+
+    # Image generation always delegates through Tuzzina (org
+    # API key); it needs no provider credential of its own.
+    from g2.generators import MockImageGenerator, TuzzinaImageGenerator
+    text_gen = _build_text_gen(args.mode)
+    image_gen_obj = TuzzinaImageGenerator() \
+        if args.mode == "--openai" else MockImageGenerator()
     research_model, analysis_model = _build_models(args.mode)
+    roles_resolved = []
+    if args.mode == "--openai":
+        # Echoed for observability (adapter+model only — never
+        # credentials). Mirrors the resolution order above.
+        for role in ("RESEARCH", "ANALYSIS", "TEXT"):
+            prefix = f"BRAIN_{role}_"
+            roles_resolved.append({
+                "role": role.lower(),
+                "adapter": (os.environ.get(prefix + "ADAPTER") or
+                            "openai").strip(),
+                "model": os.environ.get(prefix + "MODEL") or "gpt-4.1",
+            })
     if args.dry_run:
         # A cursor advance is a write: dry-run performs ZERO writes,
         # so it always runs on a memory store even when tuzzina was
@@ -180,6 +261,7 @@ def _main(argv=None) -> int:
         out.opportunity is not None and out.opportunity.eligible)
     result["intents"] = len(out.intents)
     result["committed"] = bool(out.committed)
+    result["roles_resolved"] = roles_resolved
     if out.error:
         print(f"run_id={run_id} error: {out.error}", file=sys.stderr)
         result["error"] = out.error

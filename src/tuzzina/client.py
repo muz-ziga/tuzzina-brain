@@ -162,6 +162,25 @@ class TuzzinaClient:
             return data
         return None
 
+    def get_content_usage(self, integration_id: str, start_date: str):
+        """Load published-format usage for one integration since a
+        UTC day (YYYY-MM-DD). Returns {format: count} (possibly all
+        zeros). Raises on transport/validation errors. The server
+        counts top-level QUEUE+PUBLISHED posts; Brain only reads."""
+        if not integration_id or not str(integration_id).strip():
+            raise TuzzinaError("integration_id is required")
+        if not start_date or not str(start_date).strip():
+            raise TuzzinaError("start_date is required")
+        path = "/public/v1/content-usage/" + urllib.parse.quote(
+            str(integration_id), safe="") + "?" + urllib.parse.urlencode(
+                {"startDate": str(start_date)})
+        data = self._call("GET", path)
+        if isinstance(data, dict) and isinstance(
+                data.get("usage"), dict):
+            return {str(k): int(v) for k, v in
+                    data["usage"].items()}
+        return {}
+
     def get_integration_settings(self, integration_id: str) -> dict:
         """Fetch one integration's live provider truth from Tuzzina.
 

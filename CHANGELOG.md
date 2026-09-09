@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.25.0 — Phase 9: runtime role resolution + usage enforcement
+
+- `run_cycle.py`: `--openai` resolves Research/Analysis/Text
+  independently from `BRAIN_<ROLE>_{ADAPTER,KEY,MODEL}` (shared
+  `OPENAI_API_KEY` fallback, closed dispatch, missing key or
+  unknown adapter fails closed with exit 2); `--mock` ignores
+  role env by design; resolution echoed as adapter+model only
+  in `BRAIN_RESULT.roles_resolved` (never credentials).
+- Usage enforcement: live `get_content_usage()` (new client
+  method: GET `/public/v1/content-usage/:id?startDate=`)
+  narrows distribution targets to remaining capacity per UTC
+  day; failures warn and preserve target-only gating.
+- 11 tests (role defaults/switch/missing/unknown/mock-
+  isolation, envelope secrecy, exhausted/proceeding/failing
+  usage). 442/442 pass (was 433). No scheduler/cron/DB/
+  publishing changes; Strategy/G2/G3/Injection untouched.
+
 ## 0.24.0 — Phase 8: content format allowlist gate
 
 - New `src/research/formats.py`: closed executable vocabulary
