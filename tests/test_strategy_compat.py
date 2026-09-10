@@ -212,5 +212,110 @@ class BuilderRoutingTest(unittest.TestCase):
             self.assertIn(needle, plan.video.prompt)
 
 
+class PillarGatingTest(unittest.TestCase):
+    def _res(self):
+        from research.models import MockResearchModel
+        from contracts import SourceItem
+        item = SourceItem(source_id="s1", source_type="website",
+                          source_url="https://t.test/x",
+                          title="Mastering tips",
+                          text="Mastering basics here.", images=[])
+        return MockResearchModel().research([item]), [item]
+
+    def _policy(self, pillars):
+        s = _strategy(content=ContentPolicy(content_pillars=pillars))
+        return resolve_strategy(_project(), s,
+                                channel_meta={"identifier": "facebook"})
+
+    def test_pillars_reach_analysis_from_resolved_cfg(self):
+        from research.analysis import MockAnalysisModel
+        res, items = self._res()
+        ok = MockAnalysisModel().analyze(
+            res, self._policy(["mastering tips"]), items)
+        self.assertTrue(ok.eligible)
+        self.assertIn("pillar=mastering tips", ok.constraints)
+        bad = MockAnalysisModel().analyze(
+            res, self._policy(["unrelated vertical"]), items)
+        self.assertFalse(bad.eligible)
+        self.assertIn("pillar-mismatch", bad.meta["reason"])
+
+    def test_no_pillars_stays_eligible(self):
+        from research.analysis import MockAnalysisModel
+        res, items = self._res()
+        out = MockAnalysisModel().analyze(res, self._policy([]), items)
+        self.assertTrue(out.eligible)
+
+
+class SourcesTest(unittest.TestCase):
+    def test_rss_youtube_enabled_roundtrip(self):
+        import tempfile
+        from channels.strategy_store import save, load
+        tmp = tempfile.mkdtemp(prefix="tbra_src_")
+        srcs = [
+            {"type": "website", "url": "https://t.test/", "n": 3},
+            {"type": "rss", "url": "https://t.test/feed",
+             "n": 5, "source_id": "feed-1"},
+            {"type": "youtube",
+             "channel_id": "UC" + "A" * 22, "n": 2,
+             "enabled": False},
+        ]
+        s = _strategy(sources=srcs)
+        save(s, base_dir=tmp)
+        back = load("skill-1", base_dir=tmp)
+        self.assertEqual(back.sources, srcs)
+
+    def test_old_website_sources_unchanged(self):
+        from channels.strategy_store import _from_yaml_dict
+        s = _from_yaml_dict({"integration_id": "o",
+                             "strategy": {"sources": [
+                                 {"type": "website",
+                                  "url": "https://t.test/", "n": 3}]}})
+        self.assertEqual(s.sources, [{"type": "website",
+                                      "url": "https://t.test/", "n": 3}])
+
+    def test_invalid_sources_fail_closed(self):
+        from channels.strategy_store import _from_yaml_dict
+        bad = [
+            {"sources": [{"type": "rss"}]},
+            {"sources": [{"type": "youtube",
+                          "channel_id": "not-a-channel"}]},
+            {"sources": [{"type": "podcast",
+                          "url": "https://t.test/"}]},
+            {"sources": [{"type": "rss", "url": "https://t.test/",
+                          "n": 0}]},
+        ]
+        for strat in bad:
+            with self.assertRaises(ValueError):
+                _from_yaml_dict({"integration_id": "x",
+                                 "strategy": strat})
+
+    def test_cycle_skips_disabled_sources(self):
+        from research.cycle import run_cycle
+        out = run_cycle(
+            [{"type": "website", "url": "https://t.test/",
+              "n": 1, "enabled": False}],
+            policy={"brand": {}, "language": {}})
+        self.assertEqual(out.sources, [])
+        self.assertEqual(out.items, [])
+
+    def test_legacy_run_rejects_non_website(self):
+        import run as run_mod
+
+        class DeadClient:
+            def get_integration_settings(self, _id):
+                raise RuntimeError("offline")
+
+        cfg = {"brand": {}, "language": {}, "hashtags": {},
+               "links_policy": "hide", "schedule": {},
+               "sources": [{"type": "rss",
+                            "url": "https://t.test/feed", "n": 3}],
+               "sources_from": "channel",
+               "channel_meta": {"identifier": "facebook"},
+               "media_policy": {}}
+        rc = run_mod._execute(cfg, "--mock", DeadClient(),
+                              "integ-1", "draft", True)
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

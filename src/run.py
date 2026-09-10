@@ -99,6 +99,13 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
     print(f"sources from: {cfg.get('sources_from', 'unknown')}")
     packages: list[ContentPackage] = []
     for src in cfg["sources"]:
+        if src.get("enabled") is False:
+            continue
+        if src.get("type") != "website":
+            print(f"error: legacy run.py supports website sources only; "
+                  f"use run_cycle.py for {src.get('type')}",
+                  file=sys.stderr)
+            return 2
         res = src_adapters[src["type"]].extract(src["url"], src["n"])
         print(f"G1 {src['type']} {src['url']}: "
               f"{res.meta.get('returned')}/{res.meta.get('requested')} "

@@ -254,6 +254,13 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         return bool(v) if v is not None else _MISSING
 
     def _opt_sources(v):
+        # Website/RSS/YouTube mirror the run_cycle collectors
+        # (cycle.py dispatch). `enabled: false` skips the source
+        # at runtime; `source_id` overrides the default identity
+        # used for monitoring state. Old website-only entries
+        # load unchanged.
+        import re as _re
+        _yt = _re.compile(r"^UC[A-Za-z0-9_-]{22}$")
         if v is None:
             return _MISSING
         if not isinstance(v, list):
@@ -262,15 +269,33 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         for i, s in enumerate(v):
             if not isinstance(s, dict):
                 raise _err(f"'strategy.sources[{i}]' must be a mapping")
-            if s.get("type") not in ("website",):
+            stype = s.get("type")
+            if stype not in ("website", "rss", "youtube"):
                 raise _err(f"'strategy.sources[{i}].type' unsupported")
-            if not str(s.get("url", "")).strip():
-                raise _err(f"'strategy.sources[{i}].url' required")
             n = s.get("n", 3)
             if not isinstance(n, int) or n < 1:
                 raise _err(f"'strategy.sources[{i}].n' must be int >= 1")
-            out.append({"type": s["type"], "url": str(s["url"]).strip(),
-                        "n": int(n)})
+            entry: dict = {"type": stype, "n": int(n)}
+            if stype == "youtube":
+                cid = str(s.get("channel_id", "")).strip()
+                if not _yt.match(cid):
+                    raise _err(f"'strategy.sources[{i}].channel_id' "
+                               f"must be a YouTube channel id (UC…)")
+                entry["channel_id"] = cid
+            else:
+                if not str(s.get("url", "")).strip():
+                    raise _err(f"'strategy.sources[{i}].url' required")
+                entry["url"] = str(s.get("url")).strip()
+            sid = s.get("source_id")
+            if sid is not None:
+                if not isinstance(sid, str) or not sid.strip() \
+                        or len(sid) > 500:
+                    raise _err(f"'strategy.sources[{i}].source_id' "
+                               f"must be a non-empty string ≤ 500 chars")
+                entry["source_id"] = sid.strip()
+            if s.get("enabled") is False:
+                entry["enabled"] = False
+            out.append(entry)
         return out
 
     b = strat_cfg.get("brand") or {}

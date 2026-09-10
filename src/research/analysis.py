@@ -90,6 +90,13 @@ def _policy_view(policy) -> dict:
     if not all(isinstance(x, dict) for x in (brand, language, media)):
         raise AnalysisError("invalid-policy")
     pillars = policy.get("pillars") or []
+    if not pillars:
+        # Resolved Channel Strategy nests pillars under
+        # content.content_pillars (profile.py); accept both so the
+        # pillar gate actually fires on run_cycle policy dicts.
+        content = policy.get("content") or {}
+        if isinstance(content, dict):
+            pillars = content.get("content_pillars") or []
     if not isinstance(pillars, list) or \
             not all(isinstance(p, str) for p in pillars):
         raise AnalysisError("invalid-policy")

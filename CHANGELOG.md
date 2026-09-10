@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.28.0 — Phase 14: pillar gating fix + rss/youtube/enabled sources
+
+- Analysis `_policy_view` now falls back to resolved
+  `content.content_pillars`, so the pillar gate actually fires
+  on run_cycle policy dicts (previously inert: always
+  pillars=[]). No contract change; mocks deterministic.
+- Strategy sources accept `rss` (url) and `youtube`
+  (strict `UC…` channel_id) alongside `website`, plus
+  optional `source_id` identity override and `enabled`
+  flag. Old website-only entries load byte-identical.
+  `run_cycle` skips `enabled: false` sources; legacy
+  `run.py` fails closed (exit 2) on non-website with a
+  pointer to run_cycle.py.
+- 7 tests (pillar match/mismatch/empty, sources
+  roundtrip/compat/fail-closed/skip/legacy-guard).
+  475/475 pass (was 468).
+
 ## 0.27.0 — Phase 12: language/colors/logo as Strategy fields
 
 - Schema: `Brand.colors` + `Brand.logo_url` (visual identity

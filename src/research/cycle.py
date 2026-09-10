@@ -166,6 +166,8 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
         cta_style = str(brand.get("cta_style") or "Learn more")
 
         for source in sources or []:
+            if source.get("enabled") is False:
+                continue
             stype = (source.get("type") or "").strip().lower()
             n = max(1, int(source.get("n") or 3))
             if stype == "rss":
