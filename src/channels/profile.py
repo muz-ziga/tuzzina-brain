@@ -14,6 +14,22 @@ from typing import Any
 from channels.strategy import _MISSING as _MISSING, _is_set as _is_set
 
 
+def _lang_cfg(project_cfg, strategy) -> dict:
+    """Project cfg with the strategy language override applied:
+    channel wins per leaf when set, campaign stays the fallback.
+    Shallow copy — the caller's dict is never mutated."""
+    proj_lang = dict(project_cfg.get("language") or {})
+    lang = getattr(strategy, "language", None)
+    if lang is not None:
+        if _is_set(getattr(lang, "default", _MISSING)):
+            proj_lang["default"] = lang.default
+        if _is_set(getattr(lang, "output_override", _MISSING)):
+            proj_lang["output_override"] = lang.output_override
+    cfg = dict(project_cfg)
+    cfg["language"] = proj_lang
+    return cfg
+
+
 def _finalize(integration_id, channel_meta, brand, hashtags, links_policy,
               project_cfg, extras) -> dict:
     proj_lang = project_cfg.get("language") or {}
@@ -69,8 +85,10 @@ def resolve_strategy(project_cfg: dict, strategy,
         "cta_style": _b(lambda b: b.cta_style,
                         proj_brand.get("cta_style", "Learn more")),
         "voice": _b(lambda b: b.voice, proj_brand.get("voice", "")),
-        "colors": [],
-        "logo_url": "",
+        "colors": _b(lambda b: b.colors,
+                     list(proj_brand.get("colors") or [])),
+        "logo_url": _b(lambda b: b.logo_url,
+                       proj_brand.get("logo_url", "")),
     }
 
     h = strategy.hashtags
@@ -134,7 +152,8 @@ def resolve_strategy(project_cfg: dict, strategy,
     }
 
     out = _finalize(strategy.integration_id, channel_meta, brand_merged,
-                    hashtags_merged, links, project_cfg,
+                    hashtags_merged, links, _lang_cfg(project_cfg,
+                                                      strategy),
                     dict(strategy.extras))
     out["sources"] = sources
     out["sources_from"] = sources_from

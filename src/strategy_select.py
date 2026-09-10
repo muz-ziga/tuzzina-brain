@@ -139,10 +139,11 @@ def _ask_strategy_fields() -> dict:
 
 
 def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
-    from channels.strategy import (MediaPolicy, MentionPolicy,
-                                    VisualPolicy, _MISSING)
+    from channels.strategy import (LanguagePolicy, MediaPolicy,
+                                    MentionPolicy, VisualPolicy, _MISSING)
     b = f.get("brand") or {}
     h = f.get("hashtags") or {}
+    lg = f.get("language") or {}
     c = f.get("content") or {}
     g = f.get("generation") or {}
     p = f.get("planning") or {}
@@ -172,6 +173,12 @@ def _fields_to_strategy(integration_id: str, f: dict) -> ChannelStrategy:
             preferred_words=list(b.get("preferred_words") or []),
             cta_style=b.get("cta_style") or "Learn more",
             voice=b.get("voice") or "",
+            colors=list(b.get("colors") or []),
+            logo_url=b.get("logo_url") or "",
+        ),
+        language=LanguagePolicy(
+            default=lg.get("default") or _MISSING,
+            output_override=lg.get("output_override") or _MISSING,
         ),
         hashtags=HashtagPolicy(
             enabled=bool(h.get("enabled", True)),

@@ -26,6 +26,19 @@ class Brand:
     # Writing persona/style ("direct", "warm expert", ...). Plain
     # strategy data — never an audio/TTS provider configuration.
     voice: Any = _MISSING
+    # Visual identity hints (hex/name strings, logo URL). Plain
+    # strategy data: Brain renders them into image/video prompts;
+    # Tuzzina still owns media transport/storage.
+    colors: Any = _MISSING
+    logo_url: Any = _MISSING
+
+
+@dataclass
+class LanguagePolicy:
+    # Per-integration language override. Channel wins when set;
+    # campaign language remains the fallback. Plain strategy data.
+    default: Any = _MISSING
+    output_override: Any = _MISSING
 
 
 @dataclass
@@ -100,6 +113,7 @@ class ChannelStrategy:
     """
     integration_id: str = ""
     brand: Brand = field(default_factory=Brand)
+    language: LanguagePolicy = field(default_factory=LanguagePolicy)
     hashtags: HashtagPolicy = field(default_factory=HashtagPolicy)
     links_policy: Any = _MISSING
     mentions: MentionPolicy = field(default_factory=MentionPolicy)

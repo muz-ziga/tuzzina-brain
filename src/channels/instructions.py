@@ -9,6 +9,12 @@ video, research analysis alike.
 
 Pure function, no I/O, no secrets. Empty policy -> empty string
 (legacy behavior preserved).
+
+Role routing: `build()` carries brand/content/language for the
+text-side roles (research, analysis, text) and NEVER visual
+identity. `build_visual()` carries colors/logo/visual/video
+rules for the image/video roles only. Research/Analysis prompts
+must not receive visual data.
 """
 
 
@@ -67,3 +73,32 @@ def build(policy: dict | None) -> str:
         return ""
     return "Channel instructions:\n" + "\n".join(f"- {ln}"
                                                  for ln in lines)
+
+
+def build_visual(policy: dict | None) -> str:
+    """Render visual identity into a prompt block for image/video
+    roles only ("" when empty). Colors/logo come from the merged
+    brand; rules come from the merged visual policy."""
+    p = policy or {}
+    brand = p.get("brand") or {}
+    visual = p.get("visual") or {}
+    lines: list[str] = []
+
+    colors = [c for c in list(brand.get("colors") or []) if c]
+    if colors:
+        lines.append("Brand colors: " + ", ".join(colors) + ".")
+    logo = brand.get("logo_url") or ""
+    if logo:
+        lines.append(f"Brand logo: {logo}.")
+
+    visual_rules = list(visual.get("visual_rules") or [])
+    if visual_rules:
+        lines.append("Image rules: " + "; ".join(visual_rules) + ".")
+    video_rules = list(visual.get("video_rules") or [])
+    if video_rules:
+        lines.append("Video rules: " + "; ".join(video_rules) + ".")
+
+    if not lines:
+        return ""
+    return "Visual instructions:\n" + "\n".join(f"- {ln}"
+                                                for ln in lines)

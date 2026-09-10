@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.27.0 — Phase 12: language/colors/logo as Strategy fields
+
+- Schema: `Brand.colors` + `Brand.logo_url` (visual identity
+  hints, plain strategy data) and `LanguagePolicy`
+  (`default`, `output_override`) as a per-integration
+  Strategy-level override. No provider/auth fields.
+- Store: YAML roundtrip for all three (`strategy.language`
+  mapping, `strategy.brand.colors|logo_url`) with strict
+  type validation; old YAMLs without them load unchanged
+  (safe `_MISSING` defaults, fail-closed on wrong types).
+- Merge: channel wins per leaf; campaign `colors`/`logo_url`
+  are now fallback instead of silently discarded; strategy
+  language overrides campaign language per leaf.
+- Skill routing: new pure `build_visual()` (colors, logo,
+  visual/video rules) appended to image/video prompts only;
+  text-side `build()` unchanged (language already there,
+  no colors/logo leak into research/analysis/text).
+- CLI `select.py` passes the new fields through.
+- 11 tests (old-compat, roundtrip, fail-closed, fallback,
+  override, routing, image/video reception, secrecy).
+  468/468 pass (was 457).
+
 ## 0.26.0 — Phase 11: provider-agnostic content generation skill
 
 - New `src/channels/instructions.py`: pure builder rendering the

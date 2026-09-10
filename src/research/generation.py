@@ -75,9 +75,13 @@ def _prompt_for(topic: str, facts: list,
     base = f"{topic} :: {first}".strip(" :")
     if policy:
         from channels.instructions import build as _skill
+        from channels.instructions import build_visual as _visual
         skill = _skill(policy)
         if skill:
-            return base + "\n" + skill
+            base += "\n" + skill
+        seen = _visual(policy)
+        if seen:
+            base += "\n" + seen
     return base
 
 

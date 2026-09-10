@@ -119,6 +119,8 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
     out: dict = {"integration_id": s.integration_id, "strategy": {}}
     strat = out["strategy"]
     strat["brand"] = _brand_to(s.brand)
+    if _is_set(s.language.default) or _is_set(s.language.output_override):
+        strat["language"] = _language_to(s.language)
     if _is_set(s.hashtags.enabled) or _is_set(s.hashtags.max) or \
             _is_set(s.hashtags.preferred):
         strat["hashtags"] = _hash_to(s.hashtags)
@@ -154,10 +156,21 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
 def _brand_to(b) -> dict:
     out = {}
     for k in ("tone", "audience", "banned_words", "preferred_words",
-              "cta_style", "voice"):
+              "cta_style", "voice", "logo_url"):
         v = getattr(b, k)
         if _is_set(v):
             out[k] = list(v) if k in ("banned_words", "preferred_words") else v
+    if _is_set(b.colors):
+        out["colors"] = list(b.colors)
+    return out
+
+
+def _language_to(l) -> dict:
+    out = {}
+    if _is_set(l.default):
+        out["default"] = l.default
+    if _is_set(l.output_override):
+        out["output_override"] = l.output_override
     return out
 
 
@@ -219,8 +232,9 @@ def _planning_to(p) -> dict:
 def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
     from channels.strategy import (Brand, ChannelStrategy, ContentPolicy,
                                     GenerationPolicy, HashtagPolicy,
-                                    MediaPolicy, MentionPolicy,
-                                    PlanningPolicy, VisualPolicy, _MISSING)
+                                    LanguagePolicy, MediaPolicy,
+                                    MentionPolicy, PlanningPolicy,
+                                    VisualPolicy, _MISSING)
 
     integ = cfg.get("integration_id", "")
     strat_cfg = cfg.get("strategy") or {}
@@ -260,6 +274,14 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         return out
 
     b = strat_cfg.get("brand") or {}
+    _colors = b.get("colors")
+    if _colors is not None and (not isinstance(_colors, list) or
+                                not all(isinstance(x, str)
+                                        for x in _colors)):
+        raise _err("'strategy.brand.colors' must be a list of strings")
+    _logo = b.get("logo_url")
+    if _logo is not None and not isinstance(_logo, str):
+        raise _err("'strategy.brand.logo_url' must be a string")
     brand = Brand(
         tone=_opt_str(b.get("tone")),
         audience=_opt_str(b.get("audience")),
@@ -267,6 +289,20 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         preferred_words=_opt_list(b.get("preferred_words")),
         cta_style=_opt_str(b.get("cta_style")),
         voice=_opt_str(b.get("voice")),
+        colors=_opt_list(_colors),
+        logo_url=_opt_str(_logo),
+    )
+
+    lg = strat_cfg.get("language") or {}
+    if not isinstance(lg, dict):
+        raise _err("'strategy.language' must be a mapping")
+    for _lk in ("default", "output_override"):
+        _lv = lg.get(_lk)
+        if _lv is not None and not isinstance(_lv, str):
+            raise _err(f"'strategy.language.{_lk}' must be a string")
+    language = LanguagePolicy(
+        default=_opt_str(lg.get("default")),
+        output_override=_opt_str(lg.get("output_override")),
     )
 
     h = strat_cfg.get("hashtags") or {}
@@ -338,6 +374,7 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
     return ChannelStrategy(
         integration_id=integ,
         brand=brand,
+        language=language,
         hashtags=hashtags,
         links_policy=strat_cfg.get("links_policy", _MISSING),
         mentions=mentions,

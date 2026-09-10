@@ -83,10 +83,14 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
                       "source": "extracted"})
     elif image_gen is not None:
         from channels.instructions import build as _skill
+        from channels.instructions import build_visual as _visual
         _iprompt = f"{item.title} :: {summary[:200]}"
         _skill_block = _skill(policy)
         if _skill_block:
             _iprompt += "\n" + _skill_block
+        _visual_block = _visual(policy)
+        if _visual_block:
+            _iprompt += "\n" + _visual_block
         media.append({"kind": "generator", "generator": image_gen,
                       "prompt": _iprompt})
     settings = {"__type": platform}
