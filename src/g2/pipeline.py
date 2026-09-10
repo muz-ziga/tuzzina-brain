@@ -82,13 +82,11 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
         media.append({"kind": "url", "url": item.images[0],
                       "source": "extracted"})
     elif image_gen is not None:
-        from channels.instructions import build as _skill
+        # Delegated image prompt: visual block only, no video
+        # rules, no text-side instructions.
         from channels.instructions import build_visual as _visual
         _iprompt = f"{item.title} :: {summary[:200]}"
-        _skill_block = _skill(policy)
-        if _skill_block:
-            _iprompt += "\n" + _skill_block
-        _visual_block = _visual(policy)
+        _visual_block = _visual(policy, video_rules=False)
         if _visual_block:
             _iprompt += "\n" + _visual_block
         media.append({"kind": "generator", "generator": image_gen,

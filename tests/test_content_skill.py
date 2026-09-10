@@ -62,9 +62,17 @@ class BuildTest(unittest.TestCase):
             self.assertIn(needle, out)
 
     def test_d_visual_lines(self):
+        # Visual rules live ONLY in the visual builder (image/video
+        # roles); the text-side builder must not carry them.
+        from channels.instructions import build_visual
         out = build(_policy())
-        self.assertIn("no text overlays", out)
-        self.assertIn("vertical 9:16", out)
+        self.assertNotIn("no text overlays", out)
+        self.assertNotIn("vertical 9:16", out)
+        vis = build_visual(_policy())
+        self.assertIn("no text overlays", vis)
+        self.assertIn("vertical 9:16", vis)
+        self.assertEqual(build_visual(None), "")
+        self.assertEqual(build_visual({}), "")
 
     def test_e_language_override_wins(self):
         self.assertIn("ar", build(_policy()))
@@ -180,7 +188,8 @@ class LivePromptTest(unittest.TestCase):
         am = OpenAIAnalysisModel(adapter=FakeAdapter(_analysis_inner()))
         opp = am.analyze(res, pol, [_item()])
         self.assertTrue(opp.eligible)
-        self.assertIn("no text overlays", am._adapter.seen[0][1])
+        self.assertIn("mastering", am._adapter.seen[0][1])
+        self.assertNotIn("no text overlays", am._adapter.seen[0][1])
         tg = OpenAITextGenerator(adapter=FakeAdapter("hello post"))
         tg._adapter.seen = []
         tg.generate("T", "S", pol["brand"], pol)
@@ -229,6 +238,8 @@ class PlanPipelineTest(unittest.TestCase):
             facts=["Juzzir launched X"], media_intent="image"),
             policy=pol)
         self.assertIn("no text overlays", img.image.prompt)
+        self.assertNotIn("vertical 9:16", img.image.prompt)
+        self.assertNotIn("Channel instructions", img.image.prompt)
         self.assertTrue(img.image.prompt.startswith(
             "mastering :: Juzzir launched X"))
         vid = plan_generation(SimpleNamespace(
@@ -236,6 +247,8 @@ class PlanPipelineTest(unittest.TestCase):
             facts=["Juzzir launched X"], media_intent="video"),
             policy=pol)
         self.assertIn("vertical 9:16", vid.video.prompt)
+        self.assertIn("no text overlays", vid.video.prompt)
+        self.assertNotIn("Channel instructions", vid.video.prompt)
         bare = plan_generation(SimpleNamespace(
             eligible=True, topic="mastering",
             facts=["Juzzir launched X"], media_intent="image"))
@@ -283,6 +296,78 @@ class PlanPipelineTest(unittest.TestCase):
                             MockTextGenerator(), None,
                             platform="facebook", policy=pol)
         self.assertTrue(pkg.content)
+
+
+class RoutingTest(unittest.TestCase):
+    """Phase 14A §6: visual identity reaches image/video only;
+    research/analysis/text prompts never carry visual data."""
+
+    def test_visual_rules_not_in_research(self):
+        from research.models import OpenAIResearchModel
+        pol = _policy()
+        rm = OpenAIResearchModel(adapter=FakeAdapter(_research_inner()))
+        rm.research([_item()], pol)
+        prompt, context = rm._adapter.seen[0]
+        self.assertNotIn("no text overlays", prompt + context)
+        self.assertNotIn("vertical 9:16", prompt + context)
+        self.assertNotIn("Brand colors", prompt + context)
+
+    def test_visual_rules_not_in_analysis(self):
+        from research.models import OpenAIResearchModel
+        from research.analysis import OpenAIAnalysisModel
+        pol = _policy()
+        rm = OpenAIResearchModel(adapter=FakeAdapter(_research_inner()))
+        res = rm.research([_item()], pol)
+        am = OpenAIAnalysisModel(adapter=FakeAdapter(_analysis_inner()))
+        am.analyze(res, pol, [_item()])
+        prompt, context = am._adapter.seen[0]
+        self.assertNotIn("no text overlays", prompt + context)
+        self.assertNotIn("vertical 9:16", prompt + context)
+        self.assertNotIn("Brand colors", prompt + context)
+
+    def test_visual_rules_not_in_text(self):
+        from g2.generators import OpenAITextGenerator
+        pol = _policy()
+        tg = OpenAITextGenerator(adapter=FakeAdapter("hello post"))
+        tg.generate("T", "S", pol["brand"], pol)
+        prompt, _ = tg._adapter.seen[0]
+        self.assertNotIn("no text overlays", prompt)
+        self.assertNotIn("Brand colors", prompt)
+
+    def test_video_rules_not_in_text_but_in_video(self):
+        from g2.generators import OpenAITextGenerator
+        from research.generation import plan_generation
+        pol = _policy()
+        tg = OpenAITextGenerator(adapter=FakeAdapter("hello post"))
+        tg.generate("T", "S", pol["brand"], pol)
+        self.assertNotIn("vertical 9:16", tg._adapter.seen[0][0])
+        vid = plan_generation(SimpleNamespace(
+            eligible=True, topic="T", facts=["f"],
+            media_intent="video"), policy=pol)
+        self.assertIn("vertical 9:16", vid.video.prompt)
+
+    def test_visual_rules_reach_image_prompts(self):
+        from g2.pipeline import build_package
+        from g2.generators import MockImageGenerator, MockTextGenerator
+        pol = _policy()
+        pkg = build_package(_item(), pol["brand"], pol["language"],
+                            {"enabled": False}, "hide",
+                            MockTextGenerator(), MockImageGenerator(),
+                            platform="facebook", policy=pol)
+        self.assertIn("no text overlays", pkg.media[0]["prompt"])
+        self.assertNotIn("vertical 9:16", pkg.media[0]["prompt"])
+        self.assertNotIn("Channel instructions",
+                         pkg.media[0]["prompt"])
+
+    def test_visual_builder_splits_image_and_video(self):
+        from channels.instructions import build_visual
+        pol = _policy()
+        img = build_visual(pol, video_rules=False)
+        self.assertIn("no text overlays", img)
+        self.assertNotIn("vertical 9:16", img)
+        vid = build_visual(pol, video_rules=True)
+        self.assertIn("no text overlays", vid)
+        self.assertIn("vertical 9:16", vid)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.29.0 — Phase 14A: scope visual rules to image/video prompts
+
+- `build()` no longer renders `visual_rules`/`video_rules`:
+  text-side prompts (research, analysis, text) never carry
+  visual data. `build_visual(policy, video_rules=True)` keeps
+  colors/logo/visual rules for image+video, adding video rules
+  for video roles only.
+- `_prompt_for` gains `for_video` (image vs video prompts);
+  pipeline delegated image prompts use the visual block with
+  `video_rules=False`. Empty-policy behavior unchanged.
+- 6 routing tests (research/analysis/text exclusion,
+  image+video reception, split builder). 481/481 pass.
+
 ## 0.28.0 — Phase 14: pillar gating fix + rss/youtube/enabled sources
 
 - Analysis `_policy_view` now falls back to resolved

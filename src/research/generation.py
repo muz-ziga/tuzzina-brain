@@ -70,16 +70,15 @@ class GenerationPlan:
 
 
 def _prompt_for(topic: str, facts: list,
-                policy: dict | None = None) -> str:
+                policy: dict | None = None,
+                for_video: bool = False) -> str:
     first = (facts[0] if facts else "")[:200]
     base = f"{topic} :: {first}".strip(" :")
     if policy:
-        from channels.instructions import build as _skill
+        # Image/video prompts receive ONLY the visual block
+        # (text-side instructions stay in the text role).
         from channels.instructions import build_visual as _visual
-        skill = _skill(policy)
-        if skill:
-            base += "\n" + skill
-        seen = _visual(policy)
+        seen = _visual(policy, video_rules=for_video)
         if seen:
             base += "\n" + seen
     return base
@@ -115,12 +114,14 @@ def plan_generation(opportunity, items=None,
     video = None
     if media == "image":
         image = ImageRequest(
-            prompt=_prompt_for(topic, facts, policy))
+            prompt=_prompt_for(topic, facts, policy,
+                               for_video=False))
     elif media == "video":
         cfg = video_config if isinstance(video_config, dict) else {}
         params = cfg.get("video_params")
         video = VideoRequest(
-            prompt=_prompt_for(topic, facts, policy),
+            prompt=_prompt_for(topic, facts, policy,
+                               for_video=True),
             video_type=str(cfg.get("video_type") or ""),
             output=str(cfg.get("output") or ""),
             params=dict(params) if isinstance(params, dict) else {})

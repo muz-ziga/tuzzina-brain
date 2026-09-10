@@ -12,9 +12,10 @@ Pure function, no I/O, no secrets. Empty policy -> empty string
 
 Role routing: `build()` carries brand/content/language for the
 text-side roles (research, analysis, text) and NEVER visual
-identity. `build_visual()` carries colors/logo/visual/video
-rules for the image/video roles only. Research/Analysis prompts
-must not receive visual data.
+identity or visual/video rules. `build_visual()` carries
+colors/logo/visual rules for image AND video roles, plus video
+rules for video roles only. Research/Analysis/Text prompts must
+not receive visual data.
 """
 
 
@@ -24,7 +25,6 @@ def build(policy: dict | None) -> str:
     brand = p.get("brand") or {}
     content = p.get("content") or {}
     generation = p.get("generation") or {}
-    visual = p.get("visual") or {}
     language = p.get("language") or {}
     lines: list[str] = []
 
@@ -58,13 +58,6 @@ def build(policy: dict | None) -> str:
     if prompt_style:
         lines.append(f"Generation style: {prompt_style}.")
 
-    visual_rules = list(visual.get("visual_rules") or [])
-    if visual_rules:
-        lines.append("Image rules: " + "; ".join(visual_rules) + ".")
-    video_rules = list(visual.get("video_rules") or [])
-    if video_rules:
-        lines.append("Video rules: " + "; ".join(video_rules) + ".")
-
     lang = language.get("output_override") or language.get("default") or ""
     if lang:
         lines.append(f"Write in language: {lang}.")
@@ -75,10 +68,13 @@ def build(policy: dict | None) -> str:
                                                  for ln in lines)
 
 
-def build_visual(policy: dict | None) -> str:
+def build_visual(policy: dict | None,
+                 video_rules: bool = True) -> str:
     """Render visual identity into a prompt block for image/video
     roles only ("" when empty). Colors/logo come from the merged
-    brand; rules come from the merged visual policy."""
+    brand; rules come from the merged visual policy. Video rules
+    are included only when `video_rules` is true (video roles);
+    image roles call with video_rules=False."""
     p = policy or {}
     brand = p.get("brand") or {}
     visual = p.get("visual") or {}
@@ -94,9 +90,10 @@ def build_visual(policy: dict | None) -> str:
     visual_rules = list(visual.get("visual_rules") or [])
     if visual_rules:
         lines.append("Image rules: " + "; ".join(visual_rules) + ".")
-    video_rules = list(visual.get("video_rules") or [])
     if video_rules:
-        lines.append("Video rules: " + "; ".join(video_rules) + ".")
+        rules = list(visual.get("video_rules") or [])
+        if rules:
+            lines.append("Video rules: " + "; ".join(rules) + ".")
 
     if not lines:
         return ""
