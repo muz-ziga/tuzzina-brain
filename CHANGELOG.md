@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.30.0 — Phase 15: OpenCode Zen provider adapter
+
+- New `OpenCodeZenAdapter` (`opencode_zen`): Zen's
+  OpenAI-compatible chat completions surface
+  (`https://opencode.ai/zen/v1/chat/completions`, Bearer
+  auth). Subclasses OpenAIAdapter (same protocol, no code
+  duplication); the assignment model id passes through
+  unchanged and no default model is invented (empty model
+  fails closed as a provider error).
+- Closed dispatch extended; role resolution, prompts,
+  Strategy/Skill, and error conventions untouched.
+- 12 tests (protocol shape/passthrough, no-default-model,
+  errors/timeout, role independence, strategy-instruction
+  parity, secrecy, dispatch set). 493/493 pass (was 481).
+
 ## 0.29.0 — Phase 14A: scope visual rules to image/video prompts
 
 - `build()` no longer renders `visual_rules`/`video_rules`:

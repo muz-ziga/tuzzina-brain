@@ -13,7 +13,8 @@ import urllib.request
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from llm.adapters import (ADAPTERS, LLMError, AnthropicAdapter,
-                          OpenAIAdapter, resolve_adapter)
+                           OpenAIAdapter, OpenCodeZenAdapter,
+                           resolve_adapter)
 
 
 def _openai_envelope(text="hello world"):
@@ -90,6 +91,10 @@ def fake_urlopen(req, timeout=None):
         return FakeResp(_anthropic_msg(_research_json()))
     if kind == "anthropic-analysis":
         return FakeResp(_anthropic_msg(_analysis_json()))
+    if kind == "zen-ok":
+        return FakeResp(_openai_envelope())
+    if kind == "zen-research":
+        return FakeResp(_openai_envelope(_research_json()))
     if kind == "http-500":
         return FakeResp({}, 500)
     if kind == "http-401":
@@ -269,6 +274,113 @@ class AnthropicProtocolCase(unittest.TestCase):
             AnthropicAdapter("")
 
 
+class ZenProtocolCase(unittest.TestCase):
+    """OpenCode Zen speaks the OpenAI-compatible chat completions
+    surface against its own base URL; the model id passes through
+    unchanged and no default model is invented."""
+
+    def setUp(self):
+        CALLS.clear()
+        self._orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        fake_urlopen.mode = "zen-ok"
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig
+
+    def test_valid_response(self):
+        a = OpenCodeZenAdapter("zk", "some-model-id")
+        self.assertEqual(a.complete("sys", "user"), "hello world")
+
+    def test_request_shape(self):
+        OpenCodeZenAdapter("zk", "some-model-id").complete(
+            "sys", "user", temperature=0.2, max_tokens=10, timeout=5)
+        self.assertEqual(len(CALLS), 1)
+        c = CALLS[0]
+        self.assertEqual(
+            c["url"], "https://opencode.ai/zen/v1/chat/completions")
+        self.assertEqual(c["headers"].get("authorization"), "Bearer zk")
+        self.assertEqual(c["body"]["model"], "some-model-id")
+        self.assertEqual(c["body"]["temperature"], 0.2)
+        self.assertEqual(c["body"]["max_tokens"], 10)
+        self.assertEqual(c["body"]["messages"],
+                         [{"role": "system", "content": "sys"},
+                          {"role": "user", "content": "user"}])
+
+    def test_no_default_model(self):
+        a = OpenCodeZenAdapter("zk")
+        self.assertEqual(a.model, "")
+
+    def test_malformed_response(self):
+        fake_urlopen.mode = "garbage"
+        with self.assertRaises(LLMError):
+            OpenCodeZenAdapter("zk", "m").complete("s", "u", timeout=1)
+
+    def test_empty_content(self):
+        class R(FakeResp):
+            def read(self):
+                return _openai_envelope("   ").encode()
+        urllib.request.urlopen = lambda *a, **k: R("")
+        with self.assertRaises(LLMError) as ctx:
+            OpenCodeZenAdapter("zk", "m").complete("s", "u", timeout=1)
+        self.assertIn("empty-content", str(ctx.exception))
+
+    def test_http_error(self):
+        fake_urlopen.mode = "http-401"
+        with self.assertRaises(LLMError) as ctx:
+            OpenCodeZenAdapter("zk", "m").complete("s", "u", timeout=1)
+        self.assertIn("http-401", str(ctx.exception))
+
+    def test_timeout_propagates_raw(self):
+        fake_urlopen.mode = "timeout"
+        with self.assertRaises(TimeoutError):
+            OpenCodeZenAdapter("zk", "m").complete("s", "u", timeout=1)
+
+    def test_needs_key(self):
+        with self.assertRaises(ValueError):
+            OpenCodeZenAdapter("")
+
+    def test_roles_use_zen_independently(self):
+        from research.models import OpenAIResearchModel
+        from g2.generators import OpenAITextGenerator
+        from contracts import SourceItem
+        it = SourceItem(source_id="g-1", source_type="rss",
+                        source_url="u", title="T", text="Body words.",
+                        item_id="g-1", content_hash="h")
+        fake_urlopen.mode = "zen-research"
+        r = OpenAIResearchModel(
+            adapter=OpenCodeZenAdapter("zk", "zm")).research([it])
+        self.assertTrue(r.summary)
+        self.assertEqual(CALLS[0]["body"]["model"], "zm")
+        fake_urlopen.mode = "openai-ok"
+        t = OpenAITextGenerator(
+            adapter=OpenAIAdapter("ok", "om")).generate("T", "S", {})
+        self.assertTrue(t)
+        urls = [c["url"] for c in CALLS]
+        self.assertTrue(any("opencode.ai/zen" in u for u in urls))
+        self.assertTrue(any("openai.com" in u for u in urls))
+
+    def test_strategy_instructions_unchanged_through_zen(self):
+        from g2.generators import OpenAITextGenerator
+        pol = {"brand": {"tone": "bold", "voice": "direct"},
+               "content": {"content_pillars": ["tips"]},
+               "generation": {"prompt_style": "punchy"},
+               "language": {"default": "ar"}}
+        tg = OpenAITextGenerator(
+            adapter=OpenCodeZenAdapter("zk", "zm"))
+        tg.generate("T", "S", pol["brand"], pol)
+        sys_prompt = CALLS[0]["body"]["messages"][0]["content"]
+        for needle in ("bold", "direct", "tips", "punchy"):
+            self.assertIn(needle, sys_prompt)
+
+    def test_key_absent_from_output(self):
+        from g2.generators import OpenAITextGenerator
+        out = OpenAITextGenerator(
+            adapter=OpenCodeZenAdapter("zen-secret-9", "m")).generate(
+                "T", "S", {})
+        self.assertNotIn("zen-secret-9", out)
+
+
 class DispatchCase(unittest.TestCase):
     def test_openai_resolves(self):
         self.assertIs(resolve_adapter("openai"), OpenAIAdapter)
@@ -276,13 +388,18 @@ class DispatchCase(unittest.TestCase):
     def test_anthropic_resolves(self):
         self.assertIs(resolve_adapter("anthropic"), AnthropicAdapter)
 
+    def test_zen_resolves(self):
+        self.assertIs(resolve_adapter("opencode_zen"), OpenCodeZenAdapter)
+
     def test_unknown_fails_closed(self):
-        for bad in ("gemini", "OPENAI", "", None, "openai "):
+        for bad in ("gemini", "OPENAI", "", None, "openai ",
+                    "opencode", "zen"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 resolve_adapter(bad)
 
     def test_closed_set_exact(self):
-        self.assertEqual(set(ADAPTERS), {"openai", "anthropic"})
+        self.assertEqual(set(ADAPTERS),
+                         {"openai", "anthropic", "opencode_zen"})
         for key, cls in ADAPTERS.items():
             self.assertEqual(cls.adapter_key, key)
             self.assertTrue(hasattr(cls, "complete"))

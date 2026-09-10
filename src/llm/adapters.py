@@ -142,9 +142,27 @@ class AnthropicAdapter:
         return text
 
 
+class OpenCodeZenAdapter(OpenAIAdapter):
+    """OpenCode Zen via its OpenAI-compatible chat completions
+    surface. Same protocol as OpenAIAdapter (Bearer auth,
+    messages[] body, choices[] extraction) against Zen's base
+    URL; the model id passes through unchanged from the role
+    assignment. No default model: Zen serves many model ids and
+    inventing one would silently pick a vendor. An empty or
+    unsupported model fails closed as a provider error."""
+
+    adapter_key = "opencode_zen"
+    base_url = "https://opencode.ai/zen"
+
+    def __init__(self, api_key: str = "", model: str = "",
+                 base_url: str = ""):
+        super().__init__(api_key, model, base_url or self.base_url)
+
+
 ADAPTERS = {
     OpenAIAdapter.adapter_key: OpenAIAdapter,
     AnthropicAdapter.adapter_key: AnthropicAdapter,
+    OpenCodeZenAdapter.adapter_key: OpenCodeZenAdapter,
 }
 
 
