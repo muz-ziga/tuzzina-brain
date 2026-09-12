@@ -21,6 +21,7 @@ existing *-timeout categories.
 """
 from __future__ import annotations
 import json
+import re
 import socket
 import urllib.error
 import urllib.request
@@ -28,19 +29,68 @@ import urllib.request
 
 class LLMError(Exception):
     """Transport/provider failure with a short safe detail
-    (e.g. "http-401", "refusal:end_turn", "empty-content").
+    (e.g. "http-401", "http-400: <redacted provider excerpt>",
+    "refusal:end_turn", "empty-content").
     Never carries keys, headers, or bodies."""
 
 
 PRODUCT_UA = "Tuzzina/1.0 (+https://www.juzzir.com)"
 
 
+# Error-body handling: non-2xx responses keep a short excerpt so
+# a bare status is diagnosable. Only the body text is kept (never
+# headers), secrets are redacted, and the excerpt is capped: the
+# full provider body is never stored or logged.
+_ERROR_BODY_BYTES = 4096
+_ERROR_EXCERPT_CHARS = 500
+
+_REDACTED = "[REDACTED]"
+
+_SECRET_PATTERNS = (
+    # Bearer tokens and sk-style keys.
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9\-._~+/=]+"),
+    re.compile(r"\bsk-[A-Za-z0-9\-_]+"),
+    # Key assignments: api-key / x-api-key / password / secret /
+    # credential / access_token followed by a delimiter and a value.
+    re.compile(r"(?i)\b(api[_-]?key|x-api-key|password|passwd|"
+               r"secret|credential|access[_-]?token)"
+               r"([\"'\s:=]+)([^\"'\s,}]+)"),
+)
+
+
+def _safe_error_excerpt(raw: bytes) -> str:
+    """Single-line redacted excerpt of a provider error body.
+    Never raises; empty input yields an empty string."""
+    try:
+        text = (raw or b"").decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    text = " ".join(text.split())
+    if not text:
+        return ""
+    text = _SECRET_PATTERNS[0].sub("Bearer " + _REDACTED, text)
+    text = _SECRET_PATTERNS[1].sub("sk-" + _REDACTED, text)
+    text = _SECRET_PATTERNS[2].sub(r"\1\2" + _REDACTED, text)
+    return text[:_ERROR_EXCERPT_CHARS].strip()
+
+
+def _http_error_suffix(err: object) -> str:
+    """`: <excerpt>` for an HTTPError with a readable body, else
+    empty (preserves the bare `http-<status>` contract)."""
+    try:
+        raw = err.read(_ERROR_BODY_BYTES)  # type: ignore[union-attr]
+    except Exception:
+        return ""
+    excerpt = _safe_error_excerpt(raw)
+    return (": " + excerpt) if excerpt else ""
+
+
 def _post_json(url: str, headers: dict, body: dict,
                timeout: int) -> object:
     """POST JSON, return parsed JSON. Raw TimeoutError/socket.timeout
     propagate (roles map them to *-timeout). HTTP errors become
-    LLMError("http-<status>"). Anything else becomes
-    LLMError("transport-<Type>")."""
+    LLMError("http-<status>[: <redacted body excerpt>]"). Anything
+    else becomes LLMError("transport-<Type>")."""
     # Zen edge requires a product UA (Cloudflare blocks stdlib UA).
     # This is a provider HTTP concern, not model-specific; openai.com
     # and anthropic.com are unaffected because the header is only
@@ -56,7 +106,7 @@ def _post_json(url: str, headers: dict, body: dict,
     except (TimeoutError, socket.timeout):
         raise
     except urllib.error.HTTPError as e:
-        raise LLMError(f"http-{e.code}")
+        raise LLMError(f"http-{e.code}{_http_error_suffix(e)}")
     except Exception as e:  # DNS/refused/reset: fail fast, named
         raise LLMError(f"transport-{type(e).__name__}")
     try:

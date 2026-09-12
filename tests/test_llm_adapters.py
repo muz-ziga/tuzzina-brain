@@ -694,5 +694,74 @@ class SecurityCase(unittest.TestCase):
                 self.assertNotIn(bad, code, f"{rel}:{bad}")
 
 
+class HttpErrorBodyCase(unittest.TestCase):
+    """_post_json keeps a safe redacted excerpt of provider error
+    bodies: status plus evidence, never secrets. No network."""
+
+    def setUp(self):
+        self._orig = urllib.request.urlopen
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig
+
+    def _fail(self, code, body: bytes):
+        def _raise(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url, code, "err", {}, io.BytesIO(body))
+        urllib.request.urlopen = _raise
+
+    def _complete(self):
+        with self.assertRaises(LLMError) as ctx:
+            OpenAIAdapter("k", "m").complete("s", "u", timeout=5)
+        return str(ctx.exception)
+
+    def test_400_keeps_json_excerpt(self):
+        self._fail(400, b'{"type":"error","error":'
+                        b'{"type":"invalid_request",'
+                        b'"message":"temperature 0.2 not supported"}}')
+        msg = self._complete()
+        self.assertTrue(msg.startswith("http-400: "))
+        self.assertIn("temperature 0.2 not supported", msg)
+
+    def test_401_redacts_bearer_and_keys(self):
+        self._fail(401, b'{"error":"bad key sk-test-abc123, '
+                        b'header Bearer deadbeef, api_key=supersecret, '
+                        b'password: hunter2"}')
+        msg = self._complete()
+        self.assertIn("http-401", msg)
+        for secret in ("sk-test-abc123", "deadbeef",
+                       "supersecret", "hunter2"):
+            self.assertNotIn(secret, msg)
+        self.assertIn("[REDACTED]", msg)
+
+    def test_403_preserved(self):
+        self._fail(403, b'{"error":{"message":"forbidden region"}}')
+        msg = self._complete()
+        self.assertIn("http-403", msg)
+        self.assertIn("forbidden region", msg)
+
+    def test_large_body_capped(self):
+        self._fail(400, b'{"error":"' + b"x" * 5000 + b'"}')
+        msg = self._complete()
+        self.assertIn("http-400", msg)
+        self.assertLessEqual(len(msg), len("http-400: ") + 500)
+
+    def test_empty_body_keeps_bare_contract(self):
+        self._fail(400, b"")
+        self.assertEqual(self._complete(), "http-400")
+
+    def test_unreadable_body_keeps_bare_contract(self):
+        def _raise(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url, 400, "err", {}, None)
+        urllib.request.urlopen = _raise
+        self.assertEqual(self._complete(), "http-400")
+
+    def test_non_utf8_body_never_raises(self):
+        self._fail(400, b"\xff\xfe\x00bad")
+        msg = self._complete()
+        self.assertTrue(msg.startswith("http-400"))
+
+
 if __name__ == "__main__":
     unittest.main()
