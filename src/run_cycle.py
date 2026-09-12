@@ -56,13 +56,14 @@ def _build_models(mode: str):
     --mock wires Mocks (deterministic, offline; role env is
     ignored by design — mock runs never touch vendors).
     --openai wires real roles, each resolved independently:
-    BRAIN_<ROLE>_ADAPTER (default "openai"), BRAIN_<ROLE>_KEY
-    (default: shared OPENAI_API_KEY), BRAIN_<ROLE>_MODEL
-    (default "gpt-4.1") for ROLE in RESEARCH/ANALYSIS/TEXT.
-    Missing key or unknown adapter raises ValueError (exit 2):
-    no silent fallback to an unrelated default.
+    BRAIN_<ROLE>_ADAPTER (default "openai"), BRAIN_<ROLE>_PROTOCOL
+    (generic, explicit), BRAIN_<ROLE>_KEY (default: shared
+    OPENAI_API_KEY), BRAIN_<ROLE>_MODEL (default "gpt-4.1") for
+    ROLE in RESEARCH/ANALYSIS/TEXT. Missing key or unknown
+    adapter/protocol raises ValueError (exit 2): no silent fallback.
     Per-role switching needs nothing more: adapters are
-    constructed from the resolved triple and injected."""
+    constructed from the resolved quad and injected. Model stays
+    opaque."""
     from research.models import MockResearchModel, OpenAIResearchModel
     from research.analysis import MockAnalysisModel, OpenAIAnalysisModel
     from llm.adapters import resolve_adapter
@@ -75,21 +76,23 @@ def _build_models(mode: str):
         prefix = f"BRAIN_{role}_"
         adapter_key = (os.environ.get(prefix + "ADAPTER") or
                        "openai").strip()
+        protocol = (os.environ.get(prefix + "PROTOCOL") or "").strip() or None
         key = os.environ.get(prefix + "KEY") or shared_key
         if not key:
             raise ValueError(f"{prefix}KEY is not set (and no "
                              f"shared OPENAI_API_KEY)")
         model = os.environ.get(prefix + "MODEL") or "gpt-4.1"
-        adapter_cls = resolve_adapter(adapter_key)
+        adapter_cls = resolve_adapter(adapter_key, protocol)
         built.append(cls(adapter=adapter_cls(key, model)))
     return built[0], built[1]
 
 
 def _build_text_gen(mode: str):
     """Text generator honoring the same per-role env contract
-    (BRAIN_TEXT_ADAPTER/KEY/MODEL). Separated from run._build_
-    generators so the cycle path never inherits legacy defaults
-    silently; behavior for unset env is identical."""
+    (BRAIN_TEXT_ADAPTER/PROTOCOL/KEY/MODEL). Separated from
+    run._build_ generators so the cycle path never inherits legacy
+    defaults silently; behavior for unset env is identical. Protocol
+    is generic and explicit; model stays opaque."""
     from g2.generators import MockTextGenerator, OpenAITextGenerator
     from llm.adapters import resolve_adapter
     if mode != "--openai":
@@ -97,13 +100,14 @@ def _build_text_gen(mode: str):
     shared_key = os.environ.get("OPENAI_API_KEY", "")
     adapter_key = (os.environ.get("BRAIN_TEXT_ADAPTER") or
                    "openai").strip()
+    protocol = (os.environ.get("BRAIN_TEXT_PROTOCOL") or "").strip() or None
     key = os.environ.get("BRAIN_TEXT_KEY") or shared_key
     if not key:
         raise ValueError("BRAIN_TEXT_KEY is not set (and no shared "
                          "OPENAI_API_KEY)")
     model = os.environ.get("BRAIN_TEXT_MODEL") or "gpt-4.1"
     return OpenAITextGenerator(
-        adapter=resolve_adapter(adapter_key)(key, model))
+        adapter=resolve_adapter(adapter_key, protocol)(key, model))
 
 
 def _emit_result(result: dict) -> None:
@@ -221,7 +225,7 @@ def _main(argv=None) -> int:
     research_model, analysis_model = _build_models(args.mode)
     roles_resolved = []
     if args.mode == "--openai":
-        # Echoed for observability (adapter+model only — never
+        # Echoed for observability (adapter+protocol+model — never
         # credentials). Mirrors the resolution order above.
         for role in ("RESEARCH", "ANALYSIS", "TEXT"):
             prefix = f"BRAIN_{role}_"
@@ -229,6 +233,7 @@ def _main(argv=None) -> int:
                 "role": role.lower(),
                 "adapter": (os.environ.get(prefix + "ADAPTER") or
                             "openai").strip(),
+                "protocol": (os.environ.get(prefix + "PROTOCOL") or "").strip() or None,
                 "model": os.environ.get(prefix + "MODEL") or "gpt-4.1",
             })
     if args.dry_run:
