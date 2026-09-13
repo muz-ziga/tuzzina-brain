@@ -120,6 +120,29 @@ def _structure_sketch(data: object) -> str:
     return ": " + _redact_secrets(sketch)[:_SKETCH_TOTAL_CHARS].strip()
 
 
+def unwrap_model_json(raw: str) -> str:
+    """Strip markdown code fences around model JSON output.
+    Some models wrap their JSON-only reply in ```json fences
+    despite JSON-only instructions; the strict validators reject
+    anything that is not parseable, so fences are removed here
+    before parsing. Returns the stripped text unchanged when no
+    fence is present. Never raises."""
+    try:
+        text = (raw or "").strip()
+        if not text.startswith("```"):
+            return text
+        first_nl = text.find("\n")
+        if first_nl == -1:
+            return ""
+        text = text[first_nl + 1:]
+        last = text.rfind("```")
+        if last != -1:
+            text = text[:last]
+        return text.strip()
+    except Exception:
+        return raw or ""
+
+
 def _sketch_body(data: object) -> str:
     if not isinstance(data, dict):
         return "typeof=" + _type_name(data)

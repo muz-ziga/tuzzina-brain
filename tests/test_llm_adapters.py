@@ -1128,5 +1128,53 @@ class GenericEndpointCase(unittest.TestCase):
                 self.assertNotIn(bad, code, rel)
 
 
+class FencedJsonCase(unittest.TestCase):
+    """Models may fence JSON-only replies in markdown; the strict
+    validators accept fenced JSON identically. No network."""
+
+    def test_unwrap_plain(self):
+        from llm.adapters import unwrap_model_json
+        self.assertEqual(unwrap_model_json('{"a": 1}'), '{"a": 1}')
+        self.assertEqual(unwrap_model_json('  {"a": 1}\n'), '{"a": 1}')
+
+    def test_unwrap_fenced(self):
+        from llm.adapters import unwrap_model_json
+        self.assertEqual(
+            unwrap_model_json('```json\n{"a": 1}\n```'), '{"a": 1}')
+        self.assertEqual(
+            unwrap_model_json('```\n{"a": 1}\n```'), '{"a": 1}')
+
+    def test_unwrap_never_raises(self):
+        from llm.adapters import unwrap_model_json
+        self.assertEqual(unwrap_model_json(""), "")
+        self.assertEqual(unwrap_model_json("```"), "")
+
+    def test_research_accepts_fenced(self):
+        from research.models import OpenAIResearchModel
+        from contracts import SourceItem
+        it = SourceItem(source_id="g-1", source_type="rss",
+                        source_url="u", title="T", text="Body words.",
+                        item_id="g-1", content_hash="h")
+        model = OpenAIResearchModel(adapter=OpenAIAdapter("k", "m"))
+        fenced = "```json\n" + _research_json() + "\n```"
+        out = model._validate(fenced, [it], False)
+        self.assertTrue(out.summary)
+        self.assertEqual(len(out.findings), 1)
+
+    def test_analysis_accepts_fenced(self):
+        from research.analysis import OpenAIAnalysisModel
+        from research.models import Finding, ResearchResult
+        r = ResearchResult(
+            summary="S", findings=[Finding("Fact words", "fact",
+                                           "high", ["g-1"], "Fact")],
+            topics=["t"], entities=[], item_ids=["g-1"],
+            earliest_published="", latest_published="", model="m",
+            meta={})
+        model = OpenAIAnalysisModel(adapter=OpenAIAdapter("k", "m"))
+        fenced = "```json\n" + _analysis_json() + "\n```"
+        out = model._validate(fenced, {"g-1"}, False)
+        self.assertTrue(out.eligible)
+
+
 if __name__ == "__main__":
     unittest.main()

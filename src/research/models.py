@@ -243,8 +243,9 @@ class OpenAIResearchModel(ResearchModel):
         # The chat API wraps our JSON in an envelope; unwrap exactly
         # one level, then validate strictly. Anything else is
         # invalid output (never coerced, never trusted).
+        from llm.adapters import unwrap_model_json
         try:
-            data = json.loads(raw)
+            data = json.loads(unwrap_model_json(raw))
         except Exception:
             raise ResearchError("invalid-output")
         if not isinstance(data, dict):

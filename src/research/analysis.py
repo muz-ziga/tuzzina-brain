@@ -303,8 +303,9 @@ class OpenAIAnalysisModel(AnalysisModel):
 
     def _validate(self, raw: str, known: set,
                   truncated: bool) -> ContentOpportunity:
+        from llm.adapters import unwrap_model_json
         try:
-            data = json.loads(raw)
+            data = json.loads(unwrap_model_json(raw))
         except Exception:
             raise AnalysisError("invalid-output")
         if not isinstance(data, dict):
