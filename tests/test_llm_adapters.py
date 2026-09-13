@@ -879,5 +879,119 @@ class SessionHeaderCase(unittest.TestCase):
         self.assertEqual(code.count("x-opencode-session"), 2)
 
 
+class ResponseSketchCase(unittest.TestCase):
+    """Empty Responses extractions carry a structural sketch only:
+    shape labels in, content values out. No network."""
+
+    def setUp(self):
+        CALLS.clear()
+        self._orig = urllib.request.urlopen
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig
+
+    def _serve(self, payload):
+        raw = payload if isinstance(payload, bytes) else \
+            json.dumps(payload).encode("utf-8")
+
+        def _fake(req, timeout=None):
+            CALLS.append({"url": req.full_url,
+                          "headers": _headers(req),
+                          "body": json.loads(req.data.decode())})
+            return FakeResp(raw.decode("utf-8"))
+        urllib.request.urlopen = _fake
+
+    def _failing(self):
+        with self.assertRaises(LLMError) as ctx:
+            OpenCodeZenResponsesAdapter("zk", "zm").complete(
+                "s", "u", timeout=5)
+        return str(ctx.exception)
+
+    def test_genuinely_empty(self):
+        self._serve({})
+        msg = self._failing()
+        self.assertTrue(msg.startswith("empty-content"))
+        self.assertIn("keys=[]", msg)
+        self._serve({"object": "response", "status": "completed",
+                     "output": []})
+        msg = self._failing()
+        self.assertIn("n=0", msg)
+        self.assertIn("status=completed", msg)
+
+    def test_refusal_shaped(self):
+        self._serve({
+            "id": "resp_1", "object": "response", "status": "completed",
+            "output": [{"type": "message", "id": "m",
+                        "status": "completed", "role": "assistant",
+                        "content": [{"type": "refusal",
+                                     "refusal": "SECRET-REFUSAL-XYZ"}]}]})
+        msg = self._failing()
+        self.assertTrue(msg.startswith("empty-content"))
+        self.assertIn("block_types=[refusal]", msg)
+        self.assertNotIn("SECRET-REFUSAL-XYZ", msg)
+
+    def test_reasoning_shaped(self):
+        self._serve({
+            "object": "response", "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [{"type": "reasoning", "id": "r",
+                        "summary": [{"type": "summary_text",
+                                     "text": "SECRET-COT-ABC"}]}]})
+        msg = self._failing()
+        self.assertTrue(msg.startswith("empty-content"))
+        self.assertIn("types=[reasoning]", msg)
+        self.assertIn("status=incomplete", msg)
+        self.assertNotIn("SECRET-COT-ABC", msg)
+        self.assertNotIn("max_output_tokens", msg)
+
+    def test_error_envelope_in_200(self):
+        self._serve({"error": {
+            "type": "invalid_request_error",
+            "message": "bad key sk-live-SECRETKEY",
+            "code": "invalid_api_key"}})
+        msg = self._failing()
+        self.assertTrue(msg.startswith("empty-content"))
+        self.assertIn("error=dict[keys=[code,message,type]]", msg)
+        self.assertNotIn("sk-live-SECRETKEY", msg)
+        self.assertNotIn("bad key", msg)
+
+    def test_decoy_values_never_leak(self):
+        self._serve({
+            "decoy_key_alpha": "DECOY-VALUE-ONE",
+            "status": "completed",
+            "output": [{"type": "message",
+                        "content": [{"type": "text", "text": "   "}]}],
+            "meta": {"nested": "DECOY-VALUE-TWO"}})
+        msg = self._failing()
+        self.assertTrue(msg.startswith("empty-content"))
+        self.assertIn("decoy_key_alpha", msg)
+        self.assertNotIn("DECOY-VALUE-ONE", msg)
+        self.assertNotIn("DECOY-VALUE-TWO", msg)
+
+    def test_non_dict_top_level(self):
+        self._serve(b"[1, 2]")
+        msg = self._failing()
+        self.assertTrue(msg.startswith("empty-content"))
+        self.assertIn("typeof=list", msg)
+
+    def test_sketch_bounded(self):
+        items = [{"type": "message",
+                  "content": [{"type": "text", "text": "  "}]}] * 50
+        self._serve({"object": "response", "status": "completed",
+                     "output": items,
+                     "pad": "y" * 5000})
+        msg = self._failing()
+        self.assertTrue(msg.startswith("empty-content"))
+        self.assertLessEqual(len(msg), len("empty-content: ") + 300)
+        self.assertNotIn("y" * 100, msg)
+
+    def test_normal_extraction_unchanged(self):
+        self._serve({"output": [{"content": [
+            {"type": "output_text", "text": "hello there"}]}]})
+        out = OpenCodeZenResponsesAdapter("zk", "zm").complete(
+            "s", "u", timeout=5)
+        self.assertEqual(out, "hello there")
+
+
 if __name__ == "__main__":
     unittest.main()

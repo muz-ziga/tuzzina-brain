@@ -68,10 +68,16 @@ def _safe_error_excerpt(raw: bytes) -> str:
     text = " ".join(text.split())
     if not text:
         return ""
+    return _redact_secrets(text)[:_ERROR_EXCERPT_CHARS].strip()
+
+
+def _redact_secrets(text: str) -> str:
+    """Redact credential-shaped values. Shared by error bodies
+    and structural sketches: keys/labels pass through, values
+    that look like tokens do not."""
     text = _SECRET_PATTERNS[0].sub("Bearer " + _REDACTED, text)
     text = _SECRET_PATTERNS[1].sub("sk-" + _REDACTED, text)
-    text = _SECRET_PATTERNS[2].sub(r"\1\2" + _REDACTED, text)
-    return text[:_ERROR_EXCERPT_CHARS].strip()
+    return _SECRET_PATTERNS[2].sub(r"\1\2" + _REDACTED, text)
 
 
 def _http_error_suffix(err: object) -> str:
@@ -83,6 +89,88 @@ def _http_error_suffix(err: object) -> str:
         return ""
     excerpt = _safe_error_excerpt(raw)
     return (": " + excerpt) if excerpt else ""
+
+
+_SKETCH_KEYS = 20
+_SKETCH_NAME_CHARS = 32
+_SKETCH_TYPES = 10
+_SKETCH_TOTAL_CHARS = 300
+
+
+def _type_name(value: object, limit: int = 16) -> str:
+    return type(value).__name__[:limit]
+
+
+def _label(value: object, limit: int = _SKETCH_NAME_CHARS) -> str:
+    text = value if isinstance(value, str) else _type_name(value, limit)
+    return " ".join(str(text).split())[:limit] or "?"
+
+
+def _structure_sketch(data: object) -> str:
+    """Safe structural sketch of a textless Responses payload:
+    key names, counts, and type labels only — never content,
+    values, headers, or secrets. Bounded output. Never raises,
+    so diagnostics can never mask the underlying failure."""
+    try:
+        sketch = _sketch_body(data)
+    except Exception:
+        return ""
+    if not sketch:
+        return ""
+    return ": " + _redact_secrets(sketch)[:_SKETCH_TOTAL_CHARS].strip()
+
+
+def _sketch_body(data: object) -> str:
+    if not isinstance(data, dict):
+        return "typeof=" + _type_name(data)
+    parts = []
+    keys = sorted(_label(k) for k in data.keys())[:_SKETCH_KEYS]
+    parts.append("keys=[" + ",".join(keys) + "]")
+    status = data.get("status")
+    if isinstance(status, str) and status.strip():
+        parts.append("status=" + _label(status))
+    if "output" in data:
+        parts.append("output=" + _sketch_output(data["output"]))
+    if "output_text" in data:
+        parts.append("output_text=typeof=" +
+                     _type_name(data["output_text"]))
+    if "error" in data:
+        parts.append("error=" + _sketch_error(data["error"]))
+    return " ".join(p for p in parts if p)
+
+
+def _sketch_output(out: object) -> str:
+    if not isinstance(out, list):
+        return "typeof=" + _type_name(out)
+    types: list = []
+    blocks = 0
+    block_types: list = []
+    for item in out[:_SKETCH_KEYS]:
+        if not isinstance(item, dict):
+            types.append("typeof=" + _type_name(item))
+            continue
+        types.append(_label(item.get("type")))
+        content = item.get("content")
+        if isinstance(content, list):
+            blocks += len(content)
+            for block in content[:_SKETCH_KEYS]:
+                bt = (block.get("type") if isinstance(block, dict)
+                      else None)
+                bt = _label(bt) if isinstance(bt, str) \
+                    else "typeof=" + _type_name(block)
+                if bt not in block_types and \
+                        len(block_types) < _SKETCH_TYPES:
+                    block_types.append(bt)
+    return ("list[n=%d types=[%s] blocks=%d block_types=[%s]]"
+            % (len(out), ",".join(types[:_SKETCH_TYPES]),
+               blocks, ",".join(block_types)))
+
+
+def _sketch_error(err: object) -> str:
+    if not isinstance(err, dict):
+        return "typeof=" + _type_name(err)
+    keys = sorted(_label(k) for k in err.keys())[:10]
+    return "dict[keys=[" + ",".join(keys) + "]]"
 
 
 def _post_json(url: str, headers: dict, body: dict,
@@ -275,7 +363,7 @@ class OpenAIResponsesAdapter:
         except Exception:
             raise LLMError("malformed-response")
         if not isinstance(text, str) or not text.strip():
-            raise LLMError("empty-content")
+            raise LLMError("empty-content" + _structure_sketch(data))
         return text
 
 
