@@ -993,5 +993,140 @@ class ResponseSketchCase(unittest.TestCase):
         self.assertEqual(out, "hello there")
 
 
+class GenericEndpointCase(unittest.TestCase):
+    """Generic OpenAI-compatible connections: closed dispatch maps
+    the generic key onto the generic OpenAI transports, and the
+    account base URL selects the endpoint. No vendor branching."""
+
+    def setUp(self):
+        CALLS.clear()
+        self._orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        fake_urlopen.mode = "openai-ok"
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig
+
+    def _responses_ok(self):
+        body = json.dumps({"output": [
+            {"content": [{"type": "output_text", "text": "hi"}]}]})
+
+        def _fake(req, timeout=None):
+            CALLS.append({"url": req.full_url,
+                          "headers": _headers(req),
+                          "body": json.loads(req.data.decode())})
+            return FakeResp(body)
+        urllib.request.urlopen = _fake
+
+    def test_dispatch_maps_generic_key(self):
+        from llm.adapters import (OpenAIResponsesAdapter,
+                                  resolve_adapter)
+        self.assertIs(
+            resolve_adapter("openai_compatible", "chat_completions"),
+            OpenAIAdapter)
+        self.assertIs(
+            resolve_adapter("openai_compatible", "responses"),
+            OpenAIResponsesAdapter)
+        self.assertIs(
+            resolve_adapter("openai_compatible", None), OpenAIAdapter)
+        self.assertIs(
+            resolve_adapter("openai_compatible"), OpenAIAdapter)
+
+    def test_base_url_selects_endpoint(self):
+        for base in ("http://localhost:20128/v1",
+                     "http://localhost:20128"):
+            CALLS.clear()
+            OpenAIAdapter("k", "m", base_url=base).complete(
+                "s", "u", timeout=5)
+            self.assertEqual(
+                CALLS[0]["url"],
+                "http://localhost:20128/v1/chat/completions")
+            self.assertEqual(CALLS[0]["headers"].get("authorization"),
+                             "Bearer k")
+
+    def test_base_url_selects_responses_endpoint(self):
+        self._responses_ok()
+        OpenAIResponsesAdapter("k", "m",
+                               base_url="http://localhost:20128/v1").complete(
+                                   "s", "u", timeout=5)
+        self.assertEqual(CALLS[0]["url"],
+                         "http://localhost:20128/v1/responses")
+
+    def test_default_endpoints_unchanged(self):
+        OpenAIAdapter("k", "m").complete("s", "u", timeout=5)
+        self.assertEqual(
+            CALLS[0]["url"], "https://api.openai.com/v1/chat/completions")
+
+    def test_run_cycle_threads_base_env(self):
+        from unittest import mock
+        from run_cycle import _build_models, _build_text_gen
+        env = {}
+        for role in ("RESEARCH", "ANALYSIS", "TEXT"):
+            env[f"BRAIN_{role}_ADAPTER"] = "openai_compatible"
+            env[f"BRAIN_{role}_PROTOCOL"] = "responses"
+            env[f"BRAIN_{role}_KEY"] = "k"
+            env[f"BRAIN_{role}_MODEL"] = "auto"
+            env[f"BRAIN_{role}_BASE"] = "http://localhost:20128/v1"
+        with mock.patch.dict(os.environ, env):
+            research, analysis = _build_models(
+                "--openai", session_id="run-1")
+            text_gen = _build_text_gen("--openai", session_id="run-1")
+        from llm.adapters import OpenAIResponsesAdapter
+        for adapter in (research._adapter, analysis._adapter,
+                        text_gen._adapter):
+            self.assertIsInstance(adapter, OpenAIResponsesAdapter)
+            self.assertEqual(adapter.base, "http://localhost:20128/v1")
+            self.assertEqual(adapter.session_id, "run-1")
+
+    def test_missing_base_env_keeps_default(self):
+        from unittest import mock
+        from run_cycle import _build_text_gen
+        env = {"BRAIN_TEXT_ADAPTER": "openai",
+               "BRAIN_TEXT_PROTOCOL": "chat_completions",
+               "BRAIN_TEXT_KEY": "k",
+               "BRAIN_TEXT_MODEL": "m"}
+        with mock.patch.dict(os.environ, env):
+            text_gen = _build_text_gen("--openai", session_id="run-1")
+        self.assertEqual(text_gen._adapter.base,
+                         "https://api.openai.com")
+
+    def test_omniroute_shaped_config_reaches_adapter_url(self):
+        # End-to-end (mocked transport, zero inference) proof for a
+        # generic account shaped exactly as Tuzzina resolves it:
+        # openai_compatible / responses / auto /
+        # http://localhost:20128/v1. Env names mirror the
+        # BRAIN_<ROLE>_* boundary; the fake key stands in for the
+        # account credential (never a real key).
+        from unittest import mock
+        from run_cycle import _build_text_gen
+        env = {"BRAIN_TEXT_ADAPTER": "openai_compatible",
+               "BRAIN_TEXT_PROTOCOL": "responses",
+               "BRAIN_TEXT_KEY": "fake-omni-key",
+               "BRAIN_TEXT_MODEL": "auto",
+               "BRAIN_TEXT_BASE": "http://localhost:20128/v1"}
+        with mock.patch.dict(os.environ, env):
+            text_gen = _build_text_gen("--openai", session_id="run-1")
+        self.assertIsInstance(text_gen._adapter,
+                              OpenAIResponsesAdapter)
+        self.assertEqual(text_gen._adapter.model, "auto")
+        self._responses_ok()
+        out = text_gen.generate("T", "S", {"tone": "b"})
+        self.assertTrue(out)
+        self.assertEqual(
+            CALLS[0]["url"], "http://localhost:20128/v1/responses")
+        self.assertEqual(CALLS[0]["body"]["model"], "auto")
+        self.assertEqual(
+            CALLS[0]["headers"].get("authorization"),
+            "Bearer fake-omni-key")
+
+    def test_no_vendor_branches(self):
+        import pathlib
+        for rel in ("llm/adapters.py", "run_cycle.py"):
+            code = (pathlib.Path(__file__).parent.parent / "src" /
+                    rel).read_text(encoding="utf-8").lower()
+            for bad in ("omniroute", "openrouter"):
+                self.assertNotIn(bad, code, rel)
+
+
 if __name__ == "__main__":
     unittest.main()

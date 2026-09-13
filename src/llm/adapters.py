@@ -203,6 +203,18 @@ def _post_json(url: str, headers: dict, body: dict,
         raise LLMError("malformed-response")
 
 
+def _join_versioned(base: str, suffix: str) -> str:
+    """Join an OpenAI-versioned path idempotently. Account base
+    URLs may or may not include the trailing /v1 mount point
+    (`https://host` and `https://host/v1` reach the same versioned
+    path); class defaults carry no /v1, so built-in behavior is
+    byte-identical. Provider-blind: pure path math."""
+    base = (base or "").rstrip("/")
+    if base.endswith("/v1") and suffix.startswith("/v1/"):
+        base = base[: -len("/v1")]
+    return base + suffix
+
+
 class OpenAIAdapter:
     """OpenAI chat completions. Endpoint + Bearer auth + messages[]
     body + choices[0].message.content extraction."""
@@ -232,7 +244,7 @@ class OpenAIAdapter:
                    "Content-Type": "application/json"}
         headers.update(self._extra_headers())
         data = _post_json(
-            self.base + "/v1/chat/completions",
+            _join_versioned(self.base, "/v1/chat/completions"),
             headers,
             {"model": self.model, "temperature": temperature,
               "max_tokens": max_tokens,
@@ -341,7 +353,7 @@ class OpenAIResponsesAdapter:
                    "Content-Type": "application/json"}
         headers.update(self._extra_headers())
         data = _post_json(
-            self.base + "/v1/responses",
+            _join_versioned(self.base, "/v1/responses"),
             headers,
             body,
             timeout)
@@ -418,11 +430,17 @@ PROTOCOL_ADAPTERS = {
     (AnthropicAdapter.adapter_key, AnthropicAdapter.protocol): AnthropicAdapter,
     (OpenCodeZenAdapter.adapter_key, OpenCodeZenAdapter.protocol): OpenCodeZenAdapter,
     (OpenCodeZenResponsesAdapter.adapter_key, OpenCodeZenResponsesAdapter.protocol): OpenCodeZenResponsesAdapter,
+    # Generic OpenAI-compatible connections reuse the generic
+    # OpenAI-compatible transports against an account-level base
+    # URL. No vendor adapter exists or is needed.
+    ("openai_compatible", "chat_completions"): OpenAIAdapter,
+    ("openai_compatible", "responses"): OpenAIResponsesAdapter,
 }
 
 LEGACY_PROTOCOL = {
     "openai": "chat_completions",
     "opencode_zen": "chat_completions",
+    "openai_compatible": "chat_completions",
     "anthropic": "messages",
 }
 
