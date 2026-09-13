@@ -50,7 +50,7 @@ def _post_ids(response) -> list:
         return []
 
 
-def _build_models(mode: str):
+def _build_models(mode: str, session_id: str = ""):
     """Role models for the cycle.
 
     --mock wires Mocks (deterministic, offline; role env is
@@ -63,7 +63,9 @@ def _build_models(mode: str):
     adapter/protocol raises ValueError (exit 2): no silent fallback.
     Per-role switching needs nothing more: adapters are
     constructed from the resolved quad and injected. Model stays
-    opaque."""
+    opaque. session_id is the automation run identity shared by
+    all three roles; providers that require a session header
+    (OpenCode Zen) emit it, all others ignore it."""
     from research.models import MockResearchModel, OpenAIResearchModel
     from research.analysis import MockAnalysisModel, OpenAIAnalysisModel
     from llm.adapters import resolve_adapter
@@ -83,16 +85,18 @@ def _build_models(mode: str):
                              f"shared OPENAI_API_KEY)")
         model = os.environ.get(prefix + "MODEL") or "gpt-4.1"
         adapter_cls = resolve_adapter(adapter_key, protocol)
-        built.append(cls(adapter=adapter_cls(key, model)))
+        built.append(cls(adapter=adapter_cls(key, model,
+                                             session_id=session_id)))
     return built[0], built[1]
 
 
-def _build_text_gen(mode: str):
+def _build_text_gen(mode: str, session_id: str = ""):
     """Text generator honoring the same per-role env contract
     (BRAIN_TEXT_ADAPTER/PROTOCOL/KEY/MODEL). Separated from
     run._build_ generators so the cycle path never inherits legacy
     defaults silently; behavior for unset env is identical. Protocol
-    is generic and explicit; model stays opaque."""
+    is generic and explicit; model stays opaque. session_id is the
+    same automation run identity shared with research/analysis."""
     from g2.generators import MockTextGenerator, OpenAITextGenerator
     from llm.adapters import resolve_adapter
     if mode != "--openai":
@@ -107,7 +111,8 @@ def _build_text_gen(mode: str):
                          "OPENAI_API_KEY)")
     model = os.environ.get("BRAIN_TEXT_MODEL") or "gpt-4.1"
     return OpenAITextGenerator(
-        adapter=resolve_adapter(adapter_key, protocol)(key, model))
+        adapter=resolve_adapter(adapter_key, protocol)(
+            key, model, session_id=session_id))
 
 
 def _emit_result(result: dict) -> None:
@@ -219,10 +224,11 @@ def _main(argv=None) -> int:
     # Image generation always delegates through Tuzzina (org
     # API key); it needs no provider credential of its own.
     from g2.generators import MockImageGenerator, TuzzinaImageGenerator
-    text_gen = _build_text_gen(args.mode)
+    text_gen = _build_text_gen(args.mode, session_id=run_id)
     image_gen_obj = TuzzinaImageGenerator() \
         if args.mode == "--openai" else MockImageGenerator()
-    research_model, analysis_model = _build_models(args.mode)
+    research_model, analysis_model = _build_models(
+        args.mode, session_id=run_id)
     roles_resolved = []
     if args.mode == "--openai":
         # Echoed for observability (adapter+protocol+model — never

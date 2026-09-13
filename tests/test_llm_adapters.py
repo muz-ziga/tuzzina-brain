@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from llm.adapters import (ADAPTERS, LLMError, AnthropicAdapter,
                            OpenAIAdapter, OpenCodeZenAdapter,
+                           OpenCodeZenResponsesAdapter,
+                           OpenAIResponsesAdapter, PRODUCT_UA,
                            resolve_adapter)
 
 
@@ -761,6 +763,120 @@ class HttpErrorBodyCase(unittest.TestCase):
         self._fail(400, b"\xff\xfe\x00bad")
         msg = self._complete()
         self.assertTrue(msg.startswith("http-400"))
+
+
+class SessionHeaderCase(unittest.TestCase):
+    """Automation run_id as the Zen session identity. The header is
+    provider-scoped (Zen only), optional, and never model-named."""
+
+    def setUp(self):
+        CALLS.clear()
+        self._orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        fake_urlopen.mode = "zen-ok"
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig
+
+    def _responses_ok(self):
+        body = json.dumps({"output": [
+            {"content": [{"type": "output_text", "text": "hi"}]}]})
+
+        def _fake(req, timeout=None):
+            CALLS.append({"url": req.full_url,
+                          "headers": _headers(req),
+                          "body": json.loads(req.data.decode())})
+            return FakeResp(body)
+        urllib.request.urlopen = _fake
+
+    def test_zen_chat_sends_session(self):
+        OpenCodeZenAdapter("zk", "zm", session_id="run-1").complete(
+            "s", "u", timeout=5)
+        c = CALLS[0]
+        self.assertEqual(c["headers"].get("x-opencode-session"), "run-1")
+        self.assertEqual(c["headers"].get("user-agent"), PRODUCT_UA)
+        self.assertEqual(
+            c["url"], "https://opencode.ai/zen/v1/chat/completions")
+
+    def test_zen_responses_sends_session(self):
+        self._responses_ok()
+        OpenCodeZenResponsesAdapter("zk", "zm",
+                                    session_id="run-1").complete(
+                                        "s", "u", timeout=5)
+        c = CALLS[0]
+        self.assertEqual(c["headers"].get("x-opencode-session"), "run-1")
+        self.assertEqual(c["headers"].get("user-agent"), PRODUCT_UA)
+        self.assertEqual(c["url"], "https://opencode.ai/zen/v1/responses")
+        self.assertEqual(c["body"]["model"], "zm")
+        self.assertNotIn("messages", c["body"])
+
+    def test_zen_without_session_sends_nothing(self):
+        OpenCodeZenAdapter("zk", "zm").complete("s", "u", timeout=5)
+        self.assertNotIn("x-opencode-session", CALLS[0]["headers"])
+        self._responses_ok()
+        OpenCodeZenResponsesAdapter("zk", "zm").complete(
+            "s", "u", timeout=5)
+        self.assertNotIn("x-opencode-session", CALLS[1]["headers"])
+
+    def test_non_zen_never_sends_session(self):
+        OpenAIAdapter("k", "m", session_id="run-1").complete(
+            "s", "u", timeout=5)
+        self.assertNotIn("x-opencode-session", CALLS[0]["headers"])
+        self._responses_ok()
+        OpenAIResponsesAdapter("k", "m", session_id="run-1").complete(
+            "s", "u", timeout=5)
+        self.assertNotIn("x-opencode-session", CALLS[1]["headers"])
+        fake_urlopen.mode = "anthropic-ok"
+        urllib.request.urlopen = fake_urlopen
+        AnthropicAdapter("k", "m", session_id="run-1").complete(
+            "s", "u", timeout=5)
+        self.assertNotIn("x-opencode-session", CALLS[2]["headers"])
+
+    def test_run_builders_share_one_session(self):
+        from unittest import mock
+        from run_cycle import _build_models, _build_text_gen
+        env = {}
+        for role in ("RESEARCH", "ANALYSIS", "TEXT"):
+            env[f"BRAIN_{role}_ADAPTER"] = "opencode_zen"
+            env[f"BRAIN_{role}_PROTOCOL"] = "responses"
+            env[f"BRAIN_{role}_KEY"] = "k"
+            env[f"BRAIN_{role}_MODEL"] = "m"
+        with mock.patch.dict(os.environ, env):
+            research, analysis = _build_models(
+                "--openai", session_id="run-9")
+            text_gen = _build_text_gen("--openai", session_id="run-9")
+        adapters = (research._adapter, analysis._adapter,
+                    text_gen._adapter)
+        for adapter in adapters:
+            self.assertIsInstance(adapter, OpenCodeZenResponsesAdapter)
+            self.assertEqual(adapter.session_id, "run-9")
+        mock_research, mock_analysis = _build_models("--mock")
+        self.assertTrue(mock_research and mock_analysis)
+
+    def test_same_session_repeats_identically(self):
+        self._responses_ok()
+        for _ in range(2):
+            OpenCodeZenResponsesAdapter(
+                "zk", "zm", session_id="run-7").complete(
+                    "s", "u", timeout=5)
+        headers = [c["headers"].get("x-opencode-session") for c in CALLS]
+        self.assertEqual(headers, ["run-7", "run-7"])
+
+    def test_different_sessions_differ(self):
+        self._responses_ok()
+        for run in ("run-a", "run-b"):
+            OpenCodeZenResponsesAdapter(
+                "zk", "zm", session_id=run).complete("s", "u", timeout=5)
+        headers = [c["headers"].get("x-opencode-session") for c in CALLS]
+        self.assertEqual(headers, ["run-a", "run-b"])
+
+    def test_no_model_name_logic(self):
+        import pathlib
+        code = (pathlib.Path(__file__).parent.parent / "src" /
+                "llm" / "adapters.py").read_text(encoding="utf-8")
+        for bad in ("muse", "spark"):
+            self.assertNotIn(bad, code)
+        self.assertEqual(code.count("x-opencode-session"), 2)
 
 
 if __name__ == "__main__":

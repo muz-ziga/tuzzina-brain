@@ -230,7 +230,7 @@ class CycleCliCase(unittest.TestCase):
             def generate(self, title, summary, brand, policy=None):
                 return "Hello world post"
         G.OpenAITextGenerator = lambda *a, **k: FakeText()
-        rc_mod._build_models = lambda mode: (MockResearchModel(),
+        rc_mod._build_models = lambda mode, session_id="": (MockResearchModel(),
                                              MockAnalysisModel())
         try:
             rc, out, err = _run_cli(
@@ -296,7 +296,7 @@ class CycleCliCase(unittest.TestCase):
             def generate(self, title, summary, brand, policy=None):
                 return "Hello world post"
         G.OpenAITextGenerator = lambda *a, **k: FakeText()
-        rc_mod._build_models = lambda mode: (MockResearchModel(),
+        rc_mod._build_models = lambda mode, session_id="": (MockResearchModel(),
                                              MockAnalysisModel())
         try:
             rc, out, err = _run_cli(
@@ -416,7 +416,7 @@ class RoleEnvCase(unittest.TestCase):
             def generate(self, title, summary, brand, policy=None):
                 return "Hello world post"
         G.OpenAITextGenerator = lambda *a, **k: FakeText()
-        rc_mod._build_models = lambda mode: (MockResearchModel(),
+        rc_mod._build_models = lambda mode, session_id="": (MockResearchModel(),
                                              MockAnalysisModel())
         try:
             rc, out, err = _run_cli(

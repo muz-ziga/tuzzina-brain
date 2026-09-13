@@ -123,24 +123,33 @@ class OpenAIAdapter:
     base_url = "https://api.openai.com"
 
     def __init__(self, api_key: str = "", model: str = "gpt-4.1",
-                 base_url: str = ""):
+                  base_url: str = "", session_id: str = ""):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
         self.model = model
         self.base = (base_url or self.base_url).rstrip("/")
+        # Automation run identity for providers that require a
+        # session header. Plain OpenAI ignores it (see
+        # _extra_headers): only provider subclasses opt in.
+        self.session_id = session_id or ""
+
+    def _extra_headers(self) -> dict:
+        return {}
 
     def complete(self, system: str, user: str, *,
-                 temperature: float = 0.7, max_tokens: int = 400,
-                 timeout: int = 60) -> str:
+                  temperature: float = 0.7, max_tokens: int = 400,
+                  timeout: int = 60) -> str:
+        headers = {"Authorization": f"Bearer {self.api_key}",
+                   "Content-Type": "application/json"}
+        headers.update(self._extra_headers())
         data = _post_json(
             self.base + "/v1/chat/completions",
-            {"Authorization": f"Bearer {self.api_key}",
-             "Content-Type": "application/json"},
+            headers,
             {"model": self.model, "temperature": temperature,
-             "max_tokens": max_tokens,
-             "messages": [{"role": "system", "content": system},
-                          {"role": "user", "content": user}]},
+              "max_tokens": max_tokens,
+              "messages": [{"role": "system", "content": system},
+                           {"role": "user", "content": user}]},
             timeout)
         try:
             text = data["choices"][0]["message"]["content"]
@@ -161,12 +170,15 @@ class AnthropicAdapter:
     api_version = "2023-06-01"
 
     def __init__(self, api_key: str = "", model: str = "",
-                 base_url: str = ""):
+                  base_url: str = "", session_id: str = ""):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
         self.model = model
         self.base = (base_url or self.base_url).rstrip("/")
+        # Accepted for uniform construction only. Anthropic defines
+        # no session header, so complete() never reads this.
+        self.session_id = session_id or ""
 
     def complete(self, system: str, user: str, *,
                  temperature: float = 0.7, max_tokens: int = 400,
@@ -211,12 +223,17 @@ class OpenAIResponsesAdapter:
     base_url = "https://api.openai.com"
 
     def __init__(self, api_key: str = "", model: str = "gpt-4.1",
-                 base_url: str = ""):
+                  base_url: str = "", session_id: str = ""):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
         self.model = model
         self.base = (base_url or self.base_url).rstrip("/")
+        # Same run-identity contract as OpenAIAdapter above.
+        self.session_id = session_id or ""
+
+    def _extra_headers(self) -> dict:
+        return {}
 
     def complete(self, system: str, user: str, *,
                  temperature: float = 0.7, max_tokens: int = 400,
@@ -232,10 +249,12 @@ class OpenAIResponsesAdapter:
             body["temperature"] = temperature
         if max_tokens is not None:
             body["max_output_tokens"] = max_tokens
+        headers = {"Authorization": f"Bearer {self.api_key}",
+                   "Content-Type": "application/json"}
+        headers.update(self._extra_headers())
         data = _post_json(
             self.base + "/v1/responses",
-            {"Authorization": f"Bearer {self.api_key}",
-             "Content-Type": "application/json"},
+            headers,
             body,
             timeout)
         try:
@@ -274,8 +293,16 @@ class OpenCodeZenAdapter(OpenAIAdapter):
     base_url = "https://opencode.ai/zen"
 
     def __init__(self, api_key: str = "", model: str = "",
-                 base_url: str = ""):
-        super().__init__(api_key, model, base_url or self.base_url)
+                 base_url: str = "", session_id: str = ""):
+        super().__init__(api_key, model, base_url or self.base_url,
+                         session_id)
+
+    def _extra_headers(self) -> dict:
+        # Zen gateway requirement (free-tier session routing).
+        # Provider-scoped: no other adapter emits this header.
+        if self.session_id:
+            return {"x-opencode-session": self.session_id}
+        return {}
 
 
 class OpenCodeZenResponsesAdapter(OpenAIResponsesAdapter):
@@ -285,6 +312,11 @@ class OpenCodeZenResponsesAdapter(OpenAIResponsesAdapter):
     adapter_key = "opencode_zen"
     protocol = "responses"
     base_url = "https://opencode.ai/zen"
+
+    def _extra_headers(self) -> dict:
+        if self.session_id:
+            return {"x-opencode-session": self.session_id}
+        return {}
 
 
 # Generic protocol dispatch (provider,protocol) -> class.
