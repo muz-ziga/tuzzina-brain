@@ -367,6 +367,19 @@ class CycleCase(unittest.TestCase):
                 (pb.platform, pb.content, pb.planned_at, pb.settings,
                  pb.tags, pb.source_ref))
 
+    def test_rss_source_n_caps_collection(self):
+        # The strategy `n` ("items per check") caps RSS collection
+        # the same way it caps website extraction: n=1 on a
+        # two-entry feed yields exactly one NEW item.
+        store = MemoryStateStore()
+        out = self._run(
+            [{"type": "rss", "url": "http://feed.test/rss", "n": 1}],
+            store=store)
+        self.assertEqual(out.error, "")
+        self.assertEqual(len(out.items), 1)
+        self.assertEqual(len(out.sources), 1)
+        self.assertEqual(out.sources[0].new, 1)
+
 
 class FormatGateCase(CycleCase):
     def _pol(self, formats):

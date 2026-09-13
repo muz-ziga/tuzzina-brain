@@ -88,7 +88,8 @@ def _collect_rss(source: dict, store, now: str,
          "source_id": source.get("source_id") or source["url"]},
         store=store, now=now,
         horizon_days=source.get("horizon_days"),
-        max_items=int(source.get("max_items") or max_items))
+        max_items=int(source.get("max_items") or source.get("n") or
+                      max_items))
     items = [to_source_item(c.item, "rss", "rss", source["url"])
              for c in res.items if c.kind == NEW]
     return items, res
@@ -103,7 +104,8 @@ def _collect_youtube(source: dict, store, now: str,
          f"youtube:{source['channel_id'].strip()}"},
         store=store, now=now,
         horizon_days=source.get("horizon_days"),
-        max_items=int(source.get("max_items") or max_items))
+        max_items=int(source.get("max_items") or source.get("n") or
+                      max_items))
     items = [to_source_item(c.item, "youtube", "youtube", url)
              for c in res.items if c.kind == NEW]
     return items, res
