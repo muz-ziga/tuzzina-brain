@@ -292,7 +292,8 @@ class OpenAIAnalysisModel(AnalysisModel):
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
         context += "\n\n" + get_skill(
-            "analysis", campaign_skills)["instructions"]
+            "analysis",
+            (campaign_skills or {}).get("analysis"))["instructions"]
         if len(context) > MAX_PROMPT_CHARS:
             context = context[:MAX_PROMPT_CHARS]
             truncated = True

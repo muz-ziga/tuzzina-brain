@@ -89,7 +89,8 @@ def _prompt_for(topic: str, facts: list,
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
         base += "\n\n" + get_skill(
-            skill_type, campaign_skills)["instructions"]
+            skill_type,
+            (campaign_skills or {}).get(skill_type))["instructions"]
     return base
 
 

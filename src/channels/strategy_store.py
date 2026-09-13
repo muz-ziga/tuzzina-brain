@@ -132,6 +132,8 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
         strat["media"] = _media_to(s.media)
     if _is_set(s.visual.visual_rules) or _is_set(s.visual.video_rules):
         strat["visual"] = _visual_to(s.visual)
+    if getattr(s, "skills", None):
+        strat["skills"] = dict(s.skills)
     if _is_set(s.sources):
         strat["sources"] = [dict(x) for x in s.sources]
     if _is_set(s.content.content_pillars) or \
@@ -396,6 +398,21 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
     if not isinstance(extras, dict):
         raise _err("'strategy.extras' must be a mapping")
 
+    from skills.loader import SKILL_TYPES, valid_skill_name
+    sk = strat_cfg.get("skills") or {}
+    if not isinstance(sk, dict):
+        raise _err("'strategy.skills' must be a mapping")
+    clean_skills = {}
+    for k, v in sk.items():
+        if k not in SKILL_TYPES:
+            raise _err(f"'strategy.skills.{k}' unknown skill type")
+        if v is None or (isinstance(v, str) and not v.strip()):
+            continue
+        if not valid_skill_name(v):
+            raise _err(f"'strategy.skills.{k}' must be a skill name "
+                       f"([a-z0-9-]{{1,64}})")
+        clean_skills[k] = v
+
     return ChannelStrategy(
         integration_id=integ,
         brand=brand,
@@ -409,5 +426,6 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
         generation=generation,
         planning=planning,
         visual=visual,
+        skills=dict(clean_skills),
         extras=dict(extras),
     )

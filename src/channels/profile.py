@@ -162,15 +162,22 @@ def resolve_strategy(project_cfg: dict, strategy,
     out["content"] = content
     out["generation"] = generation
     out["visual"] = visual
-    # Campaign skills ride through untouched: the campaign owns
-    # them (validated at load), the strategy intentionally has no
-    # skill key, and stages resolve them per type with global
-    # files as fallback. A plain validated copy, never merged.
+    # Skill assignment: the channel strategy may name a skill per
+    # stage; the campaign may override per stage (campaign wins).
+    # Values are skill NAMES resolved by the one unified loader
+    # (get_skill) with global files as fallback. A plain validated
+    # copy, never merged content.
+    from skills.loader import SKILL_TYPES
+    channel_skills = getattr(strategy, "skills", None) or {}
     campaign_skills = project_cfg.get("skills") or {}
-    out["skills"] = {k: v for k, v in campaign_skills.items()
-                     if k in ("research", "analysis", "text",
-                              "image", "video")
-                     and isinstance(v, str) and v.strip()}
+    merged_skills = {}
+    for source in (channel_skills, campaign_skills):
+        if not isinstance(source, dict):
+            continue
+        for k, v in source.items():
+            if k in SKILL_TYPES and isinstance(v, str) and v.strip():
+                merged_skills[k] = v.strip()
+    out["skills"] = merged_skills
     # Strategy planning merges over campaign schedule (channel wins
     # per leaf; G3 reads only this merged schedule dict).
     sched = dict(out.get("schedule") or {})

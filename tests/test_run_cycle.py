@@ -470,9 +470,38 @@ class SkillsTraceCase(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
         return _result(out)
 
-    def test_campaign_skills_traced_with_source(self):
-        res = self._run(CAMPAIGN + "skills:\n  research: R-A\n"
-                        "  analysis: A-A\n  text: T-A\n")
+    def test_assigned_skills_traced(self):
+        import tempfile
+        import yaml
+        sdir = tempfile.mkdtemp(prefix="tbra_skdir_")
+        old = os.environ.get("BRAIN_SKILLS_DIR")
+        os.environ["BRAIN_SKILLS_DIR"] = sdir
+        try:
+            from skills.loader import clear_cache
+            clear_cache()
+            for t in ("research", "analysis", "text", "image",
+                      "video"):
+                with open(os.path.join(sdir, t + ".yaml"), "w",
+                          encoding="utf-8") as f:
+                    yaml.safe_dump({"id": "%s-d" % t, "name": "D",
+                                    "type": t, "version": 1,
+                                    "instructions": "Default."}, f)
+            for t in ("research", "analysis", "text"):
+                with open(os.path.join(sdir, "%s.qa.yaml" % t), "w",
+                          encoding="utf-8") as f:
+                    yaml.safe_dump({"id": "%s-qa-v9" % t,
+                                    "name": "QA", "type": t,
+                                    "version": 9,
+                                    "instructions": "QA."}, f)
+            res = self._run(CAMPAIGN + "skills:\n  research: qa\n"
+                            "  analysis: qa\n  text: qa\n")
+        finally:
+            from skills.loader import clear_cache
+            clear_cache()
+            if old is None:
+                os.environ.pop("BRAIN_SKILLS_DIR", None)
+            else:
+                os.environ["BRAIN_SKILLS_DIR"] = old
         by_stage = {s["stage"]: s for s in res["skills_used"]}
         self.assertEqual(
             (by_stage["research"]["type"],
@@ -480,14 +509,15 @@ class SkillsTraceCase(unittest.TestCase):
              by_stage["text"]["type"]),
             ("research", "analysis", "text"))
         for stage in ("research", "analysis", "text"):
-            self.assertEqual(by_stage[stage]["source"], "campaign")
-        self.assertTrue(all(s["id"] and s["version"] >= 1
-                            for s in res["skills_used"]))
+            self.assertEqual(by_stage[stage]["source"], "assigned")
+            self.assertEqual(by_stage[stage]["id"],
+                             "%s-qa-v9" % stage)
+            self.assertEqual(by_stage[stage]["version"], 9)
 
-    def test_missing_skills_trace_file_source(self):
+    def test_default_skills_trace_default_source(self):
         res = self._run(CAMPAIGN)
         self.assertTrue(res["skills_used"])
-        self.assertTrue(all(s["source"] == "file"
+        self.assertTrue(all(s["source"] == "default"
                             for s in res["skills_used"]))
 
 

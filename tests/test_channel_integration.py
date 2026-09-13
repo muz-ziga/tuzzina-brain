@@ -89,6 +89,30 @@ class IntegrationTest(unittest.TestCase):
         self.assertLessEqual(len(pkg.hashtags), 5)
         self.assertEqual(pkg.settings["__type"], "facebook")
 
+    def test_channel_skills_merge_under_campaign(self):
+        ch = _strategy(skills={"research": "politics",
+                               "text": "politics"})
+        project = _project()
+        project["skills"] = {"text": "juzzir"}
+        cfg = resolve_strategy(
+            project, ch,
+            channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["skills"], {"research": "politics",
+                                         "text": "juzzir"})
+
+    def test_channel_only_skills_resolve(self):
+        ch = _strategy(skills={"text": "politics"})
+        cfg = resolve_strategy(
+            _project(), ch,
+            channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["skills"], {"text": "politics"})
+
+    def test_no_skills_anywhere_resolves_empty(self):
+        cfg = resolve_strategy(
+            _project(), _strategy(),
+            channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["skills"], {})
+
     def test_strategy_store_roundtrip_integration(self):
         import tempfile
         from channels.strategy_store import save, load

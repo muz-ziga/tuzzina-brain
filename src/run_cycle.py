@@ -259,11 +259,12 @@ def _main(argv=None) -> int:
                                   ("analysis", "analysis"),
                                   ("text", "text")):
             try:
-                skill = get_skill(skill_type, campaign_skills)
+                skill = get_skill(
+                    skill_type, (campaign_skills or {}).get(skill_type))
                 skills_used.append({
                     "stage": stage, "type": skill_type,
                     "id": skill["id"], "version": skill["version"],
-                    "source": skill.get("source", "file")})
+                    "source": skill.get("source", "default")})
             except Exception as e:
                 print(f"run_id={run_id} error: skill {skill_type} "
                       f"unavailable ({e})", file=sys.stderr)

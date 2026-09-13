@@ -110,7 +110,8 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
         _iprompt += "\n\n" + get_skill(
-            "image", campaign_skills)["instructions"]
+            "image",
+            (campaign_skills or {}).get("image"))["instructions"]
         media.append({"kind": "generator", "generator": image_gen,
                       "prompt": _iprompt})
     settings = {"__type": platform}

@@ -37,7 +37,17 @@
   New global `analysis.yaml` default (analysis no longer
   shares the research skill). Runs record per-stage
   `source: campaign|file` in `skills_used`.
-- Tests: 570/570 pass (loader, overrides, isolation,
+- UNIFIED Skill system (replaces the campaign-embedded path
+  above): skills are reusable named files
+  (`<type>.<name>.yaml`); campaigns and channels assign them
+  BY NAME (`campaign.skills`, `strategy.skills`, campaign wins
+  per stage); one `get_skill(type, name)` resolver, global
+  files as fallback, `skills_used` traces the actual selected
+  skill (`source: assigned|default`). Embedded instruction
+  strings are rejected (fail closed). No production campaign
+  carried embedded skills, so nothing was migrated or lost.
+- Tests: 581/581 pass (loader, named assignment, isolation,
+  malformed rejection, merge precedence, strategy round-trip,
   editorial, wiring, traceability, secrecy).
 
 ## 0.30.0 — Phase 15: OpenCode Zen provider adapter

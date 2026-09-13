@@ -41,14 +41,16 @@ def load_campaign(path: str) -> dict:
     skills = cfg.get("skills") or {}
     if not isinstance(skills, dict):
         raise _err("skills", "must be a mapping")
+    from skills.loader import SKILL_TYPES, valid_skill_name
     clean_skills = {}
     for k, v in skills.items():
-        if k not in ("research", "analysis", "text", "image", "video"):
+        if k not in SKILL_TYPES:
             raise _err(f"skills.{k}", "unknown skill type")
-        if not isinstance(v, str) or not v.strip():
-            raise _err(f"skills.{k}", "must be a non-empty string")
-        if len(v) > 8000:
-            raise _err(f"skills.{k}", "must be ≤ 8000 chars")
+        if v is None or (isinstance(v, str) and not v.strip()):
+            continue
+        if not valid_skill_name(v):
+            raise _err(f"skills.{k}",
+                       "must be a skill name ([a-z0-9-]{1,64})")
         clean_skills[k] = v
     lang = cfg.get("language") or {}
     hs = cfg.get("hashtags") or {}

@@ -123,6 +123,7 @@ class ChannelStrategy:
     generation: GenerationPolicy = field(default_factory=GenerationPolicy)
     planning: PlanningPolicy = field(default_factory=PlanningPolicy)
     visual: VisualPolicy = field(default_factory=VisualPolicy)
+    skills: dict = field(default_factory=dict)
     extras: dict = field(default_factory=dict)
 
 

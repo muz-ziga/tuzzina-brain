@@ -377,10 +377,10 @@ class WiringCase(unittest.TestCase):
         self.assertIn("thin pages", captured["sys"])
 
 
-class CampaignOverrideCase(unittest.TestCase):
-    """Campaign skills: per-campaign instructions win per stage,
-    missing slots fall back to global files, campaigns never
-    leak into each other."""
+class AssignmentCase(unittest.TestCase):
+    """One unified Skill system: stages resolve a named skill per
+    type (or the global default). No embedded instruction strings:
+    assignments are names, content lives only in skill files."""
 
     def setUp(self):
         self._old = os.environ.get("BRAIN_SKILLS_DIR")
@@ -391,6 +391,21 @@ class CampaignOverrideCase(unittest.TestCase):
                            "video"):
             _write(self.tmp, skill_type + ".yaml",
                    _doc(skill_type))
+        _write(self.tmp, "text.juzzir.yaml",
+               _doc("text", id="text-juzzir-v1", name="Juzzir Text",
+                    instructions="JUZZIR-TEXT-MARKER post."))
+        _write(self.tmp, "research.juzzir.yaml",
+               _doc("research", id="research-juzzir-v1",
+                    name="Juzzir Research",
+                    instructions="JUZZIR-RESEARCH-MARKER research."))
+        _write(self.tmp, "research.politics.yaml",
+               _doc("research", id="research-politics-v1",
+                    name="Politics Research",
+                    instructions="POLITICS-RESEARCH-MARKER research."))
+        _write(self.tmp, "analysis.juzzir.yaml",
+               _doc("analysis", id="analysis-juzzir-v1",
+                    name="Juzzir Analysis",
+                    instructions="JUZZIR-ANALYSIS-MARKER analysis."))
 
     def tearDown(self):
         clear_cache()
@@ -399,50 +414,85 @@ class CampaignOverrideCase(unittest.TestCase):
         else:
             os.environ["BRAIN_SKILLS_DIR"] = self._old
 
-    def test_each_stage_resolves_own_override(self):
-        overrides = {
-            "research": "CAMPAIGN-A-SKILL-PROOF research",
-            "analysis": "CAMPAIGN-A-SKILL-PROOF analysis",
-            "text": "CAMPAIGN-A-SKILL-PROOF text",
-            "image": "CAMPAIGN-A-SKILL-PROOF image",
-            "video": "CAMPAIGN-A-SKILL-PROOF video",
-        }
-        for skill_type, marker in overrides.items():
-            skill = get_skill(skill_type, overrides)
-            self.assertIn(marker, skill["instructions"])
-            self.assertEqual(skill["source"], "campaign")
-            self.assertEqual(skill["id"], "%s-x1" % skill_type)
+    def test_each_stage_resolves_assigned_name(self):
+        skill = get_skill("text", "juzzir")
+        self.assertEqual(skill["id"], "text-juzzir-v1")
+        self.assertEqual(skill["source"], "assigned")
+        self.assertIn("JUZZIR-TEXT-MARKER", skill["instructions"])
+        skill = get_skill("research", "politics")
+        self.assertEqual(skill["id"], "research-politics-v1")
+        self.assertEqual(skill["source"], "assigned")
+
+    def test_empty_assignment_uses_default(self):
+        for empty in (None, "", "   "):
+            skill = get_skill("text", empty if empty != "   " else "")
+            self.assertEqual(skill["id"], "text-x1")
+            self.assertEqual(skill["source"], "default")
 
     def test_missing_slot_falls_back_global(self):
-        overrides = {"text": "CAMPAIGN-A-SKILL-PROOF text"}
-        skill = get_skill("research", overrides)
-        self.assertEqual(skill["source"], "file")
-        self.assertNotIn("CAMPAIGN-A", skill["instructions"])
-        self.assertEqual(get_skill("text", {})["source"], "file")
-        self.assertEqual(
-            get_skill("text", {"text": "   "})["source"], "file")
+        skill = get_skill("research", None)
+        self.assertEqual(skill["source"], "default")
+        self.assertEqual(skill["id"], "research-x1")
+        skill = get_skill("image", None)
+        self.assertEqual(skill["source"], "default")
 
-    def test_campaigns_do_not_leak(self):
-        skill_a = get_skill("text", {"text": "CAMPAIGN-A-SKILL-PROOF"})
-        skill_b = get_skill("text", {"text": "CAMPAIGN-B-SKILL-PROOF"})
-        self.assertIn("CAMPAIGN-A-SKILL-PROOF",
+    def test_assignments_are_isolated_by_name(self):
+        skill_a = get_skill("research", "juzzir")
+        skill_b = get_skill("research", "politics")
+        self.assertIn("JUZZIR-RESEARCH-MARKER",
                       skill_a["instructions"])
-        self.assertNotIn("CAMPAIGN-B-SKILL-PROOF",
+        self.assertNotIn("POLITICS-RESEARCH-MARKER",
                          skill_a["instructions"])
-        self.assertIn("CAMPAIGN-B-SKILL-PROOF",
+        self.assertIn("POLITICS-RESEARCH-MARKER",
                       skill_b["instructions"])
-        self.assertNotIn("CAMPAIGN-A-SKILL-PROOF",
+        self.assertNotIn("JUZZIR-RESEARCH-MARKER",
                          skill_b["instructions"])
 
-    def test_oversized_override_fails_closed(self):
-        with self.assertRaises(SkillError):
-            get_skill("text", {"text": "x" * 8001})
+    def test_malformed_assignments_fail_closed(self):
+        # The old embedded-content path is gone: instruction
+        # strings are not valid assignments.
+        bad = ["CAMPAIGN-A-SKILL-PROOF research directive",
+               "Do the thing well. " * 500,
+               "../text", "text.yaml", ".hidden", "UPPER",
+               "has space", "x" * 65, "a/b", 7, ["juzzir"],
+               {"text": "juzzir"}]
+        for value in bad:
+            with self.assertRaises(SkillError,
+                                   msg="assignment %r" % (value,)):
+                get_skill("text", value)
 
-    def test_stage_prompts_carry_campaign_markers(self):
+    def test_missing_named_file_fails_closed(self):
+        with self.assertRaises(SkillError):
+            get_skill("text", "nope")
+
+    def test_disabled_named_skill_fails_closed(self):
+        _write(self.tmp, "text.off.yaml",
+               _doc("text", id="text-off-v1", enabled=False))
+        clear_cache()
+        with self.assertRaises(SkillError):
+            get_skill("text", "off")
+
+    def test_named_type_mismatch_fails_closed(self):
+        _write(self.tmp, "text.sneaky.yaml",
+               _doc("video", id="sneaky-v1"))
+        clear_cache()
+        with self.assertRaises(SkillError):
+            get_skill("text", "sneaky")
+
+    def test_list_includes_named_skills(self):
+        rows = [(r["type"], r["ref"]) for r in list_skills()]
+        self.assertIn(("text", ""), rows)
+        self.assertIn(("text", "juzzir"), rows)
+        self.assertIn(("research", "politics"), rows)
+        by_ref = {(r["type"], r["ref"]): r for r in list_skills()}
+        self.assertEqual(by_ref[("text", "juzzir")]["id"],
+                         "text-juzzir-v1")
+        self.assertEqual(by_ref[("text", "")]["id"], "text-x1")
+
+    def test_stage_prompts_carry_assigned_markers(self):
         import json as _json
         from research.analysis import OpenAIAnalysisModel
-        from research.models import OpenAIResearchModel, Finding, \
-            ResearchResult
+        from research.models import OpenAIResearchModel
         from g2.generators import OpenAITextGenerator
         from contracts import SourceItem
 
@@ -472,9 +522,9 @@ class CampaignOverrideCase(unittest.TestCase):
 
         policy = {"brand": {}, "language": {}, "pillars": [],
                   "generation": {}, "media": {},
-                  "skills": {"research": "CAMPAIGN-A-SKILL-PROOF",
-                             "analysis": "CAMPAIGN-A-ANALYSIS-PROOF",
-                             "text": "CAMPAIGN-A-TEXT-PROOF"}}
+                  "skills": {"research": "juzzir",
+                             "analysis": "juzzir",
+                             "text": "juzzir"}}
         it = SourceItem(source_id="g-1", source_type="rss",
                         source_url="u", title="T", text="Body words.",
                         item_id="g-1", content_hash="h")
@@ -486,11 +536,10 @@ class CampaignOverrideCase(unittest.TestCase):
         OpenAITextGenerator(adapter=Cap()).generate(
             "T", "S", {}, policy)
         blob = "\n".join(captured["prompts"])
-        self.assertIn("CAMPAIGN-A-SKILL-PROOF", blob)
-        self.assertIn("CAMPAIGN-A-ANALYSIS-PROOF", blob)
-        self.assertIn("CAMPAIGN-A-TEXT-PROOF", blob)
-        self.assertNotIn("CAMPAIGN-B-SKILL-PROOF", blob)
-
+        self.assertIn("JUZZIR-RESEARCH-MARKER", blob)
+        self.assertIn("JUZZIR-ANALYSIS-MARKER", blob)
+        self.assertIn("JUZZIR-TEXT-MARKER", blob)
+        self.assertNotIn("POLITICS-RESEARCH-MARKER", blob)
 
 if __name__ == "__main__":
     unittest.main()

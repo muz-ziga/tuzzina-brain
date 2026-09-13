@@ -140,6 +140,42 @@ class StoreTest(unittest.TestCase):
         target = path_for("safe_id", base_dir=self.tmp)
         self.assertTrue(str(target).endswith("safe_id.yaml"))
 
+    def test_skills_roundtrip(self):
+        import yaml
+        target = path_for("integ-abc", base_dir=self.tmp)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            yaml.safe_dump({"integration_id": "integ-abc",
+                            "strategy": {
+                                "skills": {"research": "politics",
+                                           "text": "juzzir"}}}, f)
+        loaded = load("integ-abc", base_dir=self.tmp)
+        self.assertEqual(loaded.skills, {"research": "politics",
+                                         "text": "juzzir"})
+        import tempfile
+        tmp2 = tempfile.mkdtemp(prefix="tbra_str2_")
+        save(loaded, base_dir=tmp2)
+        again = load("integ-abc", base_dir=tmp2)
+        self.assertEqual(again.skills, {"research": "politics",
+                                        "text": "juzzir"})
+
+    def test_skills_rejects_bad_shapes(self):
+        import yaml
+        bad = [{"skills": [1]},
+               {"skills": {"podcast": "x"}},
+               {"skills": {"text": 7}},
+               {"skills": {"text": "Write short posts."}},
+               {"skills": {"text": "../x"}},
+               {"skills": {"text": "x" * 65}}]
+        for doc in bad:
+            target = path_for("integ-abc", base_dir=self.tmp)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                yaml.safe_dump(dict({"integration_id": "integ-abc",
+                                     "strategy": doc}), f)
+            with self.assertRaises(ValueError, msg=str(doc)):
+                load("integ-abc", base_dir=self.tmp)
+
 
 class BrainStratDoesNotCarryIdentityTest(unittest.TestCase):
     def test_strategy_has_no_platform_or_name_field(self):

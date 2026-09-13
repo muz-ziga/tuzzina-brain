@@ -230,7 +230,8 @@ class OpenAIResearchModel(ResearchModel):
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
         prompt += "\n\n" + get_skill(
-            "research", campaign_skills)["instructions"]
+            "research",
+            (campaign_skills or {}).get("research"))["instructions"]
         body_text = "\n\n---\n\n".join(blocks)
         try:
             from llm.adapters import LLMError
