@@ -438,6 +438,59 @@ class RoleEnvCase(unittest.TestCase):
         self.assertNotIn("sk-shared", out + err)
 
 
+class SkillsTraceCase(unittest.TestCase):
+    def _run(self, campaign_text, openai_key="sk-shared"):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="tbra_skills_")
+        with open(os.path.join(tmp, "camp.yaml"), "w",
+                  encoding="utf-8") as f:
+            f.write(campaign_text)
+        _write_strategy(tmp)
+        import g2.generators as G
+        from research.models import MockResearchModel
+        from research.analysis import MockAnalysisModel
+        orig_text = G.OpenAITextGenerator
+        orig_models = rc_mod._build_models
+        class FakeText(G.TextGenerator):
+            def generate(self, title, summary, brand, policy=None):
+                return "Hello world post"
+        G.OpenAITextGenerator = lambda *a, **k: FakeText()
+        rc_mod._build_models = lambda mode, session_id="": (
+            MockResearchModel(), MockAnalysisModel())
+        try:
+            rc, out, err = _run_cli(
+                [os.path.join(tmp, "camp.yaml"),
+                 "--strategy-by-integration", "integ-fb-1",
+                 "--strategy-base-dir", tmp, "--openai",
+                 "--dry-run", "--run-id", "r-skills"],
+                openai_key=openai_key)
+        finally:
+            G.OpenAITextGenerator = orig_text
+            rc_mod._build_models = orig_models
+        self.assertEqual(rc, 0, msg=err)
+        return _result(out)
+
+    def test_campaign_skills_traced_with_source(self):
+        res = self._run(CAMPAIGN + "skills:\n  research: R-A\n"
+                        "  analysis: A-A\n  text: T-A\n")
+        by_stage = {s["stage"]: s for s in res["skills_used"]}
+        self.assertEqual(
+            (by_stage["research"]["type"],
+             by_stage["analysis"]["type"],
+             by_stage["text"]["type"]),
+            ("research", "analysis", "text"))
+        for stage in ("research", "analysis", "text"):
+            self.assertEqual(by_stage[stage]["source"], "campaign")
+        self.assertTrue(all(s["id"] and s["version"] >= 1
+                            for s in res["skills_used"]))
+
+    def test_missing_skills_trace_file_source(self):
+        res = self._run(CAMPAIGN)
+        self.assertTrue(res["skills_used"])
+        self.assertTrue(all(s["source"] == "file"
+                            for s in res["skills_used"]))
+
+
 class UsageGateCase(unittest.TestCase):
     def _case(self):
         tmp = tempfile.mkdtemp(prefix="tbra_use_")

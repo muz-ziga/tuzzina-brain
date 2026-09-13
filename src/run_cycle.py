@@ -250,17 +250,20 @@ def _main(argv=None) -> int:
                 "model": os.environ.get(prefix + "MODEL") or "gpt-4.1",
             })
         # Skill traceability: which expertise produced this run.
-        # Same files the stages above just loaded (analysis shares
-        # the research skill: it operates on research output).
+        # Each stage resolves its own type against the campaign
+        # overrides (global file when the campaign is silent).
         from skills.loader import get_skill
+        campaign_skills = cfg.get("skills") if isinstance(
+            cfg, dict) else None
         for skill_type, stage in (("research", "research"),
-                                  ("research", "analysis"),
+                                  ("analysis", "analysis"),
                                   ("text", "text")):
             try:
-                skill = get_skill(skill_type)
+                skill = get_skill(skill_type, campaign_skills)
                 skills_used.append({
                     "stage": stage, "type": skill_type,
-                    "id": skill["id"], "version": skill["version"]})
+                    "id": skill["id"], "version": skill["version"],
+                    "source": skill.get("source", "file")})
             except Exception as e:
                 print(f"run_id={run_id} error: skill {skill_type} "
                       f"unavailable ({e})", file=sys.stderr)

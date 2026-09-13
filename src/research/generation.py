@@ -85,8 +85,11 @@ def _prompt_for(topic: str, facts: list,
         # Fail-closed like every other stage (missing skill =
         # broken deploy, loud, never silently unskilled).
         from skills.loader import get_skill
+        skill_type = "video" if for_video else "image"
+        campaign_skills = policy.get("skills") if isinstance(
+            policy, dict) else None
         base += "\n\n" + get_skill(
-            "video" if for_video else "image")["instructions"]
+            skill_type, campaign_skills)["instructions"]
     return base
 
 

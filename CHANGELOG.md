@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — Brain Skills system
+
+- New `src/skills/` file-owned expertise layer (no DB, per
+  AGENTS.md): `loader.py` (strict validation, fail-closed,
+  `BRAIN_SKILLS_DIR` override) + versioned YAML skills
+  (`research-v1`, `text-social-v1`, `image-v1`, `video-v1`).
+  Stages resolve skills by type; analysis shares the research
+  skill; runs record `skills_used` (stage/type/id/version) in
+  `BRAIN_RESULT`.
+- New deterministic editorial (`skills/editorial.py`):
+  markdown flattening, duplicate-URL collapse, policy-owned
+  link/CTA removal, hashtag stripping, duplicate-line
+  collapse, and single-application link assembly
+  (`append_once`, applied in pipeline + both adapters).
+- Text skill v2: language-consistency rule (no third-script
+  tokens outside narrow exceptions) plus a deterministic
+  Arabic script gate (`script_consistent`/`assert_script`,
+  enforced in the pipeline; Chinese-in-Arabic output now
+  fails loud instead of publishing).
+- Known limitation (no safe deterministic fix): truncated
+  mid-sentence output cannot be reliably distinguished from
+  valid short posts, so it is not auto-rejected; the skill
+  instructs complete sentences instead.
+- Enabling runtime fixes in the same window: strategy `n`
+  cap honored for rss/youtube collection; markdown-fenced
+  JSON accepted in role validators; research-state transport
+  via slash-safe query/body routes; generic
+  `openai_compatible` dispatch with run-scoped base URL;
+  run-scoped `x-opencode-session` for Zen; redacted 4xx
+  excerpts and safe empty-response sketches in diagnostics.
+- Campaign-specific Skills: campaigns may carry their own
+  `skills` instructions (`research`, `analysis`, `text`,
+  `image`, `video`) in the campaign document; each stage
+  resolves its own type with the global file as fallback.
+  New global `analysis.yaml` default (analysis no longer
+  shares the research skill). Runs record per-stage
+  `source: campaign|file` in `skills_used`.
+- Tests: 570/570 pass (loader, overrides, isolation,
+  editorial, wiring, traceability, secrecy).
+
 ## 0.30.0 — Phase 15: OpenCode Zen provider adapter
 
 - New `OpenCodeZenAdapter` (`opencode_zen`): Zen's

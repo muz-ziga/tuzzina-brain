@@ -162,6 +162,15 @@ def resolve_strategy(project_cfg: dict, strategy,
     out["content"] = content
     out["generation"] = generation
     out["visual"] = visual
+    # Campaign skills ride through untouched: the campaign owns
+    # them (validated at load), the strategy intentionally has no
+    # skill key, and stages resolve them per type with global
+    # files as fallback. A plain validated copy, never merged.
+    campaign_skills = project_cfg.get("skills") or {}
+    out["skills"] = {k: v for k, v in campaign_skills.items()
+                     if k in ("research", "analysis", "text",
+                              "image", "video")
+                     and isinstance(v, str) and v.strip()}
     # Strategy planning merges over campaign schedule (channel wins
     # per leaf; G3 reads only this merged schedule dict).
     sched = dict(out.get("schedule") or {})

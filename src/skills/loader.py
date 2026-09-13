@@ -29,7 +29,7 @@ try:
 except Exception:  # pragma: no cover - runtime always has PyYAML
     yaml = None
 
-SKILL_TYPES = ("research", "text", "image", "video")
+SKILL_TYPES = ("research", "analysis", "text", "image", "video")
 
 _REQUIRED = ("id", "name", "type", "version", "instructions")
 _OPTIONAL = ("enabled", "config")
@@ -96,19 +96,41 @@ def _load_document(skill_type: str) -> dict:
             "config": dict(config)}
 
 
-def get_skill(skill_type: str) -> dict:
+def get_skill(skill_type: str, overrides: dict | None = None) -> dict:
     """Load and validate one skill. Results are cached per
     process (same rationale as strategy files: runs are
-    short-lived; tests clear the cache through the env)."""
+    short-lived; tests clear the cache through the env).
+
+    Campaign override: when the current campaign carries its own
+    instructions for this type, they win over the global file.
+    The returned shape is identical (plus ``source``), so stages
+    need no branching. Trace identity comes from the slot's
+    global id/version; ``source`` says which content ran.
+    """
     if skill_type not in SKILL_TYPES:
         raise SkillError(f"unknown-skill-type:{skill_type}")
+    if isinstance(overrides, dict):
+        content = overrides.get(skill_type)
+        if isinstance(content, str) and content.strip():
+            if len(content) > 8000:
+                raise SkillError(
+                    f"invalid-skill:{skill_type}:campaign-too-long")
+            base = _load_document(skill_type)
+            if not base["enabled"]:
+                raise SkillError(f"disabled-skill:{skill_type}")
+            return {"id": base["id"], "name": base["name"],
+                    "type": skill_type, "version": base["version"],
+                    "enabled": True,
+                    "instructions": content.strip(),
+                    "config": dict(base["config"]),
+                    "source": "campaign"}
     key = (skills_dir(), skill_type)
     if key not in _cache:
         _cache[key] = _load_document(skill_type)
     skill = _cache[key]
     if not skill["enabled"]:
         raise SkillError(f"disabled-skill:{skill_type}")
-    return skill
+    return {**skill, "source": "file"}
 
 
 def list_skills() -> list:

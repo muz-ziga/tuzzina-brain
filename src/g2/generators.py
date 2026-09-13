@@ -84,7 +84,9 @@ class OpenAITextGenerator(TextGenerator):
     def generate(self, title: str, summary: str, brand: dict,
                  policy: dict | None = None) -> str:
         from skills.loader import get_skill
-        skill = get_skill("text")
+        campaign_skills = policy.get("skills") if isinstance(
+            policy, dict) else None
+        skill = get_skill("text", campaign_skills)
         max_chars = 500
         try:
             max_chars = int((skill.get("config") or {}).get(

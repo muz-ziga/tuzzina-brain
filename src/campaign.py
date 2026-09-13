@@ -38,6 +38,18 @@ def load_campaign(path: str) -> dict:
     lp = cfg.get("links_policy", "hide")
     if lp not in VALID_LINK_POLICIES:
         raise _err("links_policy", f"must be one of {VALID_LINK_POLICIES}")
+    skills = cfg.get("skills") or {}
+    if not isinstance(skills, dict):
+        raise _err("skills", "must be a mapping")
+    clean_skills = {}
+    for k, v in skills.items():
+        if k not in ("research", "analysis", "text", "image", "video"):
+            raise _err(f"skills.{k}", "unknown skill type")
+        if not isinstance(v, str) or not v.strip():
+            raise _err(f"skills.{k}", "must be a non-empty string")
+        if len(v) > 8000:
+            raise _err(f"skills.{k}", "must be ≤ 8000 chars")
+        clean_skills[k] = v
     lang = cfg.get("language") or {}
     hs = cfg.get("hashtags") or {}
     sched = cfg.get("schedule") or {}
@@ -65,4 +77,5 @@ def load_campaign(path: str) -> dict:
         "schedule": {"timezone": str(sched.get("timezone", "UTC")),
                      "days": list(sched.get("days") or []),
                      "times": list(sched.get("times") or [])},
+        "skills": clean_skills,
     }

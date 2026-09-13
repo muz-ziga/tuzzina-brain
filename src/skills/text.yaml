@@ -1,7 +1,7 @@
 id: text-social-v1
 name: Social text
 type: text
-version: 1
+version: 2
 enabled: true
 config:
   max_chars: 600
@@ -45,3 +45,18 @@ instructions: |
     post itself.
   - Match the language and tone from the Channel instructions;
     they override these defaults on conflict.
+  - End with a complete sentence. Never trail off mid-clause;
+    a short complete post beats a longer cut-off one.
+
+  LANGUAGE CONSISTENCY:
+  - Every word must use the requested output language.
+  - Never insert Chinese, Japanese, Korean, Cyrillic, or other
+    third-script tokens. The only exceptions are proper names,
+    official product or platform names, URLs, unavoidable
+    technical terms, or content the strategy explicitly
+    requests — and even then, keep them minimal and necessary.
+  - Arabic output must read as Arabic throughout, with no
+    unexplained foreign-script fragments. Do not mistranslate
+    proper names to disguise them; write them correctly or
+    leave them in their original script only when that script
+    is Latin.

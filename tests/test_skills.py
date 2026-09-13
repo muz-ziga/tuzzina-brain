@@ -96,6 +96,8 @@ class LoaderCase(unittest.TestCase):
             "missing-skill"))
         self.assertTrue(rows["video"]["status"].startswith(
             "missing-skill"))
+        self.assertTrue(rows["analysis"]["status"].startswith(
+            "missing-skill"))
 
     def test_shipped_skills_load(self):
         # Deployment guard: the real skill files parse and carry
@@ -103,12 +105,13 @@ class LoaderCase(unittest.TestCase):
         os.environ.pop("BRAIN_SKILLS_DIR", None)
         clear_cache()
         seen = set()
-        for skill_type in ("research", "text", "image", "video"):
+        for skill_type in ("research", "analysis", "text", "image",
+                           "video"):
             skill = get_skill(skill_type)
             self.assertTrue(skill["instructions"])
             self.assertGreaterEqual(skill["version"], 1)
             seen.add(skill["id"])
-        self.assertEqual(len(seen), 4)
+        self.assertEqual(len(seen), 5)
 
 
 class EditorialCase(unittest.TestCase):
@@ -163,6 +166,72 @@ class EditorialCase(unittest.TestCase):
     def test_empty_safe(self):
         self.assertEqual(clean_model_text("", links_policy="hide"), "")
         self.assertEqual(clean_model_text("   "), "")
+
+
+class ScriptConsistencyCase(unittest.TestCase):
+    """Third-script noise in Arabic output fails closed (detection
+    only — deleting words would mangle sentences)."""
+
+    def test_clean_arabic_passes(self):
+        from skills.editorial import assert_script, script_consistent
+        text = "تأكد من توافق المزيج قبل المعالجة. Juzzir يساعد."
+        self.assertTrue(script_consistent(text, "ar"))
+        assert_script(text, "ar")
+
+    def test_chinese_in_arabic_fails(self):
+        from skills.editorial import assert_script, script_consistent
+        text = "تأكد من الميكروفون مع الم的作品 قبل المعالجة."
+        self.assertFalse(script_consistent(text, "ar"))
+        with self.assertRaises(ValueError):
+            assert_script(text, "ar")
+
+    def test_cyrillic_in_arabic_fails(self):
+        from skills.editorial import script_consistent
+        self.assertFalse(script_consistent("مرحبا мир", "ar"))
+
+    def test_non_arabic_langs_pass(self):
+        from skills.editorial import script_consistent
+        self.assertTrue(script_consistent("Hello 的作品", "en"))
+        self.assertTrue(script_consistent("", "ar"))
+        self.assertTrue(script_consistent("anything", ""))
+
+    def test_pipeline_gates_mixed_script(self):
+        from g2.generators import TextGenerator
+        from g2.pipeline import build_package
+        from contracts import SourceItem
+
+        class Dirty(TextGenerator):
+            def generate(self, title, summary, brand, policy=None):
+                return "نص عربي مع 的作品 مختلطة."
+
+        item = SourceItem(
+            source_id="s", source_type="rss", source_url="u",
+            title="T", text="Body words.", item_id="s",
+            content_hash="h")
+        with self.assertRaises(ValueError):
+            build_package(
+                item, {"tone": "b"}, {"default": "ar"},
+                {"enabled": False}, "hide", Dirty(), None,
+                platform="facebook", policy={"brand": {}})
+
+    def test_pipeline_passes_clean_arabic(self):
+        from g2.generators import TextGenerator
+        from g2.pipeline import build_package
+        from contracts import SourceItem
+
+        class Clean(TextGenerator):
+            def generate(self, title, summary, brand, policy=None):
+                return "نص عربي نظيف ومفيد."
+
+        item = SourceItem(
+            source_id="s", source_type="rss", source_url="u",
+            title="T", text="Body words.", item_id="s",
+            content_hash="h")
+        pkg = build_package(
+            item, {"tone": "b"}, {"default": "ar"},
+            {"enabled": False}, "hide", Clean(), None,
+            platform="facebook", policy={"brand": {}})
+        self.assertIn("نص عربي", pkg.content)
 
 
 class AppendOnceCase(unittest.TestCase):
@@ -253,7 +322,7 @@ class WiringCase(unittest.TestCase):
         self.assertIn("will appear TWICE", sys_prompt)
         self.assertIn("Channel instructions:", sys_prompt)
         self.assertIn("punchy", sys_prompt)
-        self.assertNotIn("Arabic", sys_prompt)
+        self.assertNotIn("Write one Arabic social post", sys_prompt)
 
     def test_pipeline_editorial_cleans_leaks(self):
         from g2.generators import TextGenerator
@@ -306,6 +375,121 @@ class WiringCase(unittest.TestCase):
                         item_id="g-1", content_hash="h")
         OpenAIResearchModel(adapter=Cap()).research([it])
         self.assertIn("thin pages", captured["sys"])
+
+
+class CampaignOverrideCase(unittest.TestCase):
+    """Campaign skills: per-campaign instructions win per stage,
+    missing slots fall back to global files, campaigns never
+    leak into each other."""
+
+    def setUp(self):
+        self._old = os.environ.get("BRAIN_SKILLS_DIR")
+        self.tmp = tempfile.mkdtemp()
+        os.environ["BRAIN_SKILLS_DIR"] = self.tmp
+        clear_cache()
+        for skill_type in ("research", "analysis", "text", "image",
+                           "video"):
+            _write(self.tmp, skill_type + ".yaml",
+                   _doc(skill_type))
+
+    def tearDown(self):
+        clear_cache()
+        if self._old is None:
+            os.environ.pop("BRAIN_SKILLS_DIR", None)
+        else:
+            os.environ["BRAIN_SKILLS_DIR"] = self._old
+
+    def test_each_stage_resolves_own_override(self):
+        overrides = {
+            "research": "CAMPAIGN-A-SKILL-PROOF research",
+            "analysis": "CAMPAIGN-A-SKILL-PROOF analysis",
+            "text": "CAMPAIGN-A-SKILL-PROOF text",
+            "image": "CAMPAIGN-A-SKILL-PROOF image",
+            "video": "CAMPAIGN-A-SKILL-PROOF video",
+        }
+        for skill_type, marker in overrides.items():
+            skill = get_skill(skill_type, overrides)
+            self.assertIn(marker, skill["instructions"])
+            self.assertEqual(skill["source"], "campaign")
+            self.assertEqual(skill["id"], "%s-x1" % skill_type)
+
+    def test_missing_slot_falls_back_global(self):
+        overrides = {"text": "CAMPAIGN-A-SKILL-PROOF text"}
+        skill = get_skill("research", overrides)
+        self.assertEqual(skill["source"], "file")
+        self.assertNotIn("CAMPAIGN-A", skill["instructions"])
+        self.assertEqual(get_skill("text", {})["source"], "file")
+        self.assertEqual(
+            get_skill("text", {"text": "   "})["source"], "file")
+
+    def test_campaigns_do_not_leak(self):
+        skill_a = get_skill("text", {"text": "CAMPAIGN-A-SKILL-PROOF"})
+        skill_b = get_skill("text", {"text": "CAMPAIGN-B-SKILL-PROOF"})
+        self.assertIn("CAMPAIGN-A-SKILL-PROOF",
+                      skill_a["instructions"])
+        self.assertNotIn("CAMPAIGN-B-SKILL-PROOF",
+                         skill_a["instructions"])
+        self.assertIn("CAMPAIGN-B-SKILL-PROOF",
+                      skill_b["instructions"])
+        self.assertNotIn("CAMPAIGN-A-SKILL-PROOF",
+                         skill_b["instructions"])
+
+    def test_oversized_override_fails_closed(self):
+        with self.assertRaises(SkillError):
+            get_skill("text", {"text": "x" * 8001})
+
+    def test_stage_prompts_carry_campaign_markers(self):
+        import json as _json
+        from research.analysis import OpenAIAnalysisModel
+        from research.models import OpenAIResearchModel, Finding, \
+            ResearchResult
+        from g2.generators import OpenAITextGenerator
+        from contracts import SourceItem
+
+        captured = {}
+
+        class Cap:
+            model = "m"
+
+            def complete(self, system, user, **kw):
+                captured.setdefault("prompts", []).append(
+                    system + "\n" + user)
+                if "opportunity" in system:
+                    return _json.dumps({
+                        "eligible": True, "topic": "T", "angle": "A",
+                        "rationale": "R", "facts": ["Fact words here"],
+                        "source_item_ids": ["g-1"],
+                        "content_format": "post",
+                        "media_intent": "none", "audience": "a",
+                        "language": "en", "priority": "normal",
+                        "confidence": "high", "constraints": []})
+                return _json.dumps({
+                    "summary": "S", "topics": ["t"], "entities": [],
+                    "findings": [{"statement": "Fact words here",
+                                  "kind": "fact", "confidence": "high",
+                                  "item_ids": ["g-1"],
+                                  "excerpt": "Fact"}]})
+
+        policy = {"brand": {}, "language": {}, "pillars": [],
+                  "generation": {}, "media": {},
+                  "skills": {"research": "CAMPAIGN-A-SKILL-PROOF",
+                             "analysis": "CAMPAIGN-A-ANALYSIS-PROOF",
+                             "text": "CAMPAIGN-A-TEXT-PROOF"}}
+        it = SourceItem(source_id="g-1", source_type="rss",
+                        source_url="u", title="T", text="Body words.",
+                        item_id="g-1", content_hash="h")
+        research = OpenAIResearchModel(adapter=Cap()).research(
+            [it], policy)
+        out = OpenAIAnalysisModel(adapter=Cap()).analyze(
+            research, policy, [it])
+        self.assertTrue(out.eligible)
+        OpenAITextGenerator(adapter=Cap()).generate(
+            "T", "S", {}, policy)
+        blob = "\n".join(captured["prompts"])
+        self.assertIn("CAMPAIGN-A-SKILL-PROOF", blob)
+        self.assertIn("CAMPAIGN-A-ANALYSIS-PROOF", blob)
+        self.assertIn("CAMPAIGN-A-TEXT-PROOF", blob)
+        self.assertNotIn("CAMPAIGN-B-SKILL-PROOF", blob)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,43 @@ def _strip_trailing_punct(url: str) -> str:
     return url.rstrip(".,!?:;)\"'")
 
 
+# Script blocks that must never leak into Arabic output (the
+# observed failure mixed Chinese into Arabic). Latin is always
+# allowed (brand names, URLs already stripped upstream).
+_NON_ARABIC_SCRIPTS = (
+    ("Han", "\u4e00", "\u9fff"),
+    ("Hiragana", "\u3040", "\u309f"),
+    ("Katakana", "\u30a0", "\u30ff"),
+    ("Hangul", "\uac00", "\ud7af"),
+    ("Cyrillic", "\u0400", "\u04ff"),
+)
+
+
+def script_consistent(text: str, lang: str = "") -> bool:
+    """True unless Arabic output carries third-script tokens.
+    Detection only (no cleaning: deleting words would mangle
+    sentences). Narrow by design: only the demonstrated
+    Arabic-mixing failure is gated; all other languages pass.
+    Never raises."""
+    try:
+        if (lang or "").strip().lower() != "ar":
+            return True
+        for _, lo, hi in _NON_ARABIC_SCRIPTS:
+            for ch in text or "":
+                if lo <= ch <= hi:
+                    return False
+        return True
+    except Exception:
+        return True
+
+
+def assert_script(text: str, lang: str = "") -> None:
+    """Fail closed on third-script noise in Arabic output. Raises
+    ValueError (a cycle-level error, never silent bad content)."""
+    if not script_consistent(text, lang):
+        raise ValueError("script-mismatch:ar")
+
+
 def append_once(content: str, addition: str) -> str:
     """Append a publisher-owned block exactly once.
 

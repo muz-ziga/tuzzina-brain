@@ -285,11 +285,14 @@ class OpenAIAnalysisModel(AnalysisModel):
         skill = _skill(policy)
         if skill:
             context += "\n" + skill
-        # Analysis is the second half of the research phase: it
-        # shares the research skill (operates on research output),
-        # there is no separate analysis skill type.
+        # Analysis consumes its own skill (campaign override wins,
+        # global analysis file is the fallback). Never the research
+        # skill: the stages have separate expertise.
         from skills.loader import get_skill
-        context += "\n\n" + get_skill("research")["instructions"]
+        campaign_skills = policy.get("skills") if isinstance(
+            policy, dict) else None
+        context += "\n\n" + get_skill(
+            "analysis", campaign_skills)["instructions"]
         if len(context) > MAX_PROMPT_CHARS:
             context = context[:MAX_PROMPT_CHARS]
             truncated = True

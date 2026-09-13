@@ -47,6 +47,28 @@ class CampaignTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_campaign(self._f(GOOD + "links_policy: everywhere\n"))
 
+    def test_skills_passthrough(self):
+        cfg = load_campaign(self._f(
+            GOOD + "skills:\n  research: CAMPAIGN-A-SKILL-PROOF\n"
+            "  text: Write short.\n"))
+        self.assertEqual(cfg["skills"], {
+            "research": "CAMPAIGN-A-SKILL-PROOF",
+            "text": "Write short.",
+        })
+
+    def test_skills_absent_defaults_empty(self):
+        cfg = load_campaign(self._f(GOOD))
+        self.assertEqual(cfg["skills"], {})
+
+    def test_skills_rejects_bad_shapes(self):
+        for skills in ("skills: [1]\n",
+                       "skills:\n  podcast: x\n",
+                       "skills:\n  text: 7\n",
+                       "skills:\n  text: '   '\n",
+                       "skills:\n  text: '" + "x" * 8001 + "'\n"):
+            with self.assertRaises(ValueError, msg=skills[:20]):
+                load_campaign(self._f(GOOD + skills))
+
 
 if __name__ == "__main__":
     unittest.main()

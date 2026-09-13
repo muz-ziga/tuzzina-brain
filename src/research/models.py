@@ -227,7 +227,10 @@ class OpenAIResearchModel(ResearchModel):
         if skill:
             prompt += "\n\n" + skill
         from skills.loader import get_skill
-        prompt += "\n\n" + get_skill("research")["instructions"]
+        campaign_skills = policy.get("skills") if isinstance(
+            policy, dict) else None
+        prompt += "\n\n" + get_skill(
+            "research", campaign_skills)["instructions"]
         body_text = "\n\n---\n\n".join(blocks)
         try:
             from llm.adapters import LLMError
