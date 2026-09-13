@@ -39,18 +39,24 @@ class FakeResp:
         return False
 
 
+def _query_source_id(url):
+    import urllib.parse as _up
+    return _up.parse_qs(_up.urlparse(url).query).get("sourceId", [""])[0]
+
+
 def fake_urlopen(req, timeout=None):
     CALLS.append((req.full_url, req.get_method(),
                   json.loads(req.data.decode()) if req.data else None))
     if req.get_method() == "GET":
-        if req.full_url in ROWS:
-            return FakeResp({"sourceId": "x", "state": ROWS[req.full_url],
+        sid = _query_source_id(req.full_url)
+        if sid in ROWS:
+            return FakeResp({"sourceId": sid, "state": ROWS[sid],
                              "updatedAt": "2026-09-08T12:00:00+00:00"})
         return FakeResp({}, 404)
     if req.get_method() == "PUT":
         body = json.loads(req.data.decode())
-        ROWS[req.full_url] = body["state"]
-        return FakeResp({"sourceId": "x",
+        ROWS[body["sourceId"]] = body["state"]
+        return FakeResp({"sourceId": body["sourceId"],
                          "updatedAt": "2026-09-08T12:00:00+00:00"})
     return FakeResp({}, 400)
 
@@ -101,9 +107,8 @@ class StoreCase(unittest.TestCase):
         urllib.request.urlopen = self._orig
 
     def test_load_hit(self):
-        ROWS["http://x/api/public/v1/research-state/feed.test"] = {
-            "source_id": "feed.test", "seen": {
-                "g-1": {"hash": "h1", "first_seen": NOW}},
+        ROWS["feed.test"] = {
+            "seen": {"g-1": {"hash": "h1", "first_seen": NOW}},
             "last_seen_item_id": "g-1",
             "last_seen_published_at": "2026-09-08T09:00:00+00:00",
             "first_seen_at": NOW, "last_checked_at": NOW,
@@ -129,9 +134,10 @@ class StoreCase(unittest.TestCase):
         self.store.save(st)
         self.assertEqual(CALLS[0][1], "PUT")
         self.assertEqual(CALLS[0][0],
-                         "http://x/api/public/v1/research-state/feed.test")
+                         "http://x/api/public/v1/research-state")
         body = CALLS[0][2]
-        self.assertEqual(set(body.keys()), {"state"})
+        self.assertEqual(set(body.keys()), {"sourceId", "state"})
+        self.assertEqual(body["sourceId"], "feed.test")
         self.assertEqual(body["state"]["seen"]["g-1"]["hash"], "h1")
         # durable: a NEW store instance observes the commit
         other = TuzzinaStateStore(self.c)
@@ -147,14 +153,32 @@ class StoreCase(unittest.TestCase):
         with self.assertRaises(TuzzinaError):
             self.store.save(SourceState(source_id="s"))
 
-    def test_source_id_encoded(self):
-        st = SourceState(source_id="http://feed.test/rss?a=b c/d")
+    def test_url_source_id_slash_safe(self):
+        # Source ids are URLs. The id must never extend the URL
+        # path (proxies normalize encoded slashes out of path
+        # segments): reads carry it in the query, writes in the
+        # body, both verbatim.
+        sid = "https://www.masteringthemix.com/blogs/learn.atom"
+        st = SourceState(source_id=sid)
+        st.seen["g-1"] = {"hash": "h1", "first_seen": NOW}
         self.store.save(st)
-        url = CALLS[0][0]
-        self.assertTrue(url.startswith(
-            "http://x/api/public/v1/research-state/http%3A"))
-        self.assertNotIn(" ", url)
-        self.assertNotIn("/rss", url.split("/research-state/")[1])
+        put_url, put_method, put_body = CALLS[0]
+        self.assertEqual(put_method, "PUT")
+        self.assertEqual(put_url,
+                         "http://x/api/public/v1/research-state")
+        self.assertEqual(put_body["sourceId"], sid)
+        other = TuzzinaStateStore(self.c)
+        loaded = other.load(sid)
+        self.assertEqual(loaded.seen["g-1"]["hash"], "h1")
+        get_url, get_method, _ = CALLS[1]
+        self.assertEqual(get_method, "GET")
+        self.assertTrue(
+            get_url.startswith(
+                "http://x/api/public/v1/research-state?"))
+        import urllib.parse as _up
+        self.assertEqual(
+            _up.parse_qs(_up.urlparse(get_url).query)["sourceId"],
+            [sid])
 
     def test_no_secrets_in_payloads(self):
         st = SourceState(source_id="s")

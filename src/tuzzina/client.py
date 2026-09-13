@@ -114,11 +114,13 @@ class TuzzinaClient:
     def get_research_state(self, source_id: str) -> dict | None:
         """Load durable monitoring state for one source. Returns the
         stored state dict, or None when no row exists (HTTP 404).
-        Any other failure raises TuzzinaError."""
+        Any other failure raises TuzzinaError. The id travels in
+        the query string: source ids are URLs, and proxies
+        normalize encoded slashes out of path segments."""
         if not source_id or not str(source_id).strip():
             raise TuzzinaError("source_id is required")
-        path = "/public/v1/research-state/" + urllib.parse.quote(
-            str(source_id), safe="")
+        path = "/public/v1/research-state?" + urllib.parse.urlencode(
+            {"sourceId": str(source_id)})
         try:
             data = self._call("GET", path)
         except TuzzinaError as e:
@@ -132,14 +134,15 @@ class TuzzinaClient:
 
     def save_research_state(self, source_id: str, state: dict) -> dict:
         """Persist monitoring state (upsert). Raises TuzzinaError
-        on failure; PUT is idempotent so a retry cannot corrupt."""
+        on failure; PUT is idempotent so a retry cannot corrupt.
+        The id travels in the body for the same slash-safety
+        reason as the read path."""
         if not source_id or not str(source_id).strip():
             raise TuzzinaError("source_id is required")
         if not isinstance(state, dict):
             raise TuzzinaError("state must be a mapping")
-        path = "/public/v1/research-state/" + urllib.parse.quote(
-            str(source_id), safe="")
-        data = self._call("PUT", path, {"state": state})
+        data = self._call("PUT", "/public/v1/research-state",
+                          {"sourceId": str(source_id), "state": state})
         return data if isinstance(data, dict) else {}
 
     def get_content_distribution(self, integration_id: str):
