@@ -285,6 +285,11 @@ class OpenAIAnalysisModel(AnalysisModel):
         skill = _skill(policy)
         if skill:
             context += "\n" + skill
+        # Analysis is the second half of the research phase: it
+        # shares the research skill (operates on research output),
+        # there is no separate analysis skill type.
+        from skills.loader import get_skill
+        context += "\n\n" + get_skill("research")["instructions"]
         if len(context) > MAX_PROMPT_CHARS:
             context = context[:MAX_PROMPT_CHARS]
             truncated = True

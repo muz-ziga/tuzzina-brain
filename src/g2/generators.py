@@ -83,13 +83,29 @@ class OpenAITextGenerator(TextGenerator):
 
     def generate(self, title: str, summary: str, brand: dict,
                  policy: dict | None = None) -> str:
-        sys = ("Write one Arabic social post, max 500 chars. "
-               f"Tone: {brand.get('tone', 'neutral')}. "
-               f"Audience: {brand.get('audience', 'general')}. No hashtags.")
-        from channels.instructions import build as _skill
-        skill = _skill(policy)
-        if skill:
-            sys += "\n\n" + skill
+        from skills.loader import get_skill
+        skill = get_skill("text")
+        max_chars = 500
+        try:
+            max_chars = int((skill.get("config") or {}).get(
+                "max_chars", max_chars))
+        except (TypeError, ValueError):
+            max_chars = 500
+        parts = [skill["instructions"]]
+        from channels.instructions import build as _strategy_block
+        strategy = _strategy_block(policy)
+        if strategy:
+            parts.append(strategy)
+        elif isinstance(brand, dict) and \
+                (brand.get("tone") or brand.get("audience")):
+            # Legacy fallback: no strategy profile available, keep
+            # the caller-supplied voice instead of defaulting.
+            parts.append(
+                f"Brand voice: {brand.get('tone') or 'neutral'}; "
+                f"audience: {brand.get('audience') or 'general'}.")
+        parts.append(
+            f"Write one social post, max {max_chars} chars.")
+        sys = "\n\n".join(parts)
         return self._adapter.complete(
             sys, f"Title: {title}\nSummary: {summary}",
             temperature=0.7, max_tokens=400,

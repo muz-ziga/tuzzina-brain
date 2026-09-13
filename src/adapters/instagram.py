@@ -23,8 +23,9 @@ class InstagramAdapter(PlatformAdapter):
         # Instagram posts have no link field; attach is meaningless.
         # 'cta' still appends call-to-action text (no URL).
         if policy == "cta":
-            cta = (cta_style or "Learn more").strip()
-            return f"{content}\n\n{cta}".strip()
+            from skills.editorial import append_once
+            return append_once(content,
+                               (cta_style or "Learn more").strip())
         return content
 
     def link_setting(self, policy: str, link: str) -> dict:

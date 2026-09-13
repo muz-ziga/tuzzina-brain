@@ -81,6 +81,12 @@ def _prompt_for(topic: str, facts: list,
         seen = _visual(policy, video_rules=for_video)
         if seen:
             base += "\n" + seen
+        # Plus the matching skill: image or video direction.
+        # Fail-closed like every other stage (missing skill =
+        # broken deploy, loud, never silently unskilled).
+        from skills.loader import get_skill
+        base += "\n\n" + get_skill(
+            "video" if for_video else "image")["instructions"]
     return base
 
 

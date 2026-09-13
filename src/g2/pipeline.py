@@ -36,11 +36,11 @@ def make_hashtags(title: str, summary: str, preferred: list,
 
 def apply_link_policy(content: str, url: str, policy: str,
                       cta_style: str) -> str:
+    from skills.editorial import append_once
     if policy == "attach" and url:
-        return f"{content}\n\n{url}".strip()
+        return append_once(content, url)
     if policy == "cta":
-        cta = (cta_style or "Learn more").strip()
-        return f"{content}\n\n{cta}".strip()
+        return append_once(content, (cta_style or "Learn more").strip())
     return content  # hide
 
 
@@ -61,6 +61,18 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
     Backward compatible: omitting limits/link_fn preserves behavior."""
     summary = normalize(item.text)
     text = text_gen.generate(item.title, summary, brand, policy)
+    # Deterministic editorial: the model must emit bare value
+    # text (no URLs, CTAs, hashtags, markdown); the pipeline owns
+    # all assembly below. Cleans model leaks mechanically so no
+    # second model call is ever needed for formatting hygiene.
+    from skills.editorial import _BARE_URL, clean_model_text
+    cta_style = brand.get("cta_style") or ""
+    cta_urls = _BARE_URL.findall(cta_style)
+    cta_lead = _BARE_URL.sub("", cta_style)
+    text = clean_model_text(
+        text, links_policy=links_policy,
+        policy_urls=[item.source_url or "", *cta_urls],
+        policy_phrases=[cta_lead] if cta_lead.strip() else [])
     text, banned_hit = apply_banned(text, brand.get("banned_words", []))
     max_tags = int(((hs_cfg.get("per_platform") or {}).get(
         platform) or {}).get("max", 5)) if hs_cfg.get("enabled") else 0
@@ -83,12 +95,14 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
                       "source": "extracted"})
     elif image_gen is not None:
         # Delegated image prompt: visual block only, no video
-        # rules, no text-side instructions.
+        # rules, no text-side instructions, plus the image skill.
         from channels.instructions import build_visual as _visual
+        from skills.loader import get_skill
         _iprompt = f"{item.title} :: {summary[:200]}"
         _visual_block = _visual(policy, video_rules=False)
         if _visual_block:
             _iprompt += "\n" + _visual_block
+        _iprompt += "\n\n" + get_skill("image")["instructions"]
         media.append({"kind": "generator", "generator": image_gen,
                       "prompt": _iprompt})
     settings = {"__type": platform}

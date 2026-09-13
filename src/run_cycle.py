@@ -156,7 +156,8 @@ def _main(argv=None) -> int:
     result = {"run_id": run_id, "status": "error", "sources_checked": 0,
               "items_new": 0, "eligible": False, "intents": 0,
               "post_ids": [], "committed": False, "error": "",
-              "roles_resolved": [], "usage": {"used": {}, "remaining": {}}}
+              "roles_resolved": [], "skills_used": [],
+              "usage": {"used": {}, "remaining": {}}}
 
     if args.mode == "--mock" and not args.dry_run:
         # Mock image bytes must never reach real storage or posts.
@@ -235,6 +236,7 @@ def _main(argv=None) -> int:
     research_model, analysis_model = _build_models(
         args.mode, session_id=run_id)
     roles_resolved = []
+    skills_used = []
     if args.mode == "--openai":
         # Echoed for observability (adapter+protocol+model — never
         # credentials). Mirrors the resolution order above.
@@ -247,6 +249,25 @@ def _main(argv=None) -> int:
                 "protocol": (os.environ.get(prefix + "PROTOCOL") or "").strip() or None,
                 "model": os.environ.get(prefix + "MODEL") or "gpt-4.1",
             })
+        # Skill traceability: which expertise produced this run.
+        # Same files the stages above just loaded (analysis shares
+        # the research skill: it operates on research output).
+        from skills.loader import get_skill
+        for skill_type, stage in (("research", "research"),
+                                  ("research", "analysis"),
+                                  ("text", "text")):
+            try:
+                skill = get_skill(skill_type)
+                skills_used.append({
+                    "stage": stage, "type": skill_type,
+                    "id": skill["id"], "version": skill["version"]})
+            except Exception as e:
+                print(f"run_id={run_id} error: skill {skill_type} "
+                      f"unavailable ({e})", file=sys.stderr)
+                result["error"] = f"skill-unavailable:{skill_type}"
+                result["status"] = "error"
+                _emit_result(result)
+                return 2
     if args.dry_run:
         # A cursor advance is a write: dry-run performs ZERO writes,
         # so it always runs on a memory store even when tuzzina was
@@ -278,6 +299,7 @@ def _main(argv=None) -> int:
     result["intents"] = len(out.intents)
     result["committed"] = bool(out.committed)
     result["roles_resolved"] = roles_resolved
+    result["skills_used"] = skills_used
     if out.error:
         print(f"run_id={run_id} error: {out.error}", file=sys.stderr)
         result["error"] = out.error

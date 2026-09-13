@@ -21,11 +21,12 @@ class FacebookAdapter(PlatformAdapter):
 
     def apply_link(self, content: str, url: str, policy: str,
                    cta_style: str) -> str:
+        from skills.editorial import append_once
         if policy == "attach" and url:
-            return f"{content}\n\n{url}".strip()
+            return append_once(content, url)
         if policy == "cta":
-            cta = (cta_style or "Learn more").strip()
-            return f"{content}\n\n{cta}".strip()
+            return append_once(content,
+                               (cta_style or "Learn more").strip())
         return content
 
     def link_setting(self, policy: str, link: str) -> dict:
