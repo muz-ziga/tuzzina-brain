@@ -179,7 +179,13 @@ def resolve_strategy(project_cfg: dict, strategy,
                 merged_skills[k] = v.strip()
     out["skills"] = merged_skills
     # Strategy planning merges over campaign schedule (channel wins
-    # per leaf; G3 reads only this merged schedule dict).
+    # per leaf; G3 reads only this merged schedule dict). An
+    # explicitly EMPTY channel leaf (empty list/string) falls back
+    # to the campaign value: emptiness means "not configured here",
+    # never an erasure of an earlier administrator choice (same
+    # rule as sources above). Only a non-empty channel value
+    # overrides. Numeric leaves (counts, spacing) stay verbatim:
+    # 0 is a real configured value, not an absence.
     sched = dict(out.get("schedule") or {})
     sp = strategy.planning
     for k in ("days", "times", "daily_count", "weekly_count",
@@ -190,7 +196,10 @@ def resolve_strategy(project_cfg: dict, strategy,
             is_set = _is_set_s(v)
         except Exception:
             is_set = v is not None
-        if is_set:
-            sched[k] = v
+        if not is_set:
+            continue
+        if isinstance(v, (list, str)) and len(v) == 0:
+            continue
+        sched[k] = v
     out["schedule"] = sched
     return out

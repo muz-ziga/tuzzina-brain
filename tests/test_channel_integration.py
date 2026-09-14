@@ -6,8 +6,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from channels.profile import resolve_strategy
 from channels.strategy import (Brand, ChannelStrategy, ContentPolicy,
-                                GenerationPolicy, HashtagPolicy,
-                                MediaPolicy, MentionPolicy, PlanningPolicy)
+                                 GenerationPolicy, HashtagPolicy,
+                                 MediaPolicy, MentionPolicy, PlanningPolicy)
 from g2 import generators as G
 from g2.pipeline import build_package
 from contracts import SourceItem
@@ -112,6 +112,38 @@ class IntegrationTest(unittest.TestCase):
             _project(), _strategy(),
             channel_meta={"identifier": "facebook"})
         self.assertEqual(cfg["skills"], {})
+
+    def test_schedule_channel_wins_per_leaf(self):
+        project = _project()
+        project["schedule"] = {"timezone": "UTC",
+                               "days": ["monday"],
+                               "times": ["09:00"]}
+        ch = _strategy(planning=PlanningPolicy(days=["tuesday"]))
+        cfg = resolve_strategy(
+            project, ch, channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["schedule"]["days"], ["tuesday"])
+        self.assertEqual(cfg["schedule"]["times"], ["09:00"])
+        self.assertEqual(cfg["schedule"]["timezone"], "UTC")
+
+    def test_schedule_empty_channel_leaf_falls_back(self):
+        project = _project()
+        project["schedule"] = {"timezone": "UTC",
+                               "days": ["monday"],
+                               "times": ["09:00"]}
+        ch = _strategy(planning=PlanningPolicy(days=[], times=[],
+                                               start_time=""))
+        cfg = resolve_strategy(
+            project, ch, channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["schedule"]["days"], ["monday"])
+        self.assertEqual(cfg["schedule"]["times"], ["09:00"])
+
+    def test_schedule_numeric_zero_stays_configured(self):
+        project = _project()
+        project["schedule"] = {"timezone": "UTC"}
+        ch = _strategy(planning=PlanningPolicy(daily_count=0))
+        cfg = resolve_strategy(
+            project, ch, channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["schedule"].get("daily_count"), 0)
 
     def test_strategy_store_roundtrip_integration(self):
         import tempfile

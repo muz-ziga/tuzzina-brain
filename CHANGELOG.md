@@ -46,9 +46,11 @@
   skill (`source: assigned|default`). Embedded instruction
   strings are rejected (fail closed). No production campaign
   carried embedded skills, so nothing was migrated or lost.
-- Tests: 581/581 pass (loader, named assignment, isolation,
+- Tests: 584/584 pass (loader, named assignment, isolation,
   malformed rejection, merge precedence, strategy round-trip,
-  editorial, wiring, traceability, secrecy).
+  editorial, wiring, traceability, secrecy, schedule
+  inheritance: empty channel leaves fall back to campaign,
+  numeric zero stays configured).
 
 ## 0.30.0 — Phase 15: OpenCode Zen provider adapter
 
