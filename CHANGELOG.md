@@ -51,7 +51,8 @@
   Research-off forces analysis-off (architectural dependency);
   text runs per-item without analysis; unselected media stages
   never execute and never invent intent; skips recorded in
-  `skipped`, active roles in `roles`, trace covers active
+  `skipped`, active roles in `roles` on every return path
+  (including empty collection), trace covers active
   stages only.
 - Tests: 621/621 pass (loader, named assignment, isolation,
   malformed rejection, merge precedence, strategy round-trip,

@@ -191,6 +191,9 @@ class CycleCase(unittest.TestCase):
         self.assertIsNone(out.opportunity)
         self.assertEqual(out.packages, [])
         self.assertEqual(out.intents, [])
+        self.assertEqual(out.roles,
+                         ["research", "analysis", "text",
+                          "image", "video"])
         self.assertTrue(out.committed)
         self.assertEqual(out.error, "")
 

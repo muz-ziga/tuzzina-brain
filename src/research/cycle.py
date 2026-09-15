@@ -206,20 +206,9 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             out.sources.append(rep)
             out.items.extend(items)
 
-        if not out.items:
-            for res in pending:
-                res.commit(store)
-            out.committed = len(pending) > 0
-            return out
-
-        out.research = None
-        out.opportunity = None
-        # Role participation (campaign-owned): which stages run.
-        # Absent/empty means all five (pre-roles behavior). Analysis
-        # consumes research findings, so research-off forces
-        # analysis-off — an architectural dependency, not a choice.
-        # Text without analysis runs per-item text-only (no invented
-        # opportunity: an explicit ineligible verdict still stops).
+        # Role participation (campaign-owned): resolved up front so
+        # every return path below reports which stages this cycle
+        # runs — including the empty-collection stop.
         from research.formats import gate_media_for_roles
         raw_roles = policy.get("roles") if isinstance(policy, dict) \
             else None
@@ -230,6 +219,20 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             from skills.loader import SKILL_TYPES
             roles = list(SKILL_TYPES)
         out.roles = roles
+
+        if not out.items:
+            for res in pending:
+                res.commit(store)
+            out.committed = len(pending) > 0
+            return out
+
+        out.research = None
+        out.opportunity = None
+        # Analysis consumes research findings, so research-off
+        # forces analysis-off — an architectural dependency, not
+        # a choice. Text without analysis runs per-item text-only
+        # (no invented opportunity: an explicit ineligible verdict
+        # still stops).
         research_active = "research" in roles
         analysis_active = "analysis" in roles
         text_active = "text" in roles
