@@ -52,6 +52,24 @@ def load_campaign(path: str) -> dict:
             raise _err(f"skills.{k}",
                        "must be a skill name ([a-z0-9-]{1,64})")
         clean_skills[k] = v
+    roles_in = cfg.get("roles")
+    clean_roles = []
+    if roles_in is None:
+        clean_roles = list(SKILL_TYPES)
+    else:
+        if not isinstance(roles_in, list):
+            raise _err("roles", "must be a list of stage names")
+        seen = set()
+        for r in roles_in:
+            if r not in SKILL_TYPES:
+                raise _err(f"roles.{r}", "unknown stage name")
+            seen.add(r)
+        # Canonical stage order (not input order): deterministic
+        # resolution downstream regardless of how the list was
+        # written.
+        clean_roles = [r for r in SKILL_TYPES if r in seen]
+        if not clean_roles:
+            raise _err("roles", "must select at least one stage")
     lang = cfg.get("language") or {}
     hs = cfg.get("hashtags") or {}
     sched = cfg.get("schedule") or {}
@@ -80,4 +98,5 @@ def load_campaign(path: str) -> dict:
                      "days": list(sched.get("days") or []),
                      "times": list(sched.get("times") or [])},
         "skills": clean_skills,
+        "roles": clean_roles,
     }

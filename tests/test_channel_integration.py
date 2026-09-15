@@ -113,6 +113,22 @@ class IntegrationTest(unittest.TestCase):
             channel_meta={"identifier": "facebook"})
         self.assertEqual(cfg["skills"], {})
 
+    def test_roles_passthrough_canonical(self):
+        project = _project()
+        project["roles"] = ["video", "text", "text"]
+        cfg = resolve_strategy(
+            project, _strategy(),
+            channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["roles"], ["text", "video"])
+
+    def test_roles_absent_defaults_all(self):
+        cfg = resolve_strategy(
+            _project(), _strategy(),
+            channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["roles"],
+                         ["research", "analysis", "text",
+                          "image", "video"])
+
     def test_schedule_channel_wins_per_leaf(self):
         project = _project()
         project["schedule"] = {"timezone": "UTC",

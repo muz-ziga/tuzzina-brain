@@ -60,6 +60,25 @@ class CampaignTest(unittest.TestCase):
         cfg = load_campaign(self._f(GOOD))
         self.assertEqual(cfg["skills"], {})
 
+    def test_roles_default_all_five(self):
+        cfg = load_campaign(self._f(GOOD))
+        self.assertEqual(cfg["roles"],
+                         ["research", "analysis", "text",
+                          "image", "video"])
+
+    def test_roles_subset_normalized_canonical(self):
+        cfg = load_campaign(self._f(
+            GOOD + "roles:\n  - video\n  - text\n  - text\n"))
+        self.assertEqual(cfg["roles"], ["text", "video"])
+
+    def test_roles_rejects_bad_shapes(self):
+        for roles in ("roles: text\n",
+                      "roles: []\n",
+                      "roles:\n  - podcast\n",
+                      "roles:\n  - text\n  - 7\n"):
+            with self.assertRaises(ValueError, msg=roles[:20]):
+                load_campaign(self._f(GOOD + roles))
+
     def test_skills_blank_values_dropped(self):
         cfg = load_campaign(self._f(
             GOOD + "skills:\n  research: '   '\n  text: juzzir\n"))

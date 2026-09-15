@@ -7,7 +7,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from research.formats import (FORMATS, allowed_from_distribution,
-                              format_for, select_format)
+                              format_for, gate_media_for_roles,
+                              select_format)
 
 
 class VocabularyCase(unittest.TestCase):
@@ -68,6 +69,36 @@ class AllowlistCase(unittest.TestCase):
         allowed = allowed_from_distribution(
             {"formats": {"text": "many"}})
         self.assertEqual(allowed, [])
+
+
+class RoleMediaGateCase(unittest.TestCase):
+    def test_none_roles_means_all_on(self):
+        for roles in (None, []):
+            media, reason = gate_media_for_roles("image", roles)
+            self.assertEqual((media, reason), ("image", ""))
+
+    def test_unknown_names_filtered_not_fatal(self):
+        self.assertEqual(
+            gate_media_for_roles("image", ["research", "podcast"]),
+            ("none", "image-role-off"))
+
+    def test_image_off_downgrades(self):
+        self.assertEqual(
+            gate_media_for_roles("image", ["research", "text"]),
+            ("none", "image-role-off"))
+
+    def test_video_off_downgrades(self):
+        self.assertEqual(
+            gate_media_for_roles("video", ["research", "text"]),
+            ("none", "video-role-off"))
+
+    def test_selected_media_passes(self):
+        self.assertEqual(
+            gate_media_for_roles("image",
+                                 ["research", "image", "text"]),
+            ("image", ""))
+        self.assertEqual(
+            gate_media_for_roles("none", ["text"]), ("none", ""))
 
 
 if __name__ == "__main__":

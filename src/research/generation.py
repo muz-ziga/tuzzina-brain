@@ -120,6 +120,14 @@ def plan_generation(opportunity, items=None,
     media = (getattr(opportunity, "media_intent", "none") or "none")
     if media not in ("none", "image", "video"):
         media = "none"
+    # Role gate: a media stage the campaign did not select cannot
+    # execute. The policy carries the campaign roles; absent means
+    # all-on (pre-roles behavior). Same helper the cycle uses for
+    # the format gate, so both agree on the effective intent.
+    if isinstance(policy, dict) and "roles" in policy:
+        from research.formats import gate_media_for_roles
+        media, _role_reason = gate_media_for_roles(
+            media, policy.get("roles"))
     image = None
     video = None
     if media == "image":

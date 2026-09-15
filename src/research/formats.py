@@ -24,6 +24,27 @@ from __future__ import annotations
 
 FORMATS = ("text", "text+image", "text+video", "link+text")
 
+STAGES = ("research", "analysis", "text", "image", "video")
+
+
+def gate_media_for_roles(media_intent: str, roles) -> tuple[str, str]:
+    """Effective media intent under campaign role selection.
+    Returns (media, reason): a media stage the campaign did not
+    select cannot execute, so the intent degrades to "none" with
+    an explicit reason — never silently, never invented upward.
+    Unknown/absent roles default to all-on (pre-roles behavior)."""
+    media = (media_intent or "none").strip().lower()
+    if roles is None:
+        return media, ""
+    active = set(r for r in roles if r in STAGES)
+    if not active:
+        return media, ""
+    if media == "image" and "image" not in active:
+        return "none", "image-role-off"
+    if media == "video" and "video" not in active:
+        return "none", "video-role-off"
+    return media, ""
+
 
 def format_for(media_intent: str, links_policy: str) -> str:
     """Pure mapping, no policy input. Unknown media falls back to

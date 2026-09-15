@@ -381,6 +381,114 @@ class CycleCase(unittest.TestCase):
         self.assertEqual(out.sources[0].new, 1)
 
 
+class RoleGatingCase(CycleCase):
+    """Campaign role participation: stages run only when
+    selected; dependencies skip with recorded reasons; media
+    roles gate execution (never invented upward)."""
+
+    def _pol(self, roles):
+        pol = dict(POLICY)
+        pol["roles"] = list(roles)
+        return pol
+
+    def test_default_roles_all_on(self):
+        out = self._run([self._rss()])
+        self.assertEqual(out.roles,
+                         ["research", "analysis", "text",
+                          "image", "video"])
+        self.assertEqual(out.skipped, [])
+
+    def test_text_only_skips_llm_stages(self):
+        rm, am = CountingResearch(), CountingAnalysis()
+        out = self._run([self._rss()],
+                        policy=self._pol(["text"]),
+                        research_model=rm, analysis_model=am)
+        self.assertEqual((rm.calls, am.calls), (0, 0))
+        self.assertIsNone(out.research)
+        self.assertIsNone(out.opportunity)
+        self.assertEqual(out.skipped, ["analysis:research-off"])
+        self.assertTrue(out.packages)
+        self.assertTrue(out.intents)
+        self.assertTrue(out.committed)
+        self.assertEqual(out.error, "")
+
+    def test_no_text_role_builds_no_packages(self):
+        rm, am = CountingResearch(), CountingAnalysis()
+        out = self._run([self._rss()],
+                        policy=self._pol(["research", "analysis"]),
+                        research_model=rm, analysis_model=am)
+        self.assertEqual((rm.calls, am.calls), (1, 1))
+        self.assertTrue(out.opportunity.eligible)
+        self.assertEqual(out.packages, [])
+        self.assertEqual(out.intents, [])
+        self.assertIn("text:role-off", out.skipped)
+        self.assertTrue(out.committed)
+
+    def test_research_off_forces_analysis_off(self):
+        rm, am = CountingResearch(), CountingAnalysis()
+        out = self._run([self._rss()],
+                        policy=self._pol(["analysis", "text"]),
+                        research_model=rm, analysis_model=am)
+        self.assertEqual((rm.calls, am.calls), (0, 0))
+        self.assertIsNone(out.opportunity)
+        self.assertIn("analysis:research-off", out.skipped)
+        self.assertTrue(out.intents)
+
+    def test_analysis_off_records_reason(self):
+        out = self._run([self._rss()],
+                        policy=self._pol(["research", "text"]))
+        self.assertIsNone(out.opportunity)
+        self.assertIn("analysis:role-off", out.skipped)
+        self.assertTrue(out.intents)
+
+    def test_image_role_off_downgrades_media(self):
+        class ImageAnalysis(MockAnalysisModel):
+            def analyze(self, result, policy, items=None):
+                out = super().analyze(result, policy, items)
+                out.media_intent = "image"
+                return out
+
+        out = self._run(
+            [self._rss()],
+            policy=self._pol(["research", "analysis", "text"]),
+            analysis_model=ImageAnalysis())
+        self.assertTrue(out.opportunity.eligible)
+        self.assertEqual(out.format, "text")
+        self.assertIn("image-role-off", out.skipped)
+        self.assertTrue(out.intents)
+
+    def test_image_role_on_keeps_media(self):
+        class ImageAnalysis(MockAnalysisModel):
+            def analyze(self, result, policy, items=None):
+                out = super().analyze(result, policy, items)
+                out.media_intent = "image"
+                return out
+
+        out = self._run(
+            [self._rss()],
+            policy=self._pol(["research", "analysis", "text",
+                              "image"]),
+            analysis_model=ImageAnalysis())
+        self.assertEqual(out.format, "text+image")
+        self.assertNotIn("image-role-off", out.skipped)
+
+    def test_video_role_off_suppresses_deferred(self):
+        class VideoAnalysis(MockAnalysisModel):
+            def analyze(self, result, policy, items=None):
+                out = super().analyze(result, policy, items)
+                out.media_intent = "video"
+                return out
+
+        out = self._run(
+            [self._rss()],
+            policy=self._pol(["research", "analysis", "text"]),
+            analysis_model=VideoAnalysis())
+        self.assertEqual(out.format, "text")
+        self.assertEqual(out.video_deferred, [])
+        self.assertEqual(out.video_media, [])
+        self.assertIn("video-role-off", out.skipped)
+
+
 class FormatGateCase(CycleCase):
     def _pol(self, formats):
         pol = dict(POLICY)

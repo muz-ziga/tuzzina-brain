@@ -520,6 +520,19 @@ class SkillsTraceCase(unittest.TestCase):
         self.assertTrue(all(s["source"] == "default"
                             for s in res["skills_used"]))
 
+    def test_trace_covers_only_active_roles(self):
+        res = self._run(CAMPAIGN + "roles:\n  - text\n")
+        stages = sorted(s["stage"] for s in res["skills_used"])
+        self.assertEqual(stages, ["text"])
+        self.assertEqual(res["roles"], ["text"])
+        self.assertIn("analysis:research-off", res["skipped"])
+
+    def test_result_carries_roles_and_skipped(self):
+        res = self._run(CAMPAIGN + "roles:\n  - research\n"
+                        "  - analysis\n")
+        self.assertEqual(res["roles"], ["research", "analysis"])
+        self.assertIn("text:role-off", res["skipped"])
+
 
 class UsageGateCase(unittest.TestCase):
     def _case(self):

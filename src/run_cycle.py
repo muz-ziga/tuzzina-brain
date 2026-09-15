@@ -250,14 +250,23 @@ def _main(argv=None) -> int:
                 "model": os.environ.get(prefix + "MODEL") or "gpt-4.1",
             })
         # Skill traceability: which expertise produced this run.
-        # Each stage resolves its own type against the campaign
-        # overrides (global file when the campaign is silent).
+        # Each ACTIVE stage resolves its own type against the
+        # campaign overrides (global file when the campaign is
+        # silent). Inactive stages resolve nothing: their skills
+        # are never needed, so a broken file there cannot fail
+        # a run that does not use it.
         from skills.loader import get_skill
         campaign_skills = cfg.get("skills") if isinstance(
             cfg, dict) else None
+        active = cfg.get("roles") if isinstance(cfg, dict) else None
+        if not isinstance(active, list) or not active:
+            from skills.loader import SKILL_TYPES
+            active = list(SKILL_TYPES[:3])
         for skill_type, stage in (("research", "research"),
                                   ("analysis", "analysis"),
                                   ("text", "text")):
+            if skill_type not in active:
+                continue
             try:
                 skill = get_skill(
                     skill_type, (campaign_skills or {}).get(skill_type))
@@ -304,6 +313,8 @@ def _main(argv=None) -> int:
     result["committed"] = bool(out.committed)
     result["roles_resolved"] = roles_resolved
     result["skills_used"] = skills_used
+    result["roles"] = list(out.roles)
+    result["skipped"] = list(out.skipped)
     if out.error:
         print(f"run_id={run_id} error: {out.error}", file=sys.stderr)
         result["error"] = out.error

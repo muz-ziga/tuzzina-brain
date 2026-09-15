@@ -77,6 +77,11 @@ class CycleResult:
     # gate reason. Empty when no eligible opportunity ran.
     format: str = ""
     format_reason: str = ""
+    # Active campaign roles for this cycle (canonical stage order)
+    # plus machine-readable skip reasons (e.g. "analysis:research-off",
+    # "text:text-role-off"). Evidence surfaces both.
+    roles: list = field(default_factory=list)  # [str]
+    skipped: list = field(default_factory=list)  # [str]
     committed: bool = False
     error: str = ""
 
@@ -207,25 +212,107 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             out.committed = len(pending) > 0
             return out
 
-        out.research = research_model.research(out.items, policy)
-        out.opportunity = analysis_model.analyze(
-            out.research, policy, list(out.items))
-        if not out.opportunity.eligible:
-            for res in pending:
-                res.commit(store)
-            out.committed = len(pending) > 0
-            return out
+        out.research = None
+        out.opportunity = None
+        # Role participation (campaign-owned): which stages run.
+        # Absent/empty means all five (pre-roles behavior). Analysis
+        # consumes research findings, so research-off forces
+        # analysis-off — an architectural dependency, not a choice.
+        # Text without analysis runs per-item text-only (no invented
+        # opportunity: an explicit ineligible verdict still stops).
+        from research.formats import gate_media_for_roles
+        raw_roles = policy.get("roles") if isinstance(policy, dict) \
+            else None
+        if isinstance(raw_roles, list) and raw_roles:
+            from skills.loader import SKILL_TYPES
+            roles = [r for r in SKILL_TYPES if r in raw_roles]
+        else:
+            from skills.loader import SKILL_TYPES
+            roles = list(SKILL_TYPES)
+        out.roles = roles
+        research_active = "research" in roles
+        analysis_active = "analysis" in roles
+        text_active = "text" in roles
+        if research_active:
+            out.research = research_model.research(out.items, policy)
+        if not research_active:
+            analysis_active = False
+            out.skipped.append("analysis:research-off")
+        if analysis_active:
+            out.opportunity = analysis_model.analyze(
+                out.research, policy, list(out.items))
+            if not out.opportunity.eligible:
+                for res in pending:
+                    res.commit(store)
+                out.committed = len(pending) > 0
+                return out
+        else:
+            out.opportunity = None
+            if research_active:
+                out.skipped.append("analysis:role-off")
 
         # Format gate (Phase 8): the opportunity's executable
         # shape must be allowed by the integration distribution.
         # Disallowed => clean stop with reason (commits, like
         # ineligible). No silent downgrade exists in this phase.
-        # Provider-level support stays Tuzzina-validated.
+        # Provider-level support stays Tuzzina-validated. Without
+        # an opportunity (analysis skipped, never an ineligible
+        # verdict) the text-only path below still passes this gate
+        # with media "none", so distribution stays enforced.
         from research.formats import (allowed_from_distribution,
                                       select_format)
         allowed = allowed_from_distribution(policy.get("distribution"))
+        if out.opportunity is None:
+            if not text_active:
+                for res in pending:
+                    res.commit(store)
+                out.committed = len(pending) > 0
+                out.skipped.append("text:role-off")
+                return out
+            fmt, freason = select_format("none", links_policy, allowed)
+            if fmt is None:
+                for res in pending:
+                    res.commit(store)
+                out.committed = len(pending) > 0
+                out.error = ""
+                out.format_reason = freason
+                return out
+            out.format = fmt
+            out.format_reason = freason
+            from research.generation import (GenerationPlan,
+                                              TextRequest)
+            gen_image = None
+            for item in out.items:
+                item_plan = GenerationPlan(
+                    text=TextRequest(
+                        title=(item.title or "")[:200],
+                        summary=(item.text or "")[:4000]),
+                    media_intent="none",
+                    meta={"reason": "text-only-no-analysis"})
+                shaped = shape_item_for_g2(item, item_plan)
+                out.packages.append(build_package(
+                    shaped, brand, language, hs_cfg, links_policy,
+                    text_gen, gen_image, platform=item.platform or
+                    "facebook", limits=None, policy=policy))
+            out.planned = plan(out.packages, schedule)
+            for p in out.planned:
+                out.intents.append(build_intent(
+                    integration_id=integration_id, content=p.content,
+                    media=[], publish_at=p.planned_at, mode=mode,
+                    hashtags=list(p.tags),
+                    link=p.source_ref if links_policy == "attach" else "",
+                    links_policy=links_policy, post_kind="post",
+                    settings={}, cta_style=cta_style))
+            for res in pending:
+                res.commit(store)
+            out.committed = len(pending) > 0
+            return out
+        eff_media, media_reason = gate_media_for_roles(
+            out.opportunity.media_intent, roles)
+        if media_reason:
+            out.skipped.append(media_reason)
         fmt, freason = select_format(
-            out.opportunity.media_intent, links_policy, allowed)
+            eff_media, links_policy, allowed)
         if fmt is None:
             for res in pending:
                 res.commit(store)
@@ -235,6 +322,17 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             return out
         out.format = fmt
         out.format_reason = freason
+
+        # Text role off with a live opportunity: research and
+        # analysis already ran as pure intelligence (state
+        # commits), but no packages are built and no LLM text
+        # budget is spent. Recorded, never silent.
+        if not text_active:
+            for res in pending:
+                res.commit(store)
+            out.committed = len(pending) > 0
+            out.skipped.append("text:role-off")
+            return out
 
         # Generation orchestration (R6): opportunity facts/angle
         # shape G2 inputs; media intent gates the image engine so

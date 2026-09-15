@@ -46,11 +46,21 @@
   skill (`source: assigned|default`). Embedded instruction
   strings are rejected (fail closed). No production campaign
   carried embedded skills, so nothing was migrated or lost.
-- Tests: 584/584 pass (loader, named assignment, isolation,
+- Campaign role participation (`campaign.roles`, canonical
+  subset, default all five): only selected stages execute.
+  Research-off forces analysis-off (architectural dependency);
+  text runs per-item without analysis; unselected media stages
+  never execute and never invent intent; skips recorded in
+  `skipped`, active roles in `roles`, trace covers active
+  stages only.
+- Tests: 621/621 pass (loader, named assignment, isolation,
   malformed rejection, merge precedence, strategy round-trip,
   editorial, wiring, traceability, secrecy, schedule
   inheritance: empty channel leaves fall back to campaign,
-  numeric zero stays configured).
+  numeric zero stays configured, role participation gating:
+  per-stage execution with recorded skip reasons, media roles
+  gate intent downward only, text runs per-item without
+  analysis).
 
 ## 0.30.0 — Phase 15: OpenCode Zen provider adapter
 

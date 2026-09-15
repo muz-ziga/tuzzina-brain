@@ -178,6 +178,13 @@ def resolve_strategy(project_cfg: dict, strategy,
             if k in SKILL_TYPES and isinstance(v, str) and v.strip():
                 merged_skills[k] = v.strip()
     out["skills"] = merged_skills
+    # Role participation is campaign-owned (the strategy carries
+    # no roles): which stages run in this cycle, in canonical
+    # stage order. Absent means all five (pre-roles behavior).
+    want = project_cfg.get("roles")
+    if not isinstance(want, list) or not want:
+        want = list(SKILL_TYPES)
+    out["roles"] = [r for r in SKILL_TYPES if r in want]
     # Strategy planning merges over campaign schedule (channel wins
     # per leaf; G3 reads only this merged schedule dict). An
     # explicitly EMPTY channel leaf (empty list/string) falls back
