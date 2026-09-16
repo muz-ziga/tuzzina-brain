@@ -341,5 +341,80 @@ class GuardTest(unittest.TestCase):
                 self.assertNotIn(bad, blob, name)
 
 
+class CompanionTest(unittest.TestCase):
+    def test_no_marker_is_post_only(self):
+        intent = fb_intent(content="Hello world")
+        self.assertEqual(intent.content, "Hello world")
+        self.assertEqual(intent.companion, "")
+        c = FakeClient([FB_RECORD])
+        InjectionService().inject(intent, c)
+        self.assertEqual(
+            len(c.posts_calls[0]["posts"][0]["value"]), 1)
+
+    def test_marker_splits_first_occurrence(self):
+        intent = fb_intent(content="Post here\n---COMPANION---\nNice\n---COMPANION---\nJunk")
+        self.assertEqual(intent.content, "Post here")
+        self.assertEqual(intent.companion, "Nice\n---COMPANION---\nJunk")
+
+    def test_marker_padding_tolerated(self):
+        intent = fb_intent(content="Post\n   ---COMPANION---   \n  Comment  ")
+        self.assertEqual(intent.content, "Post")
+        self.assertEqual(intent.companion, "Comment")
+
+    def test_empty_companion_collapses(self):
+        intent = fb_intent(content="Post\n---COMPANION---\n   ")
+        self.assertEqual(intent.content, "Post")
+        self.assertEqual(intent.companion, "")
+        c = FakeClient([FB_RECORD])
+        InjectionService().inject(intent, c)
+        self.assertEqual(
+            len(c.posts_calls[0]["posts"][0]["value"]), 1)
+
+    def test_explicit_companion_wins(self):
+        intent = fb_intent(
+            content="Post\n---COMPANION---\nSplit",
+            companion="Explicit")
+        self.assertEqual(intent.content,
+                         "Post\n---COMPANION---\nSplit")
+        self.assertEqual(intent.companion, "Explicit")
+
+    def test_companion_rides_second_item(self):
+        c = FakeClient([FB_RECORD])
+        InjectionService().inject(
+            fb_intent(content="Post body",
+                      companion="Comment https://www.juzzir.com/",
+                      hashtags=["#mix"]), c)
+        items = c.posts_calls[0]["posts"][0]["value"]
+        self.assertEqual(len(items), 2)
+        self.assertIn("#mix", items[0]["content"])
+        self.assertNotIn("#mix", items[1]["content"])
+        self.assertIn("https://www.juzzir.com/", items[1]["content"])
+        self.assertEqual(items[1]["image"], [])
+
+    def test_companion_must_be_string(self):
+        c = FakeClient([FB_RECORD])
+        bad = fb_intent()
+        bad.companion = ["not", "a", "string"]
+        with self.assertRaises(InvalidInjectionIntent):
+            InjectionService().inject(bad, c)
+
+    def test_trace_reports_companion(self):
+        from injection.trace import POST_REQUEST, MemoryTracer
+        tracer = MemoryTracer()
+        InjectionService(tracer=tracer).inject(
+            fb_intent(content="Post", companion="Comment"),
+            FakeClient([FB_RECORD]))
+        req = [e for e in tracer.events if e["event"] == POST_REQUEST]
+        self.assertEqual(len(req), 1)
+        self.assertTrue(req[0]["has_companion"])
+        self.assertEqual(req[0]["companion_chars"], len("Comment"))
+        tracer2 = MemoryTracer()
+        InjectionService(tracer=tracer2).inject(
+            fb_intent(content="Post"), FakeClient([FB_RECORD]))
+        req2 = [e for e in tracer2.events if e["event"] == POST_REQUEST]
+        self.assertFalse(req2[0]["has_companion"])
+        self.assertEqual(req2[0]["companion_chars"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

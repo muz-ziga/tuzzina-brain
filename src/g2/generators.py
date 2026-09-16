@@ -83,7 +83,7 @@ class OpenAITextGenerator(TextGenerator):
 
     def generate(self, title: str, summary: str, brand: dict,
                  policy: dict | None = None) -> str:
-        from skills.loader import get_skill
+        from skills.loader import COMPANION_MARKER, get_skill
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
         skill = get_skill(
@@ -94,6 +94,11 @@ class OpenAITextGenerator(TextGenerator):
                 "max_chars", max_chars))
         except (TypeError, ValueError):
             max_chars = 500
+        # Opt-in per skill config: only a skill that declares a
+        # companion contract may emit the two-part output. Every
+        # other skill keeps the exact historical instruction.
+        companion_on = isinstance(skill.get("config"), dict) and bool(
+            skill.get("config").get("companion"))
         parts = [skill["instructions"]]
         from channels.instructions import build as _strategy_block
         strategy = _strategy_block(policy)
@@ -106,8 +111,14 @@ class OpenAITextGenerator(TextGenerator):
             parts.append(
                 f"Brand voice: {brand.get('tone') or 'neutral'}; "
                 f"audience: {brand.get('audience') or 'general'}.")
-        parts.append(
-            f"Write one social post, max {max_chars} chars.")
+        if companion_on:
+            parts.append(
+                f"Write the social post plus its companion comment "
+                f"after a {COMPANION_MARKER} line, max {max_chars} "
+                f"chars total.")
+        else:
+            parts.append(
+                f"Write one social post, max {max_chars} chars.")
         sys = "\n\n".join(parts)
         return self._adapter.complete(
             sys, f"Title: {title}\nSummary: {summary}",

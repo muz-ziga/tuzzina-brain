@@ -10,8 +10,26 @@ instead.
 from __future__ import annotations
 from dataclasses import dataclass, field
 
+from skills.loader import COMPANION_MARKER
+
 MODES = ("draft", "schedule", "now")
 POST_KINDS = ("post", "story")
+
+
+def split_companion(text: str) -> tuple:
+    """Split rendered text into (main, companion) on the first
+    COMPANION_MARKER line. Padding whitespace is tolerated; an
+    empty companion collapses to post-only. No marker returns
+    the text untouched with an empty companion, so every
+    existing skill behaves exactly as before."""
+    if not isinstance(text, str):
+        return "", ""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if line.strip() == COMPANION_MARKER:
+            return ("\n".join(lines[:i]).strip(),
+                    "\n".join(lines[i + 1:]).strip())
+    return text, ""
 
 
 @dataclass
@@ -22,6 +40,11 @@ class CanonicalIntent:
     # Plain generated text. Hashtags and mentions travel separately
     # and are assembled once, inside the adapter (see 0.5.1 fix).
     content: str = ""
+    # Companion (first) comment text. Split out of content on the
+    # COMPANION_MARKER line by build_intent (explicit value wins).
+    # Rides as the second value item; Tuzzina publishes it natively
+    # on commentable providers and posts the parent alone elsewhere.
+    companion: str = ""
     # Already-uploaded media refs: [{"id": ..., "path": ...}].
     # Upload happens BEFORE intent creation, through Tuzzina's
     # upload endpoints. The brain never touches R2.
@@ -58,14 +81,22 @@ def build_intent(*, integration_id: str, content: str,
                  mentions: list | None = None, link: str = "",
                  links_policy: str = "hide", post_kind: str = "post",
                  settings: dict | None = None,
-                 cta_style: str = "Learn more") -> CanonicalIntent:
+                 cta_style: str = "Learn more",
+                 companion: str = "") -> CanonicalIntent:
     """Build an intent from explicit Brain decisions. Thin helper so
     Strategy wiring (and tests) don't hand-assemble the dataclass.
     No validation here beyond type-safe defaults; the
-    InjectionService validates at inject time."""
+    InjectionService validates at inject time. An empty companion
+    is split out of content on the marker line; an explicit
+    non-empty companion wins over the split."""
+    content = content or ""
+    companion = (companion or "").strip()
+    if not companion:
+        content, companion = split_companion(content)
     return CanonicalIntent(
         integration_id=integration_id or "",
-        content=content or "",
+        content=content,
+        companion=companion,
         media=list(media or []),
         link=link or "",
         links_policy=links_policy or "hide",

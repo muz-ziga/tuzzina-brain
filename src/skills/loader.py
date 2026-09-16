@@ -47,6 +47,13 @@ SKILL_TYPES = ("research", "analysis", "text", "image", "video")
 
 SKILL_NAME_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 
+# Companion-comment marker: a text-skill output contract. A text
+# skill may return the main post, then this marker alone on a
+# line, then the companion (first) comment. Absent marker means
+# post only. Tuzzina routes the second item natively (providers
+# with comment() publish it, others post the parent alone).
+COMPANION_MARKER = "---COMPANION---"
+
 _REQUIRED = ("id", "name", "type", "version", "instructions")
 _OPTIONAL = ("enabled", "config")
 

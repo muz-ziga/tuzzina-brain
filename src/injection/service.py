@@ -155,11 +155,23 @@ class InjectionService:
             has_media=bool(intent.media),
             has_link=bool(intent.link),
             has_hashtags=bool(intent.hashtags),
+            has_companion=bool((intent.companion or "").strip()),
             content_chars=len(intent.content or ""),
+            companion_chars=len((intent.companion or "").strip()),
             media_count=len(intent.media or []))
+        items = [{"content": final_text, "image": shaped}]
+        companion_text = (intent.companion or "").strip()
+        if companion_text:
+            # Second value item becomes the child post; Tuzzina
+            # publishes it as the first comment on commentable
+            # providers and posts the parent alone elsewhere.
+            # No hashtags/mentions/media here: the comment carries
+            # its call-to-action inline per the text skill.
+            items.append({"content": adapter.shape_text(
+                companion_text, []), "image": []})
         posts = [{
             "integration": {"id": intent.integration_id},
-            "value": [{"content": final_text, "image": shaped}],
+            "value": items,
             "settings": settings,
         }]
         response = client.create_post(posts, intent.publish_at,
@@ -203,5 +215,7 @@ class InjectionService:
             raise InvalidInjectionIntent("media must be a list")
         if not isinstance(intent.hashtags, list):
             raise InvalidInjectionIntent("hashtags must be a list")
+        if not isinstance(intent.companion, str):
+            raise InvalidInjectionIntent("companion must be a string")
         if not isinstance(intent.mentions, list):
             raise InvalidInjectionIntent("mentions must be a list")

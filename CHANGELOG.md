@@ -62,6 +62,19 @@
   per-stage execution with recorded skip reasons, media roles
   gate intent downward only, text runs per-item without
   analysis).
+- Companion (first) comment support (Juzzir Facebook): a text
+  skill may return the main post, a `---COMPANION---` line,
+  then the companion comment (`COMPANION_MARKER` in
+  `src/skills/loader.py`, split in `build_intent`, optional
+  `companion` field on `CanonicalIntent`). Injection sends it
+  as the second value item with no hashtags/mentions/media;
+  Tuzzina publishes it natively on commentable providers and
+  posts the parent alone elsewhere — no Tuzzina, workflow, or
+  schema change. G2 emits the two-part instruction only for
+  skills declaring `companion: true` in config (all other
+  skills keep the exact historical line). Trace gains
+  `has_companion`/`companion_chars` (allowlisted, metadata
+  only). 9 new tests; suite 630/630.
 
 ## 0.30.0 — Phase 15: OpenCode Zen provider adapter
 

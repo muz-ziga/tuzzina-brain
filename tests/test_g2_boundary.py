@@ -104,5 +104,58 @@ class ProductionWiringTest(unittest.TestCase):
         self.assertEqual(pkg.settings, {"__type": "facebook"})
 
 
+    def test_companion_prompt_opt_in(self):
+        # The two-part instruction appears ONLY for skills that
+        # declare the companion contract in config. Every other
+        # skill keeps the exact historical single-post line.
+        import tempfile
+        import yaml
+        from skills.loader import clear_cache
+
+        class FakeAdapter:
+            def __init__(self):
+                self.sys = ""
+            def complete(self, sys, user, **kw):
+                self.sys = sys
+                return "OUT"
+
+        old = os.environ.get("BRAIN_SKILLS_DIR")
+        tmp = tempfile.mkdtemp(prefix="tbra_prompt_")
+        try:
+            os.environ["BRAIN_SKILLS_DIR"] = tmp
+            clear_cache()
+            with open(os.path.join(tmp, "text.yaml"), "w",
+                      encoding="utf-8") as f:
+                yaml.safe_dump({"id": "text-x1", "name": "X",
+                                "type": "text", "version": 1,
+                                "instructions": "Do the thing.",
+                                "config": {"max_chars": 1400,
+                                           "companion": True}}, f)
+            fa = FakeAdapter()
+            G.OpenAITextGenerator(adapter=fa).generate(
+                "T", "S", {}, None)
+            self.assertIn("---COMPANION---", fa.sys)
+            self.assertIn("max 1400 chars", fa.sys)
+            self.assertNotIn("Write one social post", fa.sys)
+
+            with open(os.path.join(tmp, "text.yaml"), "w",
+                      encoding="utf-8") as f:
+                yaml.safe_dump({"id": "text-x1", "name": "X",
+                                "type": "text", "version": 1,
+                                "instructions": "Do the thing."}, f)
+            clear_cache()
+            fb = FakeAdapter()
+            G.OpenAITextGenerator(adapter=fb).generate(
+                "T", "S", {}, None)
+            self.assertIn("Write one social post", fb.sys)
+            self.assertNotIn("COMPANION", fb.sys)
+        finally:
+            clear_cache()
+            if old is None:
+                os.environ.pop("BRAIN_SKILLS_DIR", None)
+            else:
+                os.environ["BRAIN_SKILLS_DIR"] = old
+
+
 if __name__ == "__main__":
     unittest.main()
