@@ -879,6 +879,105 @@ class SessionHeaderCase(unittest.TestCase):
         self.assertEqual(code.count("x-opencode-session"), 2)
 
 
+class GenericSessionHeaderCase(unittest.TestCase):
+    """Provider-declared session header: the NAME travels with
+    account configuration, the VALUE is always the existing
+    session_id. No hostname/vendor/model detection anywhere."""
+
+    def setUp(self):
+        CALLS.clear()
+        self._orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        fake_urlopen.mode = "openai-ok"
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig
+
+    def test_chat_emits_declared_header(self):
+        OpenAIAdapter("k", "m", base_url="https://gw.example/v1",
+                      session_id="run-1",
+                      session_header="X-Session-Id").complete(
+                          "s", "u", timeout=5)
+        c = CALLS[0]
+        self.assertEqual(c["headers"].get("x-session-id"), "run-1")
+        self.assertEqual(
+            c["url"], "https://gw.example/v1/chat/completions")
+
+    def test_responses_emits_declared_header(self):
+        self._responses_ok()
+        OpenAIResponsesAdapter(
+            "k", "m", base_url="https://gw.example/v1",
+            session_id="run-1",
+            session_header="X-Session-Id").complete("s", "u", timeout=5)
+        self.assertEqual(
+            CALLS[0]["headers"].get("x-session-id"), "run-1")
+
+    def test_anthropic_emits_declared_header(self):
+        fake_urlopen.mode = "anthropic-ok"
+        urllib.request.urlopen = fake_urlopen
+        AnthropicAdapter("k", "m", session_id="run-1",
+                         session_header="X-Session-Id").complete(
+                             "s", "u", timeout=5)
+        self.assertEqual(
+            CALLS[0]["headers"].get("x-session-id"), "run-1")
+
+    def test_absent_without_name_or_session(self):
+        OpenAIAdapter("k", "m", session_id="run-1").complete(
+            "s", "u", timeout=5)
+        self.assertNotIn("x-session-id", CALLS[0]["headers"])
+        OpenAIAdapter("k", "m",
+                      session_header="X-Session-Id").complete(
+                          "s", "u", timeout=5)
+        self.assertNotIn("x-session-id", CALLS[1]["headers"])
+
+    def test_invalid_name_fails_closed(self):
+        for bad in ("has space", "with:colon", "x" * 129, ""):
+            if not bad:
+                continue
+            with self.assertRaises(ValueError):
+                OpenAIAdapter("k", "m", session_id="r",
+                              session_header=bad)
+
+    def test_no_vendor_detection_in_path(self):
+        import inspect
+        from llm import adapters as mod
+        src = inspect.getsource(mod.session_headers) + \
+            inspect.getsource(mod.normalize_session_header)
+        for bad in ("opencode", "zen", "muse", "spark", "gpt",
+                    "anthropic", "claude", "http", ".ai", "nvidia"):
+            self.assertNotIn(bad, src)
+
+    def test_run_builders_forward_session_header(self):
+        from unittest import mock
+        from run_cycle import _build_models, _build_text_gen
+        env = {}
+        for role in ("RESEARCH", "ANALYSIS", "TEXT"):
+            env[f"BRAIN_{role}_ADAPTER"] = "openai_compatible"
+            env[f"BRAIN_{role}_KEY"] = "k"
+            env[f"BRAIN_{role}_MODEL"] = "m"
+            env[f"BRAIN_{role}_BASE"] = "https://gw.example/v1"
+            env[f"BRAIN_{role}_SESSION_HEADER"] = "X-Session-Id"
+        with mock.patch.dict(os.environ, env):
+            research, analysis = _build_models(
+                "--openai", session_id="run-9")
+            text_gen = _build_text_gen("--openai", session_id="run-9")
+        for adapter in (research._adapter, analysis._adapter,
+                        text_gen._adapter):
+            self.assertEqual(adapter.session_header, "X-Session-Id")
+            self.assertEqual(adapter.session_id, "run-9")
+
+    def _responses_ok(self):
+        body = json.dumps({"output": [
+            {"content": [{"type": "output_text", "text": "hi"}]}]})
+
+        def _fake(req, timeout=None):
+            CALLS.append({"url": req.full_url,
+                          "headers": _headers(req),
+                          "body": json.loads(req.data.decode())})
+            return FakeResp(body)
+        urllib.request.urlopen = _fake
+
+
 class ResponseSketchCase(unittest.TestCase):
     """Empty Responses extractions carry a structural sketch only:
     shape labels in, content values out. No network."""

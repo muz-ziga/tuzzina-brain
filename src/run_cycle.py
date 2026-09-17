@@ -88,9 +88,14 @@ def _build_models(mode: str, session_id: str = ""):
         # connections (BRAIN_<ROLE>_BASE). Empty means the adapter
         # default; only generic accounts resolve one server-side.
         base_url = (os.environ.get(prefix + "BASE") or "").strip()
+        # Provider-declared session header name (BRAIN_<ROLE>_
+        # SESSION_HEADER). Empty means none; the value is always
+        # the existing session_id, never a new identity.
+        session_header = (os.environ.get(prefix + "SESSION_HEADER") or "").strip()
         adapter_cls = resolve_adapter(adapter_key, protocol)
         built.append(cls(adapter=adapter_cls(
-            key, model, session_id=session_id, base_url=base_url)))
+            key, model, session_id=session_id, base_url=base_url,
+            session_header=session_header)))
     return built[0], built[1]
 
 
@@ -115,9 +120,11 @@ def _build_text_gen(mode: str, session_id: str = ""):
                          "OPENAI_API_KEY)")
     model = os.environ.get("BRAIN_TEXT_MODEL") or "gpt-4.1"
     base_url = (os.environ.get("BRAIN_TEXT_BASE") or "").strip()
+    session_header = (os.environ.get("BRAIN_TEXT_SESSION_HEADER") or "").strip()
     return OpenAITextGenerator(
         adapter=resolve_adapter(adapter_key, protocol)(
-            key, model, session_id=session_id, base_url=base_url))
+            key, model, session_id=session_id, base_url=base_url,
+            session_header=session_header))
 
 
 def _emit_result(result: dict) -> None:

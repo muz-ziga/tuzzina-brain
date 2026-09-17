@@ -34,6 +34,40 @@ class LLMError(Exception):
     Never carries keys, headers, or bodies."""
 
 
+# Provider-declared session header: some generic
+# OpenAI-compatible endpoints require the run identity on
+# every request under an account-configured header name. The
+# name travels with the provider/account configuration (never
+# detected from hostnames, models, or vendors here); the
+# value is always the existing execution session_id. Absent
+# name or session means no header (existing behavior).
+_SESSION_HEADER_RE = re.compile(r"[A-Za-z0-9-]{1,128}")
+
+
+def normalize_session_header(name) -> str:
+    """Validate a configured session header name (HTTP token
+    shape). Returns the stripped name, or "" when unconfigured.
+    Raises ValueError on malformed names (fail-closed: a broken
+    transport config must never silently send)."""
+    text = (name or "").strip() if isinstance(name, str) else ""
+    if not text:
+        return ""
+    if not _SESSION_HEADER_RE.fullmatch(text):
+        raise ValueError("invalid-session-header")
+    return text
+
+
+def session_headers(session_header, session_id) -> dict:
+    """Build the session header mapping, or {} when the
+    provider did not declare one or no session is active."""
+    name = normalize_session_header(session_header)
+    sid = (session_id or "").strip() \
+        if isinstance(session_id, str) else ""
+    if not name or not sid:
+        return {}
+    return {name: sid}
+
+
 PRODUCT_UA = "Tuzzina/1.0 (+https://www.juzzir.com)"
 
 
@@ -246,7 +280,8 @@ class OpenAIAdapter:
     base_url = "https://api.openai.com"
 
     def __init__(self, api_key: str = "", model: str = "gpt-4.1",
-                  base_url: str = "", session_id: str = ""):
+                  base_url: str = "", session_id: str = "",
+                  session_header: str = ""):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
@@ -254,8 +289,10 @@ class OpenAIAdapter:
         self.base = (base_url or self.base_url).rstrip("/")
         # Automation run identity for providers that require a
         # session header. Plain OpenAI ignores it (see
-        # _extra_headers): only provider subclasses opt in.
+        # _extra_headers): only provider subclasses opt in, or a
+        # provider-declared session_header carries it generically.
         self.session_id = session_id or ""
+        self.session_header = normalize_session_header(session_header)
 
     def _extra_headers(self) -> dict:
         return {}
@@ -266,6 +303,8 @@ class OpenAIAdapter:
         headers = {"Authorization": f"Bearer {self.api_key}",
                    "Content-Type": "application/json"}
         headers.update(self._extra_headers())
+        headers.update(session_headers(self.session_header,
+                                       self.session_id))
         data = _post_json(
             _join_versioned(self.base, "/v1/chat/completions"),
             headers,
@@ -293,24 +332,30 @@ class AnthropicAdapter:
     api_version = "2023-06-01"
 
     def __init__(self, api_key: str = "", model: str = "",
-                  base_url: str = "", session_id: str = ""):
+                  base_url: str = "", session_id: str = "",
+                  session_header: str = ""):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
         self.model = model
+        self.session_header = normalize_session_header(session_header)
         self.base = (base_url or self.base_url).rstrip("/")
-        # Accepted for uniform construction only. Anthropic defines
-        # no session header, so complete() never reads this.
+        # Uniform construction; a provider-declared session_header
+        # carries the session generically (unused by default).
         self.session_id = session_id or ""
 
     def complete(self, system: str, user: str, *,
-                 temperature: float = 0.7, max_tokens: int = 400,
-                 timeout: int = 60) -> str:
+                  temperature: float = 0.7, max_tokens: int = 400,
+                  timeout: int = 60) -> str:
+        headers = {"x-api-key": self.api_key,
+                   "anthropic-version": self.api_version,
+                   "Content-Type": "application/json"}
+        headers.update(session_headers(
+            getattr(self, "session_header", ""),
+            getattr(self, "session_id", "")))
         data = _post_json(
             self.base + "/v1/messages",
-            {"x-api-key": self.api_key,
-             "anthropic-version": self.api_version,
-             "Content-Type": "application/json"},
+            headers,
             {"model": self.model, "max_tokens": max_tokens,
              "system": system, "temperature": temperature,
              "messages": [{"role": "user", "content": user}]},
@@ -346,14 +391,17 @@ class OpenAIResponsesAdapter:
     base_url = "https://api.openai.com"
 
     def __init__(self, api_key: str = "", model: str = "gpt-4.1",
-                  base_url: str = "", session_id: str = ""):
+                  base_url: str = "", session_id: str = "",
+                  session_header: str = ""):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
         self.model = model
         self.base = (base_url or self.base_url).rstrip("/")
-        # Same run-identity contract as OpenAIAdapter above.
+        # Same run-identity contract as OpenAIAdapter above,
+        # plus the generic provider-declared session header.
         self.session_id = session_id or ""
+        self.session_header = normalize_session_header(session_header)
 
     def _extra_headers(self) -> dict:
         return {}
@@ -375,6 +423,8 @@ class OpenAIResponsesAdapter:
         headers = {"Authorization": f"Bearer {self.api_key}",
                    "Content-Type": "application/json"}
         headers.update(self._extra_headers())
+        headers.update(session_headers(self.session_header,
+                                       self.session_id))
         data = _post_json(
             _join_versioned(self.base, "/v1/responses"),
             headers,
