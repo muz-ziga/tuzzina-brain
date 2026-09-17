@@ -145,14 +145,6 @@ class FakeTuzzina:
                         "error": error or ""})
             return dict(row, completed=True)
 
-    def get_post_preview(self, post_id):
-        self._log("get_post_preview", id=post_id)
-        with self._lock:
-            row = self.rows.get(post_id)
-            if row is None:
-                return []
-            return [dict(row)]
-
     def claim_candidate(self, candidate_id, run_id, slot="",
                         ttl_minutes=120):
         self._log("claim_candidate", id=candidate_id)
@@ -367,7 +359,10 @@ class MainCommentCase(unittest.TestCase):
     def test_companion_success(self):
         client = FakeTuzzina([FB_RECORD])
         out = _run(_content([self._companion_intent()]),
-                   client)
+                   client,
+                   verify_children=lambda pid: bool(
+                       client.rows.get(pid, {}).get(
+                           "childrenPost")))
         res = out[0]
         self.assertEqual(res.status, STATUS_SUCCESS)
         self.assertEqual(res.post_ids,
@@ -379,7 +374,10 @@ class MainCommentCase(unittest.TestCase):
         client = FakeTuzzina([FB_RECORD])
         client.drop_companion = True
         out = _run(_content([self._companion_intent()]),
-                   client)
+                   client,
+                   verify_children=lambda pid: bool(
+                       client.rows.get(pid, {}).get(
+                           "childrenPost")))
         res = out[0]
         self.assertEqual(res.status, STATUS_COMPANION_FAILED)
         self.assertEqual(res.post_ids,

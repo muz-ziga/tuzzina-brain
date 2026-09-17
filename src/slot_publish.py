@@ -205,7 +205,7 @@ def _release_owned(release, candidate_id: str,
 def execute_publication(slot_content, *, publish_at: str,
                         client, release=None,
                         observe_deadline_s: float = 5.0,
-                        verify_companion: bool = True):
+                        verify_children=None):
     """Publish every intent of one READY SlotContent through
     Tuzzina, idempotently. Returns one SlotPublication per
     intent, in order; stops at the first non-success (never
@@ -427,28 +427,24 @@ def execute_publication(slot_content, *, publish_at: str,
             slot_id, idx, True)[1:] if has_companion else []
         outcome = STATUS_SUCCESS
         outcome_error = ""
-        if has_companion and verify_companion:
+        if has_companion and verify_children is not None:
             # Companion rows are created in the same Tuzzina
-            # call; verify the child exists instead of
-            # assuming it. A missing child is reported
-            # honestly with the main post preserved.
+            # call; when the caller supplies a read-back, a
+            # missing child is reported honestly with the main
+            # post preserved (no duplicate on retry: the ledger
+            # already records this outcome). Without a
+            # verifier the success response stands (the call
+            # creates parent+child atomically per value item).
             try:
-                preview = client.get_post_preview(post_ids[0])
-                children = []
-                if isinstance(preview, list) and preview:
-                    first = preview[0] if isinstance(
-                        preview[0], dict) else {}
-                    kids = first.get("childrenPost")
-                    children = kids if isinstance(kids,
-                                                 list) else []
-                if not children:
-                    outcome = STATUS_COMPANION_FAILED
-                    outcome_error = "companion-unverified"
-                    companion_ids = []
+                children_ok = bool(verify_children(post_ids[0]))
             except Exception as e:
-                outcome = STATUS_COMPANION_FAILED
+                children_ok = False
                 outcome_error = "%s: companion-verify-failed" % \
                     type(e).__name__
+            if not children_ok:
+                outcome = STATUS_COMPANION_FAILED
+                if not outcome_error:
+                    outcome_error = "companion-unverified"
                 companion_ids = []
         try:
             done = client.complete_publication(

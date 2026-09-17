@@ -276,19 +276,6 @@ class TuzzinaClient:
             "DELETE", "/public/v1/posts/" + urllib.parse.quote(
                 str(post_id), safe=""))
 
-    def get_post_preview(self, post_id: str) -> list:
-        """Read-only preview of a post and its children via the
-        open preview endpoint (no auth needed server-side).
-        Used to verify companion rows after a draft handoff.
-        Returns the post list (possibly empty), never raises
-        on empty; transport errors raise TuzzinaError."""
-        if not post_id or not str(post_id).strip():
-            raise TuzzinaError("post_id is required")
-        data = self._call(
-            "GET", "/public/posts/" + urllib.parse.quote(
-                str(post_id), safe=""))
-        return data if isinstance(data, list) else []
-
     def get_content_distribution(self, integration_id: str):
         """Load the integration's content distribution config
         ({formats: {name: count}, enabled}) or None when none is
