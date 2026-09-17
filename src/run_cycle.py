@@ -95,8 +95,26 @@ def _build_models(mode: str, session_id: str = ""):
         adapter_cls = resolve_adapter(adapter_key, protocol)
         built.append(cls(adapter=adapter_cls(
             key, model, session_id=session_id, base_url=base_url,
-            session_header=session_header)))
+            session_header=session_header,
+            extra_headers=_extra_headers_env(prefix))))
     return built[0], built[1]
+
+
+def _extra_headers_env(prefix: str) -> dict:
+    """Account-declared static request headers (BRAIN_<ROLE>_
+    HEADERS as a JSON object). Empty means none. Malformed JSON
+    fails closed (exit 2): a broken transport config must never
+    run silently. Shape validation happens in the adapter."""
+    raw = (os.environ.get(prefix + "HEADERS") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        raise ValueError(f"{prefix}HEADERS is not valid JSON")
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{prefix}HEADERS must be a JSON object")
+    return parsed
 
 
 def _build_text_gen(mode: str, session_id: str = ""):
@@ -124,7 +142,8 @@ def _build_text_gen(mode: str, session_id: str = ""):
     return OpenAITextGenerator(
         adapter=resolve_adapter(adapter_key, protocol)(
             key, model, session_id=session_id, base_url=base_url,
-            session_header=session_header))
+            session_header=session_header,
+            extra_headers=_extra_headers_env("BRAIN_TEXT_")))
 
 
 def _emit_result(result: dict) -> None:

@@ -1275,5 +1275,98 @@ class FencedJsonCase(unittest.TestCase):
         self.assertTrue(out.eligible)
 
 
+class GenericExtraHeadersCase(unittest.TestCase):
+    """Account-declared static headers: merged generically, never
+    vendor-detected, security-sensitive names refused, secrets
+    never logged."""
+
+    def setUp(self):
+        CALLS.clear()
+        self._orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        fake_urlopen.mode = "openai-ok"
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig
+
+    def test_merged_into_chat_request(self):
+        OpenAIAdapter("k", "m", base_url="https://gw.example/v1",
+                      session_id="run-1",
+                      extra_headers={"X-Run-Tag": "t1"}).complete(
+                          "s", "u", timeout=5)
+        self.assertEqual(CALLS[0]["headers"].get("x-run-tag"), "t1")
+
+    def test_session_wins_over_static_on_conflict(self):
+        OpenAIAdapter("k", "m", session_id="run-1",
+                      session_header="X-S",
+                      extra_headers={"X-S": "stale"}).complete(
+                          "s", "u", timeout=5)
+        self.assertEqual(CALLS[0]["headers"].get("x-s"), "run-1")
+
+    def test_absent_by_default(self):
+        OpenAIAdapter("k", "m", session_id="run-1").complete(
+            "s", "u", timeout=5)
+        self.assertNotIn("x-run-tag", CALLS[0]["headers"])
+
+    def test_blocklist_refuses_sensitive_names(self):
+        for bad in ("Authorization", "content-type", "Content-Length",
+                    "HOST", "Cookie", "X-Api-Key"):
+            with self.assertRaises(ValueError):
+                OpenAIAdapter("k", "m", extra_headers={bad: "v"})
+        for bad in ("has space", "a:b", "x" * 129):
+            with self.assertRaises(ValueError):
+                OpenAIAdapter("k", "m", extra_headers={bad: "v"})
+        for bad in (7, ("x",), None):
+            with self.assertRaises(ValueError):
+                OpenAIAdapter("k", "m", extra_headers={bad: "v"})
+
+    def test_values_must_be_plain_strings(self):
+        for bad in ("", "   ", 7, None, ["v"], "x" * 2001):
+            with self.assertRaises(ValueError):
+                OpenAIAdapter("k", "m",
+                              extra_headers={"X-V": bad})
+
+    def test_no_vendor_detection_in_path(self):
+        import inspect
+        from llm import adapters as mod
+        src = inspect.getsource(mod.normalize_extra_headers)
+        for bad in ("opencode", "zen", "go", "muse", "spark",
+                    "deepseek", "gpt", "anthropic", "http", ".ai",
+                    "openai", "request", "client", "project"):
+            self.assertNotIn(bad, src)
+
+    def test_run_builders_forward_extra_headers(self):
+        import json as _json
+        from unittest import mock
+        from run_cycle import _build_models, _build_text_gen
+        env = {}
+        for role in ("RESEARCH", "ANALYSIS", "TEXT"):
+            env[f"BRAIN_{role}_ADAPTER"] = "openai_compatible"
+            env[f"BRAIN_{role}_KEY"] = "k"
+            env[f"BRAIN_{role}_MODEL"] = "m"
+            env[f"BRAIN_{role}_BASE"] = "https://gw.example/v1"
+            env[f"BRAIN_{role}_HEADERS"] = _json.dumps(
+                {"X-Run-Tag": "t1"})
+        with mock.patch.dict(os.environ, env):
+            research, _ = _build_models("--openai", session_id="r")
+            text_gen = _build_text_gen("--openai", session_id="r")
+        self.assertEqual(research._adapter.extra_headers,
+                         {"X-Run-Tag": "t1"})
+        self.assertEqual(text_gen._adapter.extra_headers,
+                         {"X-Run-Tag": "t1"})
+
+    def test_malformed_env_fails_closed(self):
+        from unittest import mock
+        from run_cycle import _extra_headers_env
+        for bad in ("not-json", "[1,2]", "42"):
+            with mock.patch.dict(
+                    os.environ, {"BRAIN_X_HEADERS": bad}):
+                with self.assertRaises(ValueError):
+                    _extra_headers_env("BRAIN_X_")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BRAIN_X_HEADERS", None)
+            self.assertEqual(_extra_headers_env("BRAIN_X_"), {})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -68,6 +68,47 @@ def session_headers(session_header, session_id) -> dict:
     return {name: sid}
 
 
+# Account-declared static request headers (generic transport
+# capability, not a session mechanism). Names and values ride
+# provider/account configuration; the execution session never
+# appears here (it has its own declared header above).
+# Security-sensitive headers can never be overridden: auth,
+# framing, and cookies stay owned by the transport.
+_EXTRA_HEADER_BLOCKLIST = frozenset([
+    "authorization", "content-type", "content-length", "host",
+    "cookie", "x-api-key",
+])
+_EXTRA_HEADER_LIMIT = 16
+
+
+def normalize_extra_headers(mapping) -> dict:
+    """Validate an account-declared static header map. Returns a
+    plain dict, or {} when unconfigured. Raises ValueError on
+    wrong types, oversized maps, malformed names, non-string
+    values, or blocklisted (security-sensitive) names:
+    fail-closed, before any HTTP happens."""
+    if mapping is None:
+        return {}
+    if not isinstance(mapping, dict):
+        raise ValueError("invalid-extra-headers")
+    if len(mapping) > _EXTRA_HEADER_LIMIT:
+        raise ValueError("invalid-extra-headers")
+    out = {}
+    for raw_name, raw_value in mapping.items():
+        if not isinstance(raw_name, str):
+            raise ValueError("invalid-extra-headers")
+        name = raw_name.strip()
+        if not _SESSION_HEADER_RE.fullmatch(name):
+            raise ValueError("invalid-extra-headers")
+        if name.lower() in _EXTRA_HEADER_BLOCKLIST:
+            raise ValueError("invalid-extra-headers")
+        if not isinstance(raw_value, str) or not raw_value.strip() \
+                or len(raw_value) > 2000:
+            raise ValueError("invalid-extra-headers")
+        out[name] = raw_value.strip()
+    return out
+
+
 PRODUCT_UA = "Tuzzina/1.0 (+https://www.juzzir.com)"
 
 
@@ -281,7 +322,7 @@ class OpenAIAdapter:
 
     def __init__(self, api_key: str = "", model: str = "gpt-4.1",
                   base_url: str = "", session_id: str = "",
-                  session_header: str = ""):
+                  session_header: str = "", extra_headers=None):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
@@ -293,6 +334,7 @@ class OpenAIAdapter:
         # provider-declared session_header carries it generically.
         self.session_id = session_id or ""
         self.session_header = normalize_session_header(session_header)
+        self.extra_headers = normalize_extra_headers(extra_headers)
 
     def _extra_headers(self) -> dict:
         return {}
@@ -303,6 +345,7 @@ class OpenAIAdapter:
         headers = {"Authorization": f"Bearer {self.api_key}",
                    "Content-Type": "application/json"}
         headers.update(self._extra_headers())
+        headers.update(self.extra_headers)
         headers.update(session_headers(self.session_header,
                                        self.session_id))
         data = _post_json(
@@ -333,12 +376,13 @@ class AnthropicAdapter:
 
     def __init__(self, api_key: str = "", model: str = "",
                   base_url: str = "", session_id: str = "",
-                  session_header: str = ""):
+                  session_header: str = "", extra_headers=None):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
         self.model = model
         self.session_header = normalize_session_header(session_header)
+        self.extra_headers = normalize_extra_headers(extra_headers)
         self.base = (base_url or self.base_url).rstrip("/")
         # Uniform construction; a provider-declared session_header
         # carries the session generically (unused by default).
@@ -350,6 +394,7 @@ class AnthropicAdapter:
         headers = {"x-api-key": self.api_key,
                    "anthropic-version": self.api_version,
                    "Content-Type": "application/json"}
+        headers.update(getattr(self, "extra_headers", None) or {})
         headers.update(session_headers(
             getattr(self, "session_header", ""),
             getattr(self, "session_id", "")))
@@ -392,7 +437,7 @@ class OpenAIResponsesAdapter:
 
     def __init__(self, api_key: str = "", model: str = "gpt-4.1",
                   base_url: str = "", session_id: str = "",
-                  session_header: str = ""):
+                  session_header: str = "", extra_headers=None):
         if not api_key:
             raise ValueError("api-key-required")
         self.api_key = api_key
@@ -402,6 +447,7 @@ class OpenAIResponsesAdapter:
         # plus the generic provider-declared session header.
         self.session_id = session_id or ""
         self.session_header = normalize_session_header(session_header)
+        self.extra_headers = normalize_extra_headers(extra_headers)
 
     def _extra_headers(self) -> dict:
         return {}
@@ -423,6 +469,7 @@ class OpenAIResponsesAdapter:
         headers = {"Authorization": f"Bearer {self.api_key}",
                    "Content-Type": "application/json"}
         headers.update(self._extra_headers())
+        headers.update(self.extra_headers)
         headers.update(session_headers(self.session_header,
                                        self.session_id))
         data = _post_json(
