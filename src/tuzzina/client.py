@@ -145,6 +145,150 @@ class TuzzinaClient:
                           {"sourceId": str(source_id), "state": state})
         return data if isinstance(data, dict) else {}
 
+    def claim_candidate(self, candidate_id: str, run_id: str,
+                        slot: str = "",
+                        ttl_minutes: int = 120) -> bool:
+        """Atomic cross-slot claim. True = this run holds the
+        candidate; False = another run holds it (HTTP 409, an
+        explicit loss signal, never silent). Same runId
+        re-claiming wins idempotently (retry-safe). Any other
+        failure raises TuzzinaError (fail-closed: the cycle
+        aborts rather than risking a duplicate)."""
+        if not candidate_id or not str(candidate_id).strip():
+            raise TuzzinaError("candidate_id is required")
+        if not run_id or not str(run_id).strip():
+            raise TuzzinaError("run_id is required")
+        try:
+            data = self._call("POST", "/public/v1/candidate-claims",
+                              {"candidateId": str(candidate_id),
+                               "runId": str(run_id),
+                               "slot": str(slot or ""),
+                               "ttlMinutes": int(ttl_minutes)})
+        except TuzzinaError as e:
+            if str(e).startswith("HTTP 409 "):
+                return False
+            raise
+        return bool(isinstance(data, dict) and
+                    data.get("claimed") is True)
+
+    def release_claim(self, candidate_id: str,
+                      run_id: str) -> int:
+        """Release exactly this run's claim row (0/1 freed).
+        Best-effort by contract: callers must never fail a run
+        on a release error (expiry covers crash paths)."""
+        if not candidate_id or not str(candidate_id).strip():
+            raise TuzzinaError("candidate_id is required")
+        if not run_id or not str(run_id).strip():
+            raise TuzzinaError("run_id is required")
+        path = "/public/v1/candidate-claims?" + \
+            urllib.parse.urlencode(
+                {"candidateId": str(candidate_id),
+                 "runId": str(run_id)})
+        data = self._call("DELETE", path)
+        if isinstance(data, dict) and \
+                isinstance(data.get("released"), int):
+            return data["released"]
+        return 0
+
+    def claim_publication(self, slot_id: str, intent_id: str,
+                            run_id: str, candidate_id: str = "",
+                            integration_id: str = "",
+                            mode: str = "draft",
+                            publish_at: str = "") -> dict:
+        """Atomic publication claim for one slot+intent. Returns
+        the row with claimed=True on win. On loss the server
+        answers 409 and this raises TuzzinaError("HTTP 409 ...");
+        callers then read get_publication() for the recorded
+        outcome (idempotent-complete) instead of re-executing.
+        Same runId re-claiming wins idempotently. Any other
+        failure raises (fail-closed)."""
+        for name, value in (("slot_id", slot_id),
+                            ("intent_id", intent_id),
+                            ("run_id", run_id)):
+            if not value or not str(value).strip():
+                raise TuzzinaError(f"{name} is required")
+        return self._call("POST",
+                          "/public/v1/brain-publications/claim",
+                          {"slotId": str(slot_id),
+                           "intentId": str(intent_id),
+                           "runId": str(run_id),
+                           "candidateId": str(candidate_id or ""),
+                           "integrationId": str(integration_id or ""),
+                           "mode": str(mode or "draft"),
+                           "publishAt": str(publish_at or "")})
+
+    def get_publication(self, slot_id: str,
+                        intent_id: str) -> dict | None:
+        """Read the recorded outcome for one slot+intent, or
+        None when no row exists (HTTP 404). Terminal rows are
+        final: published (with postIds), failed (with error),
+        or pending (another execution in flight)."""
+        if not slot_id or not str(slot_id).strip():
+            raise TuzzinaError("slot_id is required")
+        if not intent_id or not str(intent_id).strip():
+            raise TuzzinaError("intent_id is required")
+        path = "/public/v1/brain-publications?" + \
+            urllib.parse.urlencode(
+                {"slotId": str(slot_id),
+                 "intentId": str(intent_id)})
+        try:
+            data = self._call("GET", path)
+        except TuzzinaError as e:
+            if str(e).startswith("HTTP 404 "):
+                return None
+            raise
+        return data if isinstance(data, dict) else None
+
+    def complete_publication(self, slot_id: str, intent_id: str,
+                             run_id: str, status: str,
+                             post_ids=None,
+                             companion_ids=None,
+                             error: str = "") -> dict:
+        """Record the terminal outcome. First writer wins;
+        later arrivals get completed:false with the recorded
+        row. Status is published or failed (server-validated)."""
+        for name, value in (("slot_id", slot_id),
+                            ("intent_id", intent_id),
+                            ("run_id", run_id)):
+            if not value or not str(value).strip():
+                raise TuzzinaError(f"{name} is required")
+        if status not in ("published", "failed"):
+            raise TuzzinaError(
+                "status must be published or failed")
+        return self._call("POST",
+                          "/public/v1/brain-publications/complete",
+                          {"slotId": str(slot_id),
+                           "intentId": str(intent_id),
+                           "runId": str(run_id),
+                           "status": status,
+                           "postIds": list(post_ids or []),
+                           "companionIds": list(companion_ids or []),
+                           "error": str(error or "")})
+
+    def delete_post(self, post_id: str) -> dict:
+        """Delete one post (server deletes its whole group:
+        main + companion children). Test-hygiene and explicit
+        cleanup path only; never called by the publish flow
+        itself."""
+        if not post_id or not str(post_id).strip():
+            raise TuzzinaError("post_id is required")
+        return self._call(
+            "DELETE", "/public/v1/posts/" + urllib.parse.quote(
+                str(post_id), safe=""))
+
+    def get_post_preview(self, post_id: str) -> list:
+        """Read-only preview of a post and its children via the
+        open preview endpoint (no auth needed server-side).
+        Used to verify companion rows after a draft handoff.
+        Returns the post list (possibly empty), never raises
+        on empty; transport errors raise TuzzinaError."""
+        if not post_id or not str(post_id).strip():
+            raise TuzzinaError("post_id is required")
+        data = self._call(
+            "GET", "/public/posts/" + urllib.parse.quote(
+                str(post_id), safe=""))
+        return data if isinstance(data, list) else []
+
     def get_content_distribution(self, integration_id: str):
         """Load the integration's content distribution config
         ({formats: {name: count}, enabled}) or None when none is
@@ -213,78 +357,38 @@ class TuzzinaClient:
         """
         return self.base.rstrip("/") + "/mcp"
 
-    def _rpc(self, url: str, payload: dict,
-             session: dict) -> dict:
-        """One JSON-RPC 2.0 call over plain HTTP (stdlib only).
-
-        No retries: generation is not idempotent, so a failed call
-        fails loudly instead of risking a duplicate charge/run.
-        Captures the mcp-session-id response header when the server
-        sends one and reuses it on later calls in the same session.
-        HTTP errors raise TuzzinaError (never retried, never masked).
-        """
-        import urllib.error
-        body = json.dumps(payload).encode()
-        headers = {"Authorization": self.key,
-                   "Content-Type": "application/json",
-                   "Accept": "application/json, text/event-stream"}
-        if session.get("id"):
-            headers["Mcp-Session-Id"] = session["id"]
-        try:
-            req = urllib.request.Request(url, data=body, headers=headers,
-                                         method="POST")
-            with urllib.request.urlopen(req,
-                                       timeout=self.timeout) as r:
-                hdrs = getattr(r, "headers", {}) or {}
-                sid = hdrs.get("mcp-session-id") or \
-                    hdrs.get("Mcp-Session-Id")
-                if sid:
-                    session["id"] = sid
-                raw = r.read().decode()
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as e:
-            try:
-                detail = e.read().decode()[:300]
-            except Exception:
-                detail = ""
-            raise TuzzinaError(f"HTTP {e.code} {url}: {detail}")
-
     def generate_image(self, prompt: str) -> dict:
         """Delegate image generation to Tuzzina's existing image tool.
 
         Speaks the already-exposed MCP endpoint (POST base + "/mcp",
-        API-key auth) and calls the existing generateImageTool with
-        Brain's prompt decision. Tuzzina owns the engine, the
-        credentials, the ai_images credits, the storage, and the
-        returned {id, path} reference. The brain never sees image
-        bytes and performs no upload for delegated images.
-        Fail-closed: any error raises TuzzinaError; there is no
-        local fallback (no local image engine exists anymore).
+        API-key auth) through the generic MCP client and calls the
+        existing generateImageTool with Brain's prompt decision.
+        Tuzzina owns the engine, the credentials, the ai_images
+        credits, the storage, and the returned {id, path}
+        reference. The brain never sees image bytes and performs
+        no upload for delegated images. Fail-closed: any error
+        raises TuzzinaError; there is no local fallback (no local
+        image engine exists anymore).
         """
         if not prompt or not str(prompt).strip():
             raise TuzzinaError("prompt is required")
-        url = self._mcp_url()
-        session: dict = {}
-        init = self._rpc(url, {
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2024-11-05",
-                       "capabilities": {},
-                       "clientInfo": {"name": "tuzzina-brain",
-                                      "version": "0.10.0"}}}, session)
-        if not isinstance(init, dict) or "result" not in init:
+        from mcp.client import McpClient, McpError
+        client = McpClient(self._mcp_url(), auth_header=self.key,
+                           timeout=self.timeout)
+        try:
+            client.initialize()
+        except McpError:
             raise TuzzinaError(
                 "Tuzzina image delegation failed during handshake")
-        self._rpc(url, {"jsonrpc": "2.0",
-                        "method": "notifications/initialized"}, session)
-        call = self._rpc(url, {
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": "generateImageTool",
-                       "arguments": {"prompt": str(prompt)}}}, session)
-        if isinstance(call, dict) and call.get("error"):
+        try:
+            result = client.call_tool(
+                "generateImageTool", {"prompt": str(prompt)})
+        except McpError as e:
+            msg = str(e)
+            if msg.startswith("tool-error:"):
+                msg = msg[len("tool-error:"):]
             raise TuzzinaError(
-                f"Tuzzina image delegation failed: {call['error']}")
-        result = (call.get("result") or {}) if isinstance(call, dict) \
-            else {}
+                f"Tuzzina image delegation failed: {msg}")
         if isinstance(result, dict) and result.get("isError"):
             detail = ""
             for item in result.get("content") or []:

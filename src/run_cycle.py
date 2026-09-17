@@ -297,16 +297,51 @@ def _main(argv=None) -> int:
         return client.generate_video(
             req.video_type, req.output, req.prompt, req.params)
 
+    # Cross-slot claim wiring (Stage B): the Tuzzina claim
+    # endpoint is the atomic lock; this run's id is the owner.
+    # Slot label is the publish slot when Stage 9 supplies one;
+    # until then the run id scopes the claim for evidence.
+    # Release is best-effort on every terminal outcome below
+    # (never fails the run); expiry covers crash paths.
+    def _claimer(key: str) -> bool:
+        return bool(client.claim_candidate(key, run_id))
+
+    def _release_all() -> None:
+        for key in list(getattr(out, "claimed", []) or []):
+            try:
+                client.release_claim(key, run_id)
+            except Exception as e:
+                print(f"run_id={run_id} warning: release failed "
+                      f"({type(e).__name__}); expiry covers",
+                      file=sys.stderr)
+
     out = run_cycle(
         cfg.get("sources") or [], store=store, policy=cfg,
         schedule=cfg.get("schedule") or {}, text_gen=text_gen,
         image_gen=image_gen_obj, research_model=research_model,
         analysis_model=analysis_model, mode=args.post_mode,
         integration_id=args.strategy_by_integration,
-        video_resolve=None if args.dry_run else _video_resolve)
+        video_resolve=None if args.dry_run else _video_resolve,
+        claimer=None if args.dry_run else _claimer)
 
     result["sources_checked"] = len(out.sources)
     result["items_new"] = len(out.items)
+    # Stage B discovery evidence: one entry per polled source
+    # (type/ref/ok/collected/new + capability/tool when a
+    # capability layer produced the candidates). Read-only
+    # projection of CycleResult.sources; Tuzzina surfaces the
+    # keys it allowlists and ignores the rest.
+    result["discovery"] = [{
+        "type": getattr(rep, "type", ""),
+        "ref": getattr(rep, "ref", ""),
+        "ok": bool(getattr(rep, "ok", False)),
+        "collected": int(getattr(rep, "collected", 0) or 0),
+        "new": int(getattr(rep, "new", 0) or 0),
+        "capability": getattr(rep, "capability", "") or "",
+        "tool": getattr(rep, "tool", "") or "",
+        "discovered_at": getattr(rep, "discovered_at", "") or "",
+        "error": getattr(rep, "error", "") or "",
+    } for rep in (out.sources or [])]
     result["eligible"] = bool(
         out.opportunity is not None and out.opportunity.eligible)
     result["intents"] = len(out.intents)
@@ -315,10 +350,12 @@ def _main(argv=None) -> int:
     result["skills_used"] = skills_used
     result["roles"] = list(out.roles)
     result["skipped"] = list(out.skipped)
+    result["claimed"] = list(getattr(out, "claimed", []) or [])
     if out.error:
         print(f"run_id={run_id} error: {out.error}", file=sys.stderr)
         result["error"] = out.error
         result["status"] = "error"
+        _release_all()
         _emit_result(result)
         return 1
 
@@ -326,6 +363,7 @@ def _main(argv=None) -> int:
         result["status"] = "no-op"
         print(f"run_id={run_id} DRY-RUN {len(out.intents)} intent(s): "
               f"no writes performed")
+        _release_all()
         _emit_result(result)
         return 0
 
@@ -348,6 +386,7 @@ def _main(argv=None) -> int:
     result["status"] = "success"
     print(f"run_id={run_id} INJECTED {len(post_ids)} post(s) "
           f"[mode={args.post_mode}]")
+    _release_all()
     _emit_result(result)
     return 0
 

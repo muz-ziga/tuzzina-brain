@@ -15,7 +15,10 @@ def apply_banned(text: str, banned: list) -> tuple[str, list]:
         if w and w in text:
             hit.append(w)
             text = text.replace(w, "")
-    return re.sub(r"\s+", " ", text).strip(), hit
+    # Collapse spaces/tabs only: newlines are structural (the
+    # companion marker must survive on its own line through
+    # this stage for build_intent to split it downstream).
+    return re.sub(r"[ \t]+", " ", text).strip(), hit
 
 
 def make_hashtags(title: str, summary: str, preferred: list,

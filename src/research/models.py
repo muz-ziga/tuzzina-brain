@@ -207,10 +207,11 @@ class OpenAIResearchModel(ResearchModel):
         for it in items:
             text, cut = _bound_text(it.text)
             truncated = truncated or cut
-            blocks.append(
+            from skills.editorial import quote_untrusted
+            blocks.append(quote_untrusted(
                 f"ID: {_trace_id(it)}\nTitle: {(it.title or '').strip()}\n"
                 f"Published: {it.published_at or 'unknown'}\n"
-                f"Text: {text}")
+                f"Text: {text}"))
         prompt = (
             "You research collected source items. Reply with JSON ONLY, "
             "exactly: {\"summary\": str, \"findings\": [{\"statement\": "

@@ -165,3 +165,23 @@ def clean_model_text(text: str, *, links_policy: str = "hide",
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+_UNTRUSTED_OPEN = "[UNTRUSTED SOURCE CONTENT BEGINS]"
+_UNTRUSTED_CLOSE = "[UNTRUSTED SOURCE CONTENT ENDS]"
+
+
+def quote_untrusted(text: str) -> str:
+    """Wrap external source text in explicit delimiters before it
+    enters a model prompt. Trust order (highest wins):
+
+    SYSTEM POLICY > TOOL POLICY > SKILL > TASK > UNTRUSTED
+    SOURCE CONTENT.
+
+    Delimiters are a boundary marker, not sanitization: quoted
+    text is NEVER cleaned, rewritten, or executed, and quoting
+    grants no tool authority (agents expose no tools at all).
+    Strict JSON validators at each model boundary remain the
+    output gate. Pure function, no I/O."""
+    return "%s\n%s\n%s" % (_UNTRUSTED_OPEN, text or "",
+                           _UNTRUSTED_CLOSE)

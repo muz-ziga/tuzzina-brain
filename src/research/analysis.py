@@ -253,12 +253,13 @@ class OpenAIAnalysisModel(AnalysisModel):
             raise AnalysisError("empty-research")
         known = set()
         parts = []
+        from skills.editorial import quote_untrusted
         for f in findings:
             for i in (f.item_ids or []):
                 known.add(str(i))
-            parts.append(
+            parts.append(quote_untrusted(
                 f"- [{f.kind}] {f.statement[:300]} "
-                f"(items: {', '.join(str(i) for i in (f.item_ids or []))})")
+                f"(items: {', '.join(str(i) for i in (f.item_ids or []))})"))
         media_hint = _media_intent(view, items)
         prompt = (
             "You decide content opportunity. Reply with JSON ONLY, "
@@ -279,7 +280,7 @@ class OpenAIAnalysisModel(AnalysisModel):
             f"POLICY: audience={view['audience']} "
             f"language={view['language']} tone={view['tone']} "
             f"pillars={view['pillars']}\n"
-            f"SUMMARY: {(getattr(result, 'summary', '') or '')[:500]}\n"
+            f"{quote_untrusted('SUMMARY: ' + ((getattr(result, 'summary', '') or '')[:500]))}\n"
             f"FINDINGS:\n" + "\n".join(parts))
         from channels.instructions import build as _skill
         skill = _skill(policy)

@@ -272,7 +272,9 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
             if not isinstance(s, dict):
                 raise _err(f"'strategy.sources[{i}]' must be a mapping")
             stype = s.get("type")
-            if stype not in ("website", "rss", "youtube"):
+            if stype not in ("website", "rss", "youtube",
+                             "web", "news", "social.facebook",
+                             "social.instagram", "social.x"):
                 raise _err(f"'strategy.sources[{i}].type' unsupported")
             n = s.get("n", 3)
             if not isinstance(n, int) or n < 1:
@@ -284,6 +286,29 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
                     raise _err(f"'strategy.sources[{i}].channel_id' "
                                f"must be a YouTube channel id (UC…)")
                 entry["channel_id"] = cid
+            elif stype in ("web", "news", "social.facebook",
+                             "social.instagram", "social.x"):
+                # Query-driven sources (search + social): an
+                # explicit scope string is required (keywords,
+                # page/account id, or hashtag — never a default
+                # that would silently broaden discovery).
+                # `target` is an optional human label kept for
+                # evidence only; it never affects resolution.
+                query = str(s.get("query", "")).strip()
+                if not query:
+                    raise _err(f"'strategy.sources[{i}].query' "
+                               f"required for search sources")
+                entry["query"] = query
+                target = s.get("target", "")
+                if target is not None and str(target).strip():
+                    entry["target"] = str(target).strip()[:200]
+                age = s.get("max_age_days")
+                if age is not None:
+                    if not isinstance(age, int) or age < 0:
+                        raise _err(
+                            f"'strategy.sources[{i}].max_age_days' "
+                            f"must be int >= 0")
+                    entry["max_age_days"] = int(age)
             else:
                 if not str(s.get("url", "")).strip():
                     raise _err(f"'strategy.sources[{i}].url' required")
@@ -295,6 +320,12 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
                     raise _err(f"'strategy.sources[{i}].source_id' "
                                f"must be a non-empty string ≤ 500 chars")
                 entry["source_id"] = sid.strip()
+            poll = s.get("poll_minutes")
+            if poll is not None:
+                if not isinstance(poll, int) or poll < 1:
+                    raise _err(f"'strategy.sources[{i}].poll_minutes' "
+                               f"must be int >= 1")
+                entry["poll_minutes"] = int(poll)
             if s.get("enabled") is False:
                 entry["enabled"] = False
             out.append(entry)

@@ -19,8 +19,9 @@ class FakeResp:
         self.code = code
         self.headers = headers or {}
 
-    def read(self):
-        return json.dumps(self.payload).encode()
+    def read(self, n=-1):
+        data = json.dumps(self.payload).encode()
+        return data if n is None or n < 0 else data[:n]
 
     def __enter__(self):
         if self.code >= 400:

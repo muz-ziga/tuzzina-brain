@@ -90,6 +90,23 @@ class HashtagOnceTest(unittest.TestCase):
         out = adapter.shape_text(pkg.content, pkg.hashtags)
         self.assertEqual(out.count("#juzzir"), 1)
 
+    def test_empty_preferred_means_no_forced_tags(self):
+        # Strategy preferred_words=[] (the Juzzir fix): tags come
+        # only from content tokens, capped. No brand/topic tag is
+        # ever forced onto an unrelated post.
+        cfg = _cfg(hashtags={"enabled": True,
+                             "per_platform": {"facebook": {
+                                 "max": 3, "preferred": []}}})
+        adapter = FacebookAdapter()
+        pkg = build_package(_item(), cfg["brand"], cfg["language"],
+                            cfg["hashtags"], cfg["links_policy"],
+                            G.MockTextGenerator(), G.MockImageGenerator(),
+                            platform="facebook", platform_settings={},
+                            link_fn=adapter.apply_link)
+        self.assertLessEqual(len(pkg.hashtags), 3)
+        for forced in ("#mastering", "#mix", "#juzzir"):
+            self.assertNotIn(forced, pkg.hashtags)
+
     def test_package_content_has_no_tags(self):
         # Core contract: pkg.content is plain text, tags live in pkg.hashtags
         cfg = _cfg()

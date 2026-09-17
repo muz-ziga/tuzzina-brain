@@ -1,5 +1,217 @@
 # Changelog
 
+## Unreleased — Stage J idempotent publication handoff (no deploy)
+
+- New `src/slot_publish.py`: SlotContent in, idempotent
+  Tuzzina execution out. Validates every intent (identity,
+  destination, ISO publish time, media refs, duplicate
+  detection), resolves destination via existing
+  get_integration, re-claims the candidate, claims the
+  Tuzzina-owned BrainPublication ledger row, publishes
+  through the EXISTING InjectionService with deterministic
+  value ids (replay upserts same rows), verifies companion
+  via the open preview endpoint, completes the ledger
+  first-writer-wins, releases the claim. Retries observe
+  recorded rows (idempotent-complete) instead of
+  re-executing. Terminal statuses: no-op,
+  validation-failed, destination-unavailable,
+  idempotency-already-complete, publication-failed,
+  companion-failed, success. No Research/Analysis/
+  generation calls, no uploads, no credentials, no
+  scheduler.
+- `CanonicalIntent.value_ids` (optional, default None):
+  deterministic row ids attached by InjectionService only
+  when present with exact length match; legacy path
+  byte-identical.
+- `TuzzinaClient`: claim/get/complete publication,
+  delete_post (cleanup), get_post_preview (read-only
+  companion verification).
+- Tuzzina (narrow, additive only): `BrainPublication`
+  model (unique org+slot+intent, expiry-swept),
+  repository/service/controller/DTO/spec following the
+  candidate-claim pattern (409 with row, same-owner
+  reclaim, first-writer-wins complete).
+- Tests: 25 new (`tests/test_slot_publish.py`); full Brain
+  suite green; Tuzzina publication spec 10/10, claim spec
+  7/7; backend tsc shows only pre-existing errors.
+
+## Unreleased — Stage I slot content (no deploy)
+
+- New `src/slot_content.py`: SlotExecution in, generation
+  handoff out. Mirrors research/cycle.py stage-for-stage
+  for ONE claimed candidate (roles gating incl.
+  research-off-forces-analysis-off, research, analysis +
+  ineligible stop, format gate, text gating,
+  plan_generation, video deferral, G2 packaging, G3
+  planning, intent building) reusing the SAME helpers with
+  identical semantics. No collect/claim/publish/schedule/
+  upload/scheduler/credentials. Claim released best-effort
+  on terminal outcomes (mirrors run_cycle.py); expiry
+  covers the rest. Companion flows via build_intent split.
+- One-line closed-pipeline correction in
+  `g2/pipeline.py:apply_banned`: preserve newlines (was:
+  flatten all whitespace, which destroyed the companion
+  marker line before build_intent could split it).
+  Banned-word removal byte-identical otherwise.
+- Tests: 24 new (`tests/test_slot_content.py`); suite
+  887/887. Live-verified read-only (mock models, socket
+  connect patched to raise): ready + 1 intent + companion
+  split + released.
+
+## Unreleased — Stage H slot executor (no deploy)
+
+- New `src/slots.py`: one slot in, one independent
+  execution context out (`SlotExecution`: slot/campaign/
+  window ids, candidate id + verbatim provenance, claim
+  owner, terminal status). Select from existing pool,
+  atomic claim via injected callable, fail-closed
+  no-op/expired/invalid/disabled/claim-lost/claim-failed.
+  Idempotency from same-owner reclaim (repeat rebuilds,
+  new owner loses). No LLM, no publish, no network, no
+  clock, no store. Tests: 27 new
+  (`tests/test_slot_execution.py`); suite 863/863.
+  Live-verified read-only against real RSS data.
+
+## Unreleased — Stage G candidate pool (no deploy)
+
+- New `src/discovery/pool.py` (pure, no IO/LLM/clock):
+  source-neutral retention over plain dicts. `upsert`
+  merges by stable identity (first_seen preserved, fields
+  refresh); `select` returns eligible entries (dated
+  newest-first, dateless kept, deterministic order, limit,
+  exclude); `prune` drops stale and caps by oldest;
+  `to_envelope` serializes the `{"candidates": {...}}`
+  envelope persisted under `candidate-pool` via the
+  existing research-state endpoint. No claiming, no
+  scheduling, no Research calls from the pool.
+- Tuzzina: `candidates` allowlisted in
+  `research-state.service.ts` with the same object-shape
+  validation as `seen` (1MB cap unchanged). Nothing else
+  touched server-side.
+- Tests: 27 new (`tests/test_candidate_pool.py`); suite
+  836/836. Tuzzina research-state spec 11/11.
+- Live-verified read-only against a real RSS feed: 5
+  candidates pooled, second poll added zero, selection
+  returned dated-newest-first with provenance intact.
+
+## Unreleased — Stage F social discovery (no deploy)
+
+- `src/g1/search.py`: `social.facebook`, `social.instagram`,
+  `social.x` source types through the SAME generic MCP
+  path (capability name == source type; zero vendor code).
+  Normalization preserves explicit platform `id` as
+  `external_id` and explicit `author`, else domain fallback.
+- `research/cycle.py`: social dispatch via `_collect_search`;
+  shared `stable_identity()` now used for ALL search-type
+  candidates so classify, dedup, and claim agree (identical
+  for web/news, correct for platform IDs).
+- `channels/strategy_store.py`: accepts the three social
+  types (`query` required scope string, optional `target`
+  label for evidence only, `max_age_days`, `poll_minutes`,
+  `source_id`, `enabled`); legacy types unchanged.
+- `discovery/manager.py`: 5m poll defaults for the three
+  social types.
+- Platforms: Facebook/Instagram/X all BLOCKED (no zero-cost
+  official access: Meta review gates, X pay-per-use). No
+  scraping fallback built. Tests: 32 new
+  (`tests/test_social_discovery.py`); suite 809/809.
+
+## Unreleased — Stage E zero-cost search (no deploy)
+
+- New `src/g1/search.py` (Stage E): query-driven `web` /
+  `news` discovery through the generic Stage D MCP layer
+  only (semantic `web.search` / `news.search`, never a
+  vendor/endpoint/credential; no keys, accounts, billing,
+  or paid fallback anywhere in code). Results normalize
+  into the existing SourceItem contract with shared
+  stable_identity (cross-query/cross-capability/
+  cross-engine duplicates collapse), optional
+  `max_age_days` freshness filter (dateless kept, never
+  dated by fiat), and Stage B provenance fields. Failures
+  are per-source evidence; empty means zero candidates and
+  no Research call. Content stays untrusted (existing
+  editorial quoting at the model boundary).
+- New `tools/mcp_search_bridge.py` (self-hosted deployment
+  infra, stdlib only, not imported by Brain): exposes a
+  SearXNG-compatible JSON API as generic MCP tools
+  `search` / `news_search`. Fail-closed (SearXNG errors
+  become JSON-RPC errors, never fabricated results).
+- `research/cycle.py` dispatches   `web` / `news` sources
+  (query required; shared NEW/UNCHANGED/UPDATED classify;
+  claim integration unchanged); strategy schema accepts
+  them (`query` required, optional `max_age_days`);
+  discovery cadence defaults 5m for both.
+- Live-verified against local self-hosted SearXNG
+  (official source, no keys, loopback only): web query
+  returned 8/8 kept, news query 8/8 kept, zero dupes.
+- Tests: 30 new (`tests/test_search_discovery.py`); suite
+  777/777. No commit/push/build/deploy; production
+  untouched.
+
+## Unreleased — Stage B discovery foundation (no deploy)
+
+- New shared fetch boundary `src/g1/fetch.py` (extracted
+  verbatim from the proven `g1/rss.py` guards + per-hop
+  redirect re-validation): scheme/host allowlist, full DNS
+  global-routability check (v4+v6, mixed answers refuse),
+  capped redirects with re-check, size/timeout caps, machine
+  reason errors. `rss.py` delegates to it (behavior
+  identical); `website.py` routes through it (closes the
+  proven SSRF gap: private/metadata/rebinding targets now
+  refuse before connect).
+- New generic MCP layer `src/mcp/` (stdlib only, zero new
+  deps): `client.py` (initialize/tools-list/tools-call,
+  session handling, timeouts, size caps, no retries, no
+  credential storage) extracted from the proven Tuzzina
+  image-delegation handshake (that caller is byte-identical;
+  its private `_rpc` removed); `registry.py` (file-owned
+  `servers.yaml`, strict validation, semantic capability ->
+  server+tool, env-name auth refs only, ambiguous refuses);
+  `servers.yaml` ships empty (zero capabilities by default).
+  No vendor/company/agent/campaign concepts anywhere.
+- Stage C discovery core: `src/discovery/manager.py`
+  (pure due-source policy: explicit `poll_minutes` wins,
+  per-type defaults rss/youtube 5m + website 10m, unknown
+  types poll conservatively, disabled never due, inputs
+  untouched, no clock/network/state); strategy schema
+  carries optional `poll_minutes` (int >= 1, rejected
+  otherwise). Polling cadence, publication schedule, and
+  research lead time share no field. 15 tests.
+- Candidate contract: `SourceItem` gains optional
+  `external_id/discovered_at/capability/author` (defaults
+  keep every existing caller byte-identical);
+  `monitor.stable_identity()` (platform:id > canonical URL >
+  content hash; title never identity); `SourceReport` gains
+  optional capability/tool/discovered_at evidence;
+  `BRAIN_RESULT` gains a read-only `discovery` projection.
+- Slot contract: `g3.planner.Slot` + `research_window()`
+  (publish_at/research_start_at/deadline_at; polling
+  cadence, schedule, and lead time stay separate fields).
+  No scheduler changes (Stage 9 insertion point only).
+- Trust boundary: `editorial.quote_untrusted()` delimiters;
+  research/analysis prompts wrap collected text (meaning
+  untouched); strict JSON validators remain the output gate.
+- Reservation: CLOSED - atomic `BrainCandidateClaim`
+  table in Tuzzina (`@@unique([organizationId,
+  candidateId])`, additive migration only) with a narrow
+  claim/release interface (DTO -> Controller -> Service ->
+  Repository; 409 on loss, owner-only release + reclaim,
+  expiry swept on the claim path, no cron). Brain claims
+  NEW items by stable identity before any LLM spend
+  (losers drop, all-lost means zero LLM calls, transport
+  failure fails closed with nothing committed) and releases
+  on every terminal outcome. Proof: concurrent-claim
+  exactly-one-winner, reclaim, release, expiry-path, and
+  claim-before-research tests. Suite 732/732. No paid
+  dependency introduced
+  (stdlib + PyYAML only). No Tuzzina/workflow/provider/
+  OAuth/campaign changes. No commit/push/build/deploy.
+- Tests: 84 new (fetch boundary 19, MCP client 17,
+  registry 21, candidate 12, slot 8, trust 5, reservation
+  3+doc); suite 721/721. No paid dependency introduced
+  (stdlib + PyYAML only). No Tuzzina/workflow/provider/
+  OAuth/campaign changes. No commit/push/build/deploy.
+
 ## Unreleased — Brain Skills system
 
 - New `src/skills/` file-owned expertise layer (no DB, per
@@ -75,6 +287,31 @@
   skills keep the exact historical line). Trace gains
   `has_companion`/`companion_chars` (allowlisted, metadata
   only). 9 new tests; suite 630/630.
+- Product-relevance hardening (Stream Deck case, no src
+  change): strategy data no longer appends a brand URL CTA
+  (empty `cta_style`, `links_policy` stays `cta` so relevant
+  model-written URLs survive first-occurrence),
+  `preferred_words` emptied and hashtag max 3 (no forced
+  brand/topic tags); research/analysis/text skills carry
+  explicit product-fit gates (audience vs product relevance,
+  default-deny, banned forced phrases) with the machine JSON
+  contracts unchanged. Guards: runtime-invents-nothing,
+  CTA-assembly mechanics, hashtag cap/preferred. Suite
+  637/637.
+- Data (production DB, no code): new disabled campaign
+  "Juzzir Mastering News - 24H" (hourly slots, freq 60)
+  with three new mastering skills (research/analysis/writer,
+  writer config max_chars 1300 + companion contract) and the
+  10-point verified Juzzir product truth embedded in the
+  analysis gate. Research skill hardened with freshness and
+  source discipline (published_at recency, source-quality
+  tiers, parametric-memory ban, subject-dedup merge); Tier-2
+  live web research deliberately NOT claimed - adapters have
+  no browsing tool, so on-demand web discovery needs a new
+  search capability (code, deferred with reasons).
+  Pending: feed expansion approval (single
+  shared feed cannot supply 24 fresh topics), safe-run
+  validation, explicit activation.
 
 ## 0.30.0 — Phase 15: OpenCode Zen provider adapter
 

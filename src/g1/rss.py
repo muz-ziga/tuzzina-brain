@@ -17,7 +17,6 @@ meta instead of crashing. No secrets are logged (URLs only).
 """
 from __future__ import annotations
 import hashlib
-import ipaddress
 import re
 import socket
 import urllib.error
@@ -29,17 +28,14 @@ from email.utils import parsedate_to_datetime
 
 from contracts import ExtractionResult, Identity, SourceItem
 from g1.base import SourceAdapter
+from g1.fetch import FetchError as FeedError
+from g1.fetch import check_url as _check_url
+from g1.fetch import resolve_host as _resolve_host
 
 UA = "tuzzina-brain/0.1 (+rss-discovery)"
 TIMEOUT = 25
 MAX_BYTES = 1_000_000
 MAX_REDIRECTS = 5
-
-
-class FeedError(Exception):
-    """Fetch/parse failure. str() is a short machine reason
-    (e.g. "timeout", "http-404", "malformed-xml", "oversized",
-    "unsafe-url") — safe to store in monitoring state."""
 
 
 @dataclass
@@ -57,44 +53,20 @@ class RssItem:
     thumbnail: str = ""
 
 
+from contracts import ExtractionResult, Identity, SourceItem
+from g1.base import SourceAdapter
+from g1.fetch import FetchError as FeedError
+from g1.fetch import check_url as _check_url
+from g1.fetch import resolve_host as _resolve_host
+
+UA = "tuzzina-brain/0.1 (+rss-discovery)"
+TIMEOUT = 25
+MAX_BYTES = 1_000_000
+MAX_REDIRECTS = 5
+
+
 def _deny(reason: str) -> FeedError:
     return FeedError(reason)
-
-
-def _check_url(url: str) -> urllib.parse.ParseResult:
-    try:
-        p = urllib.parse.urlparse((url or "").strip())
-    except Exception:
-        raise _deny("unsafe-url")
-    if p.scheme not in ("http", "https") or not p.hostname:
-        raise _deny("unsafe-url")
-    if "@" in (p.netloc or ""):
-        raise _deny("unsafe-url")
-    return p
-
-
-def _resolve_host(host: str) -> None:
-    """Refuse non-public targets. Literals are checked without DNS;
-    names resolve (patched in tests) and every address must be
-    globally routable. Raises FeedError on any refusal."""
-    try:
-        ips = [ipaddress.ip_address(host)]
-    except ValueError:
-        try:
-            infos = socket.getaddrinfo(host, None)
-        except Exception:
-            raise _deny("dns-failed")
-        ips = []
-        for info in infos:
-            try:
-                ips.append(ipaddress.ip_address(info[4][0]))
-            except Exception:
-                continue
-    if not ips:
-        raise _deny("dns-failed")
-    for ip in ips:
-        if not ip.is_global:
-            raise _deny("non-public-target")
 
 
 class _CappedRedirect(urllib.request.HTTPRedirectHandler):

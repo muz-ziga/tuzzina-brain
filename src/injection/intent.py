@@ -73,6 +73,13 @@ class CanonicalIntent:
     settings: dict = field(default_factory=dict)
     # CTA text used when links_policy == "cta".
     cta_style: str = "Learn more"
+    # Optional deterministic row ids for the Tuzzina value
+    # items, set only by the idempotent publish path
+    # (slot_publish). When present with exactly one id per
+    # value item, InjectionService attaches them so a replay
+    # upserts the same rows instead of creating duplicates.
+    # None (default) preserves the legacy random-uuid path.
+    value_ids: list | None = None
 
 
 def build_intent(*, integration_id: str, content: str,

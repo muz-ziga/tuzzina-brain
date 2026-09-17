@@ -169,6 +169,19 @@ class InjectionService:
             # its call-to-action inline per the text skill.
             items.append({"content": adapter.shape_text(
                 companion_text, []), "image": []})
+        value_ids = intent.value_ids
+        if value_ids is not None:
+            # Idempotent publish path: deterministic row ids so a
+            # replay upserts the same Tuzzina rows. Length must
+            # match exactly; anything else is a programming error,
+            # refused before any HTTP happens.
+            if not isinstance(value_ids, list) or len(value_ids) != len(items) \
+                    or not all(isinstance(v, str) and v.strip()
+                               for v in value_ids):
+                raise InvalidInjectionIntent(
+                    "value_ids must match value items one-to-one")
+            for item_entry, vid in zip(items, value_ids):
+                item_entry["id"] = vid
         posts = [{
             "integration": {"id": intent.integration_id},
             "value": items,
@@ -217,5 +230,8 @@ class InjectionService:
             raise InvalidInjectionIntent("hashtags must be a list")
         if not isinstance(intent.companion, str):
             raise InvalidInjectionIntent("companion must be a string")
+        if intent.value_ids is not None and \
+                not isinstance(intent.value_ids, list):
+            raise InvalidInjectionIntent("value_ids must be a list")
         if not isinstance(intent.mentions, list):
             raise InvalidInjectionIntent("mentions must be a list")

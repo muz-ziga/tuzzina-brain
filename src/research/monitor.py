@@ -97,6 +97,41 @@ class CollectionResult:
         store.save(self._pending)
 
 
+def stable_identity(platform: str = "", external_id: str = "",
+                    url: str = "", title: str = "",
+                    text: str = "") -> tuple:
+    """Cross-source identity for one candidate. Precedence (first
+    hit wins, documented, stable across fetches):
+
+    1. ``platform:external_id`` when both are present
+       (same native post seen via two searches/queries);
+    2. canonical URL (scheme/host lowered, fragment dropped,
+       trailing slash dropped, utm_* dropped) when present
+       (same article via RSS, search, and news);
+    3. content fallback ``"hash:" + sha256(normalized
+       title + text)`` (same substance, different URLs).
+
+    Title alone is NEVER identity (false merges). Returns
+    (item_id, content_hash); the hash always covers
+    title+text so UPDATED detection keeps working.
+    Pure: no network, no store, no clock."""
+    from g1.rss import canonical_url as _canonical
+    from g1.rss import content_hash as _hash
+    platform = (platform or "").strip().lower()
+    external_id = (external_id or "").strip()
+    if platform and external_id:
+        item_id = "%s:%s" % (platform, external_id)
+    else:
+        item_id = ""
+        try:
+            item_id = _canonical(url or "") or ""
+        except Exception:
+            item_id = ""
+        if not item_id:
+            item_id = "hash:" + _hash(title or "", text or "")
+    return item_id, _hash(title or "", text or "")
+
+
 def classify_candidates(source_id: str, candidates: list,
                         state: SourceState, now: str):
     """Classify pre-normalized candidates against staged state.

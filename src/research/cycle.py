@@ -36,7 +36,8 @@ from g1.website import WebsiteAdapter
 from g1.youtube import YouTubeFeedAdapter, youtube_feed_url
 from research.monitor import (NEW, UPDATED, CollectionResult,
                               ClassifiedItem, MemoryStateStore,
-                              classify_candidates, collect)
+                              classify_candidates, collect,
+                              stable_identity)
 from g2.generators import MockImageGenerator, MockTextGenerator
 from g2.pipeline import build_package
 from g3.planner import plan
@@ -55,6 +56,15 @@ class SourceReport:
     error: str = ""
     collected: int = 0
     new: int = 0
+    # Stage B discovery evidence (all optional, default ""):
+    # capability = semantic capability that produced the
+    # candidates ("", rss/website/youtube leave empty: the
+    # source type IS the capability there); tool = concrete
+    # tool/endpoint name when a capability layer was used;
+    # discovered_at = ISO time the poll ran (mirrors now).
+    capability: str = ""
+    tool: str = ""
+    discovered_at: str = ""
 
 
 @dataclass
@@ -82,6 +92,12 @@ class CycleResult:
     # "text:text-role-off"). Evidence surfaces both.
     roles: list = field(default_factory=list)  # [str]
     skipped: list = field(default_factory=list)  # [str]
+    # Candidate ids this cycle holds via the atomic claim
+    # mechanism (stable_identity keys). The execution phase
+    # releases them on every terminal outcome; expiry covers
+    # crash paths. Empty when no claimer was wired (legacy
+    # callers, tests) or no items were claimed.
+    claimed: list = field(default_factory=list)  # [str]
     committed: bool = False
     error: str = ""
 
@@ -143,12 +159,66 @@ def _collect_website(source: dict, n: int, *, store,
     return items, CollectionResult(source_id, out, now, "", pending)
 
 
+def _collect_search(source: dict, n: int, *, store,
+                    now: str):
+    """Web/news queries through the SAME classify step as feeds
+    (shared NEW/UNCHANGED/UPDATED rules). Identity is the
+    cross-source stable key (canonical URL, else content
+    hash), so an article seen via RSS and via search is ONE
+    candidate. Discovery failure raises SearchError to the
+    dispatcher, which records it per-source without blocking
+    healthy sources."""
+    from g1.search import SearchAdapter, SearchError
+    stype = (source.get("type") or "").strip().lower()
+    query = (source.get("query") or "").strip()
+    if not query:
+        raise ValueError(f"{stype}-source-missing-query")
+    source_id = (source.get("source_id") or "").strip() or \
+        f"{stype}:{query}"
+    adapter = SearchAdapter(stype)
+    items, meta = adapter.discover_items(
+        query, n, max_age_days=source.get("max_age_days"),
+        now=now)
+    state = store.load(source_id)
+    candidates = []
+    for it in items:
+        # Shared stable_identity(): platform:external_id wins
+        # when the row carries a native id (social objects),
+        # else canonical URL, else content hash — the same key
+        # the claimer later uses, so classify, dedup, and claim
+        # can never disagree on one candidate.
+        ident, chash = stable_identity(
+            getattr(it, "platform", ""),
+            getattr(it, "external_id", ""),
+            getattr(it, "source_url", "") or
+            getattr(it, "source_id", ""),
+            getattr(it, "title", ""), getattr(it, "text", ""))
+        candidates.append({
+            "carrier": it, "item_id": ident,
+            "content_hash": chash or _content_hash(
+                it.title or "", it.text or ""),
+            "published_at": it.published_at or ""})
+    classified, pending = classify_candidates(source_id, candidates,
+                                              state, now)
+    fresh = [carrier for carrier, kind in classified
+             if kind == NEW]
+    out = [ClassifiedItem(carrier, kind)
+           for carrier, kind in classified]
+    rep = SourceReport(stype, query, True, "", len(out),
+                       len(fresh),
+                       capability=meta.get("capability", ""),
+                       tool=meta.get("tool", ""),
+                       discovered_at=now)
+    return fresh, CollectionResult(source_id, out, now, "",
+                                   pending), rep
+
+
 def run_cycle(sources: list, *, store=None, policy: dict | None = None,
               schedule: dict | None = None, now: str = "",
               text_gen=None, image_gen=None, research_model=None,
               analysis_model=None, mode: str = "draft",
               integration_id: str = "",
-              video_resolve=None) -> CycleResult:
+              video_resolve=None, claimer=None) -> CycleResult:
     """Run ONE research cycle. All roles injectable; Mocks are the
     default so the cycle is deterministic and fully offline.
     `video_resolve`, when given, is a caller-supplied callable
@@ -201,10 +271,60 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
                 rep = SourceReport("website", source["url"].strip(),
                                    True, "", len(res.items), len(items))
                 pending.append(res)
+            elif stype in ("web", "news", "social.facebook",
+                             "social.instagram", "social.x"):
+                try:
+                    items, res, rep = _collect_search(
+                        source, n, store=store, now=now)
+                except Exception as e:
+                    # Search failure is per-source evidence, never
+                    # a cycle failure: record the reason and
+                    # continue with the healthy sources (no
+                    # fabrication, no state staged, so a later
+                    # retry re-polls cleanly).
+                    name = type(e).__name__
+                    rep = SourceReport(
+                        stype, (source.get("query") or "").strip(),
+                        False, f"{name}: {str(e)[:200]}", 0, 0)
+                    items = []
+                    out.sources.append(rep)
+                    continue
+                pending.append(res)
             else:
                 raise ValueError(f"unknown-source-type:{stype or '?'}")
             out.sources.append(rep)
             out.items.extend(items)
+
+        # Atomic cross-slot claim (optional, injected like the
+        # model roles): each NEW item is claimed by stable
+        # identity before any LLM spends budget. Losers drop out
+        # (treated like already-seen: another slot owns them).
+        # A claimer transport failure fails the cycle closed
+        # with NOTHING committed, so the next cycle redelivers
+        # the same NEW items (at-least-once preserved). No
+        # claimer wired (legacy callers, unit tests) means no
+        # claiming: behavior is byte-identical to before.
+        if claimer is not None and out.items:
+            from research.monitor import stable_identity
+            kept = []
+            try:
+                for item in out.items:
+                    key, _ = stable_identity(
+                        getattr(item, "platform", ""),
+                        getattr(item, "external_id", ""),
+                        getattr(item, "source_url", "") or
+                        getattr(item, "source_id", ""),
+                        getattr(item, "title", ""),
+                        getattr(item, "text", ""))
+                    if claimer(key):
+                        out.claimed.append(key)
+                        kept.append(item)
+                    else:
+                        out.skipped.append(f"claimed-by-other:{key}")
+            except Exception as e:
+                out.error = f"{type(e).__name__}: claim-failed"
+                return out
+            out.items = kept
 
         # Role participation (campaign-owned): resolved up front so
         # every return path below reports which stages this cycle

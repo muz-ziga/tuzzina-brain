@@ -36,6 +36,28 @@ def _make_client(items=None, state=None, calls=None, distribution=None,
     c.get_integration_settings = lambda iid: {
         "output": {"rules": "r", "maxLength": 63206,
                    "settings": {}, "tools": []}}
+    # Atomic claim semantics mirror /candidate-claims: first
+    # owner wins, same owner re-claims idempotently, release is
+    # owner-only. Shared per-client so concurrent-cycle tests
+    # can observe exactly-one-winner.
+    claimed = {}
+
+    def _claim(candidate_id, run_id, slot="", ttl_minutes=120):
+        if candidate_id in claimed:
+            return claimed[candidate_id] == run_id
+        claimed[candidate_id] = run_id
+        calls.append(("claim", candidate_id))
+        return True
+
+    def _release(candidate_id, run_id):
+        if claimed.get(candidate_id) == run_id:
+            del claimed[candidate_id]
+            calls.append(("release", candidate_id))
+            return 1
+        return 0
+
+    c.claim_candidate = _claim
+    c.release_claim = _release
     c.create_post = lambda posts, date, post_type="draft": (
         calls.append(("create_post", post_type)) or [{"postId": "p1"}])
     c.generate_image = lambda prompt: (
@@ -246,6 +268,40 @@ class CycleCliCase(unittest.TestCase):
         self.assertEqual(res["status"], "success")
         self.assertEqual(res["post_ids"], ["p1"])
         self.assertIn(("create_post", "draft"), calls)
+
+    def test_live_run_claims_and_releases(self):
+        # The live run claims its NEW website item before any
+        # LLM/model work and releases it on the terminal
+        # outcome: claim without leak on the success path.
+        tmp, camp = self._case()
+        calls: list = []
+        import g2.generators as G
+        from research.models import MockResearchModel
+        from research.analysis import MockAnalysisModel
+        orig_text = G.OpenAITextGenerator
+        orig_models = rc_mod._build_models
+        class FakeText(G.TextGenerator):
+            def generate(self, title, summary, brand, policy=None):
+                return "Hello world post"
+        G.OpenAITextGenerator = lambda *a, **k: FakeText()
+        rc_mod._build_models = lambda mode, session_id="": (MockResearchModel(),
+                                             MockAnalysisModel())
+        try:
+            rc, out, err = _run_cli(
+                [camp, "--strategy-by-integration", "integ-fb-1",
+                 "--strategy-base-dir", tmp, "--openai",
+                 "--run-id", "r-claim"],
+                calls=calls, openai_key="sk-test")
+        finally:
+            G.OpenAITextGenerator = orig_text
+            rc_mod._build_models = orig_models
+        self.assertEqual(rc, 0, msg=err)
+        kinds = [k for k, _ in calls]
+        self.assertIn("claim", kinds)
+        self.assertIn("release", kinds)
+        self.assertLess(kinds.index("claim"), kinds.index("release"))
+        res = _result(out)
+        self.assertIn("claimed", res)
 
     def test_missing_key_is_config_error(self):
         tmp, camp = self._case()

@@ -9,6 +9,7 @@ import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import g1.fetch as F
 import g1.rss as R
 import g1.website as W
 from research.analysis import MockAnalysisModel
@@ -102,7 +103,7 @@ def _website_fake(req, timeout=None):
 
 _REAL_GETADDRINFO = socket.getaddrinfo
 _REAL_ROPEN = R._opener
-_REAL_WOPEN = W.urlopen
+_REAL_FOPEN = F._opener
 
 
 def _public_dns(host, port, *a, **k):
@@ -132,6 +133,17 @@ class BoomResearch(MockResearchModel):
         raise ResearchError("boom")
 
 
+class CombinedOpener:
+    """Single transport double for the shared fetch boundary:
+    website article URL keeps its dedicated fake, everything
+    else falls through to the RSS route table."""
+
+    def open(self, req, timeout=None):
+        if req.full_url == "http://site.test/article":
+            return _website_fake(req, timeout)
+        return FakeOpener().open(req, timeout)
+
+
 class CycleCase(unittest.TestCase):
     def setUp(self):
         del FETCHED[:]
@@ -140,12 +152,12 @@ class CycleCase(unittest.TestCase):
             YTURL: ("ok", YT2, "text/xml"),
         }
         R._opener = FakeOpener
-        W.urlopen = _website_fake
+        F._opener = CombinedOpener
         socket.getaddrinfo = _public_dns
 
     def tearDown(self):
         R._opener = _REAL_ROPEN
-        W.urlopen = _REAL_WOPEN
+        F._opener = _REAL_FOPEN
         socket.getaddrinfo = _REAL_GETADDRINFO
 
     def _run(self, sources, **kw):

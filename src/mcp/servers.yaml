@@ -1,0 +1,38 @@
+# MCP capability registry (Stage B). File-owned config, validated
+# strictly by src/mcp/registry.py (unknown keys rejected).
+#
+# Rules (non-negotiable):
+# - NO secrets here, ever. auth_env names an ENVIRONMENT VARIABLE
+#   whose value is injected at runtime; the file carries only the
+#   variable NAME.
+# - Disabled or absent by default: an unconfigured Brain offers
+#   zero capabilities and every resolve() fails closed.
+# - Capability names are semantic (web.search), never vendor names.
+#   Swapping Company A for Company B is a config edit, never code.
+#
+# Schema per server:
+#   id:          slug [a-z0-9-]{1,64}, unique intent (not enforced
+#                across file; duplicates resolve as ambiguous)
+#   transport:   "http" only in Stage B (stdio deferred: process
+#                execution needs sandboxing review first)
+#   endpoint:    http(s) URL of the MCP HTTP endpoint
+#   auth_env:    ENV_VAR_NAME or "" (anonymous)
+#   enabled:     bool, default true
+#   rate_limit:  optional {per_minute: int>=1}; validated and
+#                carried, enforced in Stage 8 (no clock here)
+#   tools:       [{name, capability}] - tool names follow the MCP
+#                [A-Za-z0-9_.-] shape; capability is semantic
+#
+# Example (commented out - enable deliberately, never by default):
+# servers:
+#   - id: search-primary
+#     transport: http
+#     endpoint: https://search.internal.example/mcp
+#     auth_env: BRAIN_SEARCH_KEY
+#     enabled: true
+#     rate_limit: {per_minute: 30}
+#     tools:
+#       - {name: search, capability: web.search}
+#       - {name: news_search, capability: news.search}
+
+servers: []

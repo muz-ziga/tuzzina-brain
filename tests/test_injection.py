@@ -341,6 +341,36 @@ class GuardTest(unittest.TestCase):
                 self.assertNotIn(bad, blob, name)
 
 
+class NoInventionTest(unittest.TestCase):
+    # Regression guard for the Stream Deck failure class: the
+    # runtime must never add brand, URL, or CTA content of its
+    # own. Whatever the intent carries passes through
+    # byte-identical; any Juzzir mention provably comes from
+    # the skill/LLM text, never from Brain machinery.
+
+    def test_plain_content_passes_untouched(self):
+        c = FakeClient([FB_RECORD])
+        body = "Stream Deck tips for Reaper users"
+        InjectionService().inject(fb_intent(content=body), c)
+        items = c.posts_calls[0]["posts"][0]["value"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["content"], body)
+
+    def test_no_brand_or_url_invented(self):
+        c = FakeClient([FB_RECORD])
+        InjectionService().inject(
+            fb_intent(content="Stream Deck tips for Reaper users",
+                      companion="Practical takeaway here",
+                      media=[]), c)
+        post = c.posts_calls[0]["posts"][0]
+        texts = " ".join(
+            i["content"] for i in post["value"]).lower()
+        self.assertNotIn("juzzir", texts)
+        self.assertNotIn("http", texts)
+        self.assertNotIn("try it free", texts)
+        self.assertNotIn("url", post["settings"])
+
+
 class CompanionTest(unittest.TestCase):
     def test_no_marker_is_post_only(self):
         intent = fb_intent(content="Hello world")

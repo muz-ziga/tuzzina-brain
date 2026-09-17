@@ -95,5 +95,54 @@ class G2Test(unittest.TestCase):
             G.TuzzinaImageGenerator("some-key")
 
 
+class FixedGen:
+    """Deterministic text source emitting caller-chosen copy, so
+    CTA/URL assembly is observable without any model."""
+
+    def __init__(self, text):
+        self._text = text
+
+    def generate(self, title, summary, brand, policy=None):
+        return self._text
+
+
+class CtaMechanicsTest(unittest.TestCase):
+    # Pins the exact publisher assembly behind the Stream Deck
+    # failure: a cta_style carrying brand+URL is appended to
+    # EVERY post by the pipeline (product-blind). An empty
+    # cta_style appends nothing while still letting a relevant
+    # model-written URL survive first-occurrence.
+
+    def _pkg(self, text, links_policy="cta",
+             cta_style="Try it free \u2014 https://www.juzzir.com/"):
+        brand = {"tone": "t", "banned_words": [],
+                 "preferred_words": [], "cta_style": cta_style}
+        hs = {"enabled": True,
+              "per_platform": {"facebook": {"max": 0}}}
+        return build_package(item(), brand, {}, hs, links_policy,
+                             FixedGen(text), G.MockImageGenerator())
+
+    def test_cta_style_with_url_appended_blindly(self):
+        pkg = self._pkg("Useful workflow tip")
+        self.assertIn("https://www.juzzir.com/", pkg.content)
+        self.assertIn("Try it free", pkg.content)
+
+    def test_empty_cta_appends_nothing(self):
+        pkg = self._pkg("Useful workflow tip", cta_style="")
+        self.assertNotIn("https://", pkg.content)
+        self.assertNotIn("Try it free", pkg.content)
+        self.assertIn("Useful workflow tip", pkg.content)
+
+    def test_relevant_model_url_survives_empty_cta(self):
+        pkg = self._pkg("See https://www.juzzir.com/ for details",
+                        cta_style="")
+        self.assertIn("https://www.juzzir.com/", pkg.content)
+
+    def test_hide_drops_model_urls(self):
+        pkg = self._pkg("See https://www.juzzir.com/ for details",
+                        links_policy="hide", cta_style="")
+        self.assertNotIn("https://", pkg.content)
+
+
 if __name__ == "__main__":
     unittest.main()

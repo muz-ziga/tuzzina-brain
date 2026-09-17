@@ -11,6 +11,7 @@ G3 computes slots. Postiz executes scheduling/state/publishing.
 No cron, no queue, no runtime here.
 """
 from __future__ import annotations
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from contracts import ContentPackage, PlannedPost
 
@@ -119,3 +120,53 @@ def plan(packages: list[ContentPackage], schedule: dict) -> list[PlannedPost]:
             planned_at=slot, settings=dict(pkg.settings),
             tags=list(pkg.hashtags), source_ref=pkg.source_ref))
     return planned
+
+
+@dataclass
+class Slot:
+    """One publication slot (Stage B contract, Stage 9 executor).
+
+    Pure value, no IO, no state: publish_at is when Tuzzina
+    publishes; research_start_at opens the discovery window;
+    deadline_at is when the intent must be handed off.
+    Insertion point: the campaign scheduler expands due slots
+    (publish_at - lead_time <= now), runs one research cycle
+    per slot, and hands each intent its slot's publish_at.
+    Source polling cadence, publication schedule, and research
+    lead time stay three separate fields and must never share
+    one overloaded value."""
+    publish_at: str = ""
+    research_start_at: str = ""
+    deadline_at: str = ""
+
+
+def research_window(publish_at: str, lead_time_min: int = 30,
+                    now: datetime | None = None,
+                    tzname: str = "UTC") -> Slot:
+    """Derive a slot's research window from its publish time.
+    lead_time_min<=0 means research starts immediately (window
+    opens now); the deadline is publish_at itself. Overdue
+    slots (publish_at in the past) still return a Slot with
+    the same fields so the caller, not this function, decides
+    (skip vs catch-up is scheduler policy, Stage 9). Raises
+    ValueError on unparseable publish_at (fail-closed)."""
+    tz = _tz(tzname or "UTC")
+    try:
+        pub = datetime.fromisoformat(
+            (publish_at or "").strip().replace("Z", "+00:00"))
+    except Exception:
+        raise ValueError("slot publish_at is not ISO datetime")
+    if pub.tzinfo is None:
+        pub = pub.replace(tzinfo=timezone.utc)
+    pub = pub.astimezone(tz)
+    try:
+        lead = int(lead_time_min)
+    except (TypeError, ValueError):
+        lead = 30
+    if lead < 0:
+        lead = 0
+    start = datetime.now(tz) if lead <= 0 else pub - timedelta(
+        minutes=lead)
+    return Slot(publish_at=pub.isoformat(),
+                research_start_at=start.isoformat(),
+                deadline_at=pub.isoformat())

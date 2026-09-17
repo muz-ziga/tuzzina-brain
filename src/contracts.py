@@ -29,6 +29,16 @@ class SourceItem:
     # identity); RSS fills them (guid/link/hash precedence).
     item_id: str = ""
     content_hash: str = ""
+    # Stage B discovery extensions (all optional, default ""):
+    # external_id = platform-native id (post id, video id, ...);
+    # discovered_at = ISO time the candidate was first seen;
+    # capability = semantic capability that produced it
+    #   (e.g. "web.search"; RSS/website leave "");
+    # author = account/page/channel display name where known.
+    external_id: str = ""
+    discovered_at: str = ""
+    capability: str = ""
+    author: str = ""
 
 
 @dataclass

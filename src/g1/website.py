@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
 
 from contracts import ExtractionResult, Identity, SourceItem
 from g1.base import SourceAdapter
+from g1.fetch import FetchError, safe_get
 
 UA = "tuzzina-brain/0.1 (+discovery)"
 TIMEOUT = 25
@@ -71,12 +71,21 @@ class _Page(HTMLParser):
 
 
 def _fetch(url: str) -> tuple[str, str]:
-    req = Request(url, headers={"User-Agent": UA})
-    with urlopen(req, timeout=TIMEOUT) as r:
-        ctype = r.headers.get("Content-Type", "")
-        if "html" not in ctype and "text" not in ctype and ctype:
-            return "", ""
-        body = r.read(MAX_BYTES)
+    """Single fetch through the shared security boundary
+    (scheme/DNS/global-IP/redirect/size/timeout gates). Any
+    refusal maps to the pre-existing empty contract, so
+    extract() behavior is unchanged apart from refusing
+    unsafe targets instead of connecting to them."""
+    try:
+        raw, final_url, _ = safe_get(
+            url, timeout=TIMEOUT, max_bytes=MAX_BYTES,
+            allowed_content_types=("html", "text"),
+            user_agent=UA)
+        body = bytes(raw)
+    except FetchError:
+        return "", ""
+    except Exception:
+        return "", ""
     enc = "utf-8"
     m = re.search(rb"charset=([\w-]+)", body[:2000])
     if m:
@@ -85,7 +94,7 @@ def _fetch(url: str) -> tuple[str, str]:
         except Exception:
             pass
     try:
-        return body.decode(enc, errors="replace"), r.url
+        return body.decode(enc, errors="replace"), final_url or url
     except Exception:
         return "", ""
 
