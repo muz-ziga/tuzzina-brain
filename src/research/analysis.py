@@ -317,6 +317,11 @@ class OpenAIAnalysisModel(AnalysisModel):
         try:
             data = json.loads(unwrap_model_json(raw))
         except Exception:
+            import os as _os
+            if _os.environ.get("BRAIN_DIAG_RAW", "") == "1":
+                print("DIAG analysis raw len=%d head=%r" %
+                      (len(raw or ""), (raw or "")[:400]),
+                      file=__import__("sys").stderr)
             raise AnalysisError("invalid-output")
         if not isinstance(data, dict):
             raise AnalysisError("invalid-output")
