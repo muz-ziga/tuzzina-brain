@@ -82,10 +82,19 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
     lang = lang_cfg.get("default") if isinstance(lang_cfg, dict) else ""
     assert_script(text, lang or "")
     text, banned_hit = apply_banned(text, brand.get("banned_words", []))
-    max_tags = int(((hs_cfg.get("per_platform") or {}).get(
-        platform) or {}).get("max", 5)) if hs_cfg.get("enabled") else 0
-    preferred = ((hs_cfg.get("per_platform") or {}).get(platform) or
-                {}).get("preferred", brand.get("preferred_words", []))
+    platform_cfg = ((hs_cfg.get("per_platform") or {}).get(
+        platform) or {})
+    # Empty means unset everywhere in this codebase (sources,
+    # roles, skills): an empty per-platform override must not
+    # shadow the strategy-level value.
+    plat_max = platform_cfg.get("max")
+    if not isinstance(plat_max, int) or plat_max <= 0:
+        plat_max = hs_cfg.get("max", 5)
+    max_tags = int(plat_max) if hs_cfg.get("enabled") else 0
+    plat_pref = platform_cfg.get("preferred")
+    if not isinstance(plat_pref, list) or not plat_pref:
+        plat_pref = brand.get("preferred_words", []) or []
+    preferred = list(plat_pref) if isinstance(plat_pref, list) else []
     tags = make_hashtags(item.title, summary, preferred, max_tags)
     # NOTE: hashtags are NOT merged into body here. pkg.content stays
     # plain generated text; pkg.hashtags carries the tags separately.

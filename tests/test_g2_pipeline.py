@@ -85,6 +85,40 @@ class G2Test(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             G.OpenAITextGenerator("")
 
+    def test_empty_platform_preferred_falls_back_to_brand(self):
+        # Regression: an explicitly empty per-platform preferred
+        # list must not shadow brand preferred_words (production
+        # posted 5 generic tags and no #juzzir because of this).
+        hs = {"enabled": True, "max": 3, "per_platform": {
+            "facebook": {"max": 3, "preferred": []}}}
+        brand = dict(BRAND)
+        brand["preferred_words"] = ["juzzir"]
+        pkg = build_package(item(platform="facebook"), brand, {},
+                            hs, "hide", G.MockTextGenerator(),
+                            G.MockImageGenerator())
+        self.assertEqual(pkg.hashtags[0], "#juzzir")
+        self.assertLessEqual(len(pkg.hashtags), 3)
+
+    def test_missing_platform_uses_strategy_level(self):
+        hs = {"enabled": True, "max": 3}
+        brand = dict(BRAND)
+        brand["preferred_words"] = ["juzzir"]
+        pkg = build_package(item(platform="rss"), brand, {}, hs,
+                            "hide", G.MockTextGenerator(),
+                            G.MockImageGenerator())
+        self.assertEqual(pkg.hashtags[0], "#juzzir")
+        self.assertLessEqual(len(pkg.hashtags), 3)
+
+    def test_explicit_platform_preferred_wins(self):
+        hs = {"enabled": True, "max": 5, "per_platform": {
+            "facebook": {"max": 5, "preferred": ["mix"]}}}
+        brand = dict(BRAND)
+        brand["preferred_words"] = ["juzzir"]
+        pkg = build_package(item(platform="facebook"), brand, {},
+                            hs, "hide", G.MockTextGenerator(),
+                            G.MockImageGenerator())
+        self.assertEqual(pkg.hashtags[0], "#mix")
+
     def test_local_image_engine_removed(self):
         # STEP 2: no local OpenAI image execution may remain anywhere
         # on the production path. The delegated marker carries no
