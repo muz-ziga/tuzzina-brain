@@ -647,5 +647,69 @@ class UsageGateCase(unittest.TestCase):
         self.assertIn("usage unavailable", err)
 
 
+class PublishedTopicsCase(unittest.TestCase):
+    def test_load_parses_newest_first(self):
+        from run_cycle import _recent_topics
+
+        class C:
+            def get_research_state(self, sid):
+                assert sid == "published-topics"
+                return {"topics": {"items": [
+                    {"topic": "  Loudness  ", "angle": "LUFS"},
+                    {"topic": "", "angle": "blank"},
+                    "junk",
+                    {"topic": "Stereo", "angle": ""},
+                ]}}
+
+        out = _recent_topics(C())
+        self.assertEqual(out, [
+            {"topic": "Loudness", "angle": "LUFS"},
+            {"topic": "Stereo", "angle": ""},
+        ])
+
+    def test_load_transport_failure_is_empty(self):
+        from run_cycle import _recent_topics
+
+        class C:
+            def get_research_state(self, sid):
+                raise RuntimeError("down")
+
+        self.assertEqual(_recent_topics(C()), [])
+        self.assertEqual(_recent_topics(None), [])
+
+    def test_record_appends_and_caps(self):
+        from run_cycle import _record_published_topic
+
+        saved = {}
+
+        class C:
+            def get_research_state(self, sid):
+                return {"topics": {"items": [
+                    {"topic": "Old %d" % i, "angle": "",
+                     "at": "2026-01-01T00:00:00+00:00"}
+                    for i in range(30)]}}
+
+            def save_research_state(self, sid, state):
+                saved[sid] = state
+                return {}
+
+        _record_published_topic(C(), "New Topic", "New angle")
+        items = saved["published-topics"]["topics"]["items"]
+        self.assertEqual(len(items), 30)
+        self.assertEqual(items[0]["topic"], "New Topic")
+        self.assertEqual(items[0]["angle"], "New angle")
+        self.assertIn("at", items[0])
+
+    def test_record_never_raises(self):
+        from run_cycle import _record_published_topic
+
+        class C:
+            def get_research_state(self, sid):
+                raise RuntimeError("down")
+
+        _record_published_topic(C(), "T", "A")
+        _record_published_topic(C(), "   ", "A")
+
+
 if __name__ == "__main__":
     unittest.main()

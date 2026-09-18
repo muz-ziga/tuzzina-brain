@@ -44,7 +44,7 @@ from g3.planner import plan
 from injection.intent import build_intent
 from research.analysis import MockAnalysisModel
 from research.generation import (image_gen_for, plan_generation,
-                                 shape_item_for_g2)
+                                 primary_item_for, shape_item_for_g2)
 from research.models import MockResearchModel
 
 
@@ -405,17 +405,19 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             from research.generation import (GenerationPlan,
                                               TextRequest)
             gen_image = None
-            for item in out.items:
+            _one = primary_item_for(None, out.items)
+            if _one is not None:
                 item_plan = GenerationPlan(
                     text=TextRequest(
-                        title=(item.title or "")[:200],
-                        summary=(item.text or "")[:4000]),
+                        title=(_one.title or "")[:200],
+                        summary=(_one.text or "")[:4000]),
                     media_intent="none",
                     meta={"reason": "text-only-no-analysis"})
-                shaped = shape_item_for_g2(item, item_plan)
+                shaped = shape_item_for_g2(_one, item_plan)
                 out.packages.append(build_package(
-                    shaped, brand, language, hs_cfg, links_policy,
-                    text_gen, gen_image, platform=item.platform or
+                    shaped, brand, language, hs_cfg,
+                    links_policy, text_gen, gen_image,
+                    platform=_one.platform or
                     "facebook", limits=None, policy=policy))
             out.planned = plan(out.packages, schedule)
             for p in out.planned:
@@ -486,11 +488,12 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
                 out.video_media.append(
                     {"id": str(ref["id"]), "path": str(ref["path"])})
         gen_image = image_gen_for(gen_plan, image_gen)
-        for item in out.items:
-            shaped = shape_item_for_g2(item, gen_plan)
+        _one = primary_item_for(out.opportunity, out.items)
+        if _one is not None:
+            shaped = shape_item_for_g2(_one, gen_plan)
             out.packages.append(build_package(
                 shaped, brand, language, hs_cfg, links_policy,
-                text_gen, gen_image, platform=item.platform or
+                text_gen, gen_image, platform=_one.platform or
                 "facebook", limits=None, policy=policy))
         out.planned = plan(out.packages, schedule)
         for p in out.planned:

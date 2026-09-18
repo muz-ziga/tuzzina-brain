@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from contracts import SourceItem
 from research.analysis import ContentOpportunity
 from research.generation import (GenerationError, image_gen_for,
-                                 plan_generation, shape_item_for_g2)
+                                 plan_generation, primary_item_for,
+                                 shape_item_for_g2)
 
 
 def opp(media="none", topic="Harbor dawn",
@@ -263,6 +264,27 @@ class CycleIntegrationCase(unittest.TestCase):
             self.assertNotIn("/public/v1", u)
             self.assertNotIn("openai", u)
             self.assertNotIn("/mcp", u)
+
+
+class PrimaryItemCase(unittest.TestCase):
+    def test_prefers_opportunity_source(self):
+        a = item(title="A")
+        a.item_id = "g-9"
+        b = item(title="B")
+        o = opp()
+        o.source_item_ids = ["g-1"]
+        self.assertIs(primary_item_for(o, [a, b]), b)
+
+    def test_falls_back_to_first(self):
+        a = item(title="A")
+        o = opp()
+        o.source_item_ids = ["missing"]
+        self.assertIs(primary_item_for(o, [a]), a)
+        self.assertIs(primary_item_for(None, [a]), a)
+
+    def test_empty_is_none(self):
+        self.assertIsNone(primary_item_for(opp(), []))
+        self.assertIsNone(primary_item_for(None, []))
 
 
 if __name__ == "__main__":

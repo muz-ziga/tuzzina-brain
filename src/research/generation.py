@@ -150,6 +150,31 @@ def plan_generation(opportunity, items=None,
               "reason": "opportunity-driven"})
 
 
+def primary_item_for(opportunity, items: list):
+    """One content unit per cycle: pick the single item the
+    opportunity was built from (its first source id), else the
+    first collected item. Pure; returns None when empty. All
+    collected items stay in the result for traceability — only
+    generation narrows to one, so a slot can never fan out
+    into near-duplicate intents."""
+    pool = list(items or [])
+    if not pool:
+        return None
+    try:
+        wanted = list(getattr(opportunity, "source_item_ids", None) or [])
+    except Exception:
+        wanted = []
+    if wanted:
+        first = str(wanted[0])
+        for it in pool:
+            try:
+                if str(getattr(it, "item_id", "") or "") == first:
+                    return it
+            except Exception:
+                continue
+    return pool[0]
+
+
 def shape_item_for_g2(item, plan: GenerationPlan):
     """Copy with plan-shaped title/text for the text engine.
     Identity, images, refs, hashes pass through untouched, so

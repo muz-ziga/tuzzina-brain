@@ -181,9 +181,9 @@ class CycleCase(unittest.TestCase):
         self.assertEqual(len(out.items), 2)
         self.assertIsNotNone(out.research)
         self.assertTrue(out.opportunity.eligible)
-        self.assertEqual(len(out.packages), 2)
-        self.assertEqual(len(out.planned), 2)
-        self.assertEqual(len(out.intents), 2)
+        self.assertEqual(len(out.packages), 1)
+        self.assertEqual(len(out.planned), 1)
+        self.assertEqual(len(out.intents), 1)
         self.assertTrue(out.committed)
         self.assertEqual(len(store.load("http://feed.test/rss").seen), 2)
         self.assertIn("(direct)", out.packages[0].content)
@@ -227,7 +227,7 @@ class CycleCase(unittest.TestCase):
         # one call, combined input (R4 single-opportunity contract)
         self.assertEqual(len(out.research.item_ids), 4)
         self.assertIsNotNone(out.opportunity)
-        self.assertEqual(len(out.intents), 4)
+        self.assertEqual(len(out.intents), 1)
 
     def test_research_traceability(self):
         out = self._run([self._rss(), self._yt()])

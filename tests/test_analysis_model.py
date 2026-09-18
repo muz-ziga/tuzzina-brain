@@ -291,6 +291,33 @@ class OpenAIRoleCase(unittest.TestCase):
         with self.assertRaises(AnalysisError):
             OpenAIAnalysisModel("k").analyze(research([]), policy())
 
+    def _user_text(self, pol):
+        seen = {}
+
+        def _open(req, timeout=None):
+            body = json.loads(req.data.decode())
+            seen["user"] = body["messages"][1]["content"]
+            return FakeResp(_openai_body())
+        urllib.request.urlopen = _open
+        OpenAIAnalysisModel("k").analyze(self._result(), pol)
+        return seen["user"]
+
+    def test_recent_topics_listed_for_novelty(self):
+        pol = policy()
+        pol["recent_topics"] = [
+            {"topic": "Loudness basics", "angle": "LUFS intro"},
+            {"topic": "", "angle": "blank"},
+            "junk",
+        ]
+        user = self._user_text(pol)
+        self.assertIn("Recently covered", user)
+        self.assertIn("Loudness basics", user)
+        self.assertIn("LUFS intro", user)
+
+    def test_no_recent_topics_no_list(self):
+        user = self._user_text(policy())
+        self.assertNotIn("Recently covered", user)
+
 
 class BoundaryCase(unittest.TestCase):
     def _code(self, rel):

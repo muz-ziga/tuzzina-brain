@@ -100,6 +100,69 @@ def _build_models(mode: str, session_id: str = ""):
     return built[0], built[1]
 
 
+PUBLISHED_TOPICS_SOURCE = "published-topics"
+RECENT_TOPICS_SHOWN = 10
+PUBLISHED_TOPICS_CAP = 30
+
+
+def _recent_topics(client) -> list:
+    """Load newest-first [{topic, angle}] from the durable novelty
+    ledger. Best-effort read-only helper: transport failure means
+    an empty list (no novelty signal), never a failed run."""
+    try:
+        row = client.get_research_state(PUBLISHED_TOPICS_SOURCE)
+    except Exception:
+        return []
+    if not isinstance(row, dict):
+        return []
+    topics = row.get("topics")
+    if not isinstance(topics, dict):
+        return []
+    items = topics.get("items")
+    if not isinstance(items, list):
+        return []
+    out = []
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        topic = str(entry.get("topic") or "").strip()
+        if not topic:
+            continue
+        out.append({"topic": topic[:200],
+                    "angle": str(entry.get("angle") or "")[:200]})
+        if len(out) >= RECENT_TOPICS_SHOWN:
+            break
+    return out
+
+
+def _record_published_topic(client, topic: str, angle: str) -> None:
+    """Append one published topic to the durable novelty ledger
+    (newest first, capped). Best-effort: never fails the run;
+    expiry of interest is implicit in the cap."""
+    try:
+        from datetime import datetime, timezone
+        row = client.get_research_state(PUBLISHED_TOPICS_SOURCE)
+        items = []
+        if isinstance(row, dict):
+            topics = row.get("topics")
+            if isinstance(topics, dict) and \
+                    isinstance(topics.get("items"), list):
+                items = [e for e in topics["items"]
+                         if isinstance(e, dict)]
+        entry = {"topic": str(topic or "").strip()[:200],
+                 "angle": str(angle or "").strip()[:200],
+                 "at": datetime.now(timezone.utc).isoformat()}
+        if not entry["topic"]:
+            return
+        client.save_research_state(
+            PUBLISHED_TOPICS_SOURCE,
+            {"topics": {"items": ([entry] + items)[
+                :PUBLISHED_TOPICS_CAP]}})
+    except Exception as e:
+        print("warning: published-topics record failed "
+              "(%s)" % type(e).__name__, file=sys.stderr)
+
+
 def _extra_headers_env(prefix: str) -> dict:
     """Account-declared static request headers (BRAIN_<ROLE>_
     HEADERS as a JSON object). Empty means none. Malformed JSON
@@ -319,6 +382,12 @@ def _main(argv=None) -> int:
         store = TuzzinaStateStore(client) \
             if args.state_store == "tuzzina" else MemoryStateStore()
 
+    # Campaign novelty: recent published topics ride the policy
+    # so Analysis can avoid repeating them. Durable runs only;
+    # memory/dry runs simply carry no history.
+    if not args.dry_run and args.state_store == "tuzzina":
+        cfg["recent_topics"] = _recent_topics(client)
+
     def _video_resolve(req):
         return client.generate_video(
             req.video_type, req.output, req.prompt, req.params)
@@ -412,6 +481,10 @@ def _main(argv=None) -> int:
     result["status"] = "success"
     print(f"run_id={run_id} INJECTED {len(post_ids)} post(s) "
           f"[mode={args.post_mode}]")
+    if not args.dry_run and args.state_store == "tuzzina" and \
+            out.opportunity is not None:
+        _record_published_topic(
+            client, out.opportunity.topic, out.opportunity.angle)
     _release_all()
     _emit_result(result)
     return 0

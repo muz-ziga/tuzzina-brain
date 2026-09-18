@@ -295,6 +295,26 @@ class OpenAIAnalysisModel(AnalysisModel):
         context += "\n\n" + get_skill(
             "analysis",
             (campaign_skills or {}).get("analysis"))["instructions"]
+        recent = policy.get("recent_topics") \
+            if isinstance(policy, dict) else None
+        if isinstance(recent, list) and recent:
+            lines = []
+            for entry in recent[:10]:
+                if not isinstance(entry, dict):
+                    continue
+                topic = str(entry.get("topic") or "").strip()
+                if not topic:
+                    continue
+                angle = str(entry.get("angle") or "").strip()
+                lines.append("- %s%s" % (
+                    topic[:120],
+                    " (angle: %s)" % angle[:120] if angle else ""))
+            if lines:
+                context += (
+                    "\n\nRecently covered in this campaign (do not "
+                    "repeat the same topic+angle unless the new "
+                    "development is genuinely distinct):\n" +
+                    "\n".join(lines))[:1000]
         if len(context) > MAX_PROMPT_CHARS:
             context = context[:MAX_PROMPT_CHARS]
             truncated = True
@@ -317,11 +337,6 @@ class OpenAIAnalysisModel(AnalysisModel):
         try:
             data = json.loads(unwrap_model_json(raw))
         except Exception:
-            import os as _os
-            if _os.environ.get("BRAIN_DIAG_RAW", "") == "1":
-                print("DIAG analysis raw len=%d head=%r" %
-                      (len(raw or ""), (raw or "")[:400]),
-                      file=__import__("sys").stderr)
             raise AnalysisError("invalid-output")
         if not isinstance(data, dict):
             raise AnalysisError("invalid-output")
