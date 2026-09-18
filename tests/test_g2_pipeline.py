@@ -119,6 +119,30 @@ class G2Test(unittest.TestCase):
                             G.MockImageGenerator())
         self.assertEqual(pkg.hashtags[0], "#mix")
 
+    def test_destination_platform_wins_for_tags(self):
+        # Source platform (rss) must not select hashtag rules;
+        # the destination integration identifier does.
+        hs = {"enabled": True, "max": 3, "per_platform": {
+            "facebook": {"max": 3, "preferred": []}}}
+        brand = dict(BRAND)
+        brand["preferred_words"] = ["juzzir"]
+        policy = {"channel_meta": {"identifier": "facebook"}}
+        pkg = build_package(item(platform="rss"), brand, {}, hs,
+                            "hide", G.MockTextGenerator(),
+                            G.MockImageGenerator(), platform="rss",
+                            policy=policy)
+        self.assertEqual(pkg.platform, "facebook")
+        self.assertEqual(pkg.hashtags[0], "#juzzir")
+        self.assertLessEqual(len(pkg.hashtags), 3)
+
+    def test_no_channel_meta_keeps_caller_platform(self):
+        hs = {"enabled": True, "max": 3}
+        pkg = build_package(item(platform="rss"), BRAND, {}, hs,
+                            "hide", G.MockTextGenerator(),
+                            G.MockImageGenerator(), platform="rss",
+                            policy={})
+        self.assertEqual(pkg.platform, "rss")
+
     def test_local_image_engine_removed(self):
         # STEP 2: no local OpenAI image execution may remain anywhere
         # on the production path. The delegated marker carries no

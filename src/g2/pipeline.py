@@ -62,6 +62,17 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
       generic apply_link_policy so each platform owns link rules
       (e.g. Instagram ignores attach). Defaults to the generic one.
     Backward compatible: omitting limits/link_fn preserves behavior."""
+    try:
+        dest = str(((policy or {}).get("channel_meta") or {}).get(
+            "identifier") or "")
+    except Exception:
+        dest = ""
+    # Destination shaping: per-platform hashtag/media rules are
+    # keyed by the destination channel (integration identifier),
+    # never by the source platform (rss/website/...). Without a
+    # known destination the caller-supplied platform stands.
+    if dest:
+        platform = dest
     summary = normalize(item.text)
     text = text_gen.generate(item.title, summary, brand, policy)
     # Deterministic editorial: the model must emit bare value
