@@ -102,3 +102,46 @@ secrets in YAML or any tracked file.
 
 Local commit -> push -> `git pull` on `/opt/projects/tuzzina-brain`.
 No `scp` of source files.
+
+## Immediate test execution — hard rule
+
+All tests and runtime verification must execute immediately.
+
+NEVER wait for:
+
+* the next scheduler tick
+* a future campaign time
+* a future publish time
+* a recurring interval
+* an arbitrary sleep
+* a 15/30/60 minute delay
+* an hourly/daily cycle
+
+When a test depends on time, create an isolated test campaign/run whose
+start time is the current production time or use an existing immediate
+execution path (manual run, direct workflow trigger, current-state read).
+
+The test must not require waiting for the clock to advance.
+
+Do not use `sleep` as a substitute for verification.
+
+If testing future-window behavior, set the test data/window relative to
+the current time and verify it immediately through production
+state/planner/execution semantics.
+
+Production runtime behavior must still be verified against the real
+production environment.
+
+## No waiting for scheduled tests
+
+A scheduled production campaign may legitimately wait for its actual
+publish time during normal operation, but a diagnostic or validation
+test MUST NOT wait for that time.
+
+Validation must construct an immediate test condition.
+
+This rule covers Brain, Tuzzina, campaigns, scheduler/slot/provider/
+model/publication/date-time tests, and production verification — even
+when the expected production behavior itself is time-based. Normal
+campaign scheduling is unaffected; only test/diagnostic waiting is
+forbidden.
