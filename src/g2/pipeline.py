@@ -122,19 +122,25 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
         media.append({"kind": "url", "url": item.images[0],
                       "source": "extracted"})
     elif image_gen is not None:
-        # Delegated image prompt: visual block only, no video
-        # rules, no text-side instructions, plus the image skill.
-        from channels.instructions import build_visual as _visual
-        from skills.loader import get_skill
-        _iprompt = f"{item.title} :: {summary[:200]}"
-        _visual_block = _visual(policy, video_rules=False)
-        if _visual_block:
-            _iprompt += "\n" + _visual_block
-        campaign_skills = policy.get("skills") if isinstance(
-            policy, dict) else None
-        _iprompt += "\n\n" + get_skill(
-            "image",
-            (campaign_skills or {}).get("image"))["instructions"]
+        # Image Agent LLM owns the prompt when configured (any
+        # failure propagates — no silent downgrade). Absent means
+        # the org has no Image Agent: deterministic assembly, the
+        # behavior that predates the role.
+        _prompt_gen = (policy or {}).get("image_prompt_gen")
+        if _prompt_gen is not None:
+            _iprompt = _prompt_gen.generate_prompt(item.title, brand, policy)
+        else:
+            from channels.instructions import build_visual as _visual
+            from skills.loader import get_skill
+            _iprompt = f"{item.title} :: {summary[:200]}"
+            _visual_block = _visual(policy, video_rules=False)
+            if _visual_block:
+                _iprompt += "\n" + _visual_block
+            campaign_skills = policy.get("skills") if isinstance(
+                policy, dict) else None
+            _iprompt += "\n\n" + get_skill(
+                "image",
+                (campaign_skills or {}).get("image"))["instructions"]
         media.append({"kind": "generator", "generator": image_gen,
                       "prompt": _iprompt})
     settings = {"__type": platform}

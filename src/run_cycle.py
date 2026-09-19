@@ -180,6 +180,41 @@ def _extra_headers_env(prefix: str) -> dict:
     return parsed
 
 
+def _build_image_prompt_gen(mode: str, session_id: str = ""):
+    """Image Agent LLM — prompt only. Mirrors text/research
+    plumbing so the same generic assignment mechanism governs the
+    prompt LLM. No bytes, no storage, no publishing here; the
+    returned prompt is handed to Tuzzina's existing engine.
+
+    Optional role: no BRAIN_IMAGE_PROMPT_* env at all means the
+    org has no Image Agent configured (feature off, None). Any
+    partial/broken config raises rather than silently downgrading.
+    """
+    from g2.generators import MockImagePromptGenerator, OpenAIImagePromptGenerator
+    from llm.adapters import resolve_adapter
+    if mode != "--openai":
+        return MockImagePromptGenerator()
+    prefix = "BRAIN_IMAGE_PROMPT_"
+    adapter_key = (os.environ.get(prefix + "ADAPTER") or "").strip()
+    key = os.environ.get(prefix + "KEY") or os.environ.get(
+        "OPENAI_API_KEY", "")
+    if not adapter_key and not key:
+        return None
+    if not key:
+        raise ValueError("BRAIN_IMAGE_PROMPT_KEY is not set "
+                         "(and no shared OPENAI_API_KEY)")
+    adapter_key = adapter_key or "openai"
+    protocol = (os.environ.get(prefix + "PROTOCOL") or "").strip() or None
+    model = os.environ.get(prefix + "MODEL") or "gpt-4.1"
+    base_url = (os.environ.get(prefix + "BASE") or "").strip()
+    session_header = (os.environ.get(prefix + "SESSION_HEADER") or "").strip()
+    return OpenAIImagePromptGenerator(
+        adapter=resolve_adapter(adapter_key, protocol)(
+            key, model, session_id=session_id, base_url=base_url,
+            session_header=session_header,
+            extra_headers=_extra_headers_env(prefix)))
+
+
 def _build_text_gen(mode: str, session_id: str = ""):
     """Text generator honoring the same per-role env contract
     (BRAIN_TEXT_ADAPTER/PROTOCOL/KEY/MODEL). Separated from
@@ -316,12 +351,21 @@ def _main(argv=None) -> int:
                   f"({type(e).__name__}); enforcing targets only",
                   file=sys.stderr)
 
-    # Image generation always delegates through Tuzzina (org
-    # API key); it needs no provider credential of its own.
+    # Image prompt LLM (Brain) + image execution (Tuzzina).
+    # Prompt generation needs the Image Skill; execution needs
+    # only the org key and uses Tuzzina's engine/storage.
     from g2.generators import MockImageGenerator, TuzzinaImageGenerator
     text_gen = _build_text_gen(args.mode, session_id=run_id)
+    # Image Agent prompt LLM: optional role. Absent = no Image
+    # Agent configured (deterministic prompt path); present but
+    # broken = hard error, never a silent downgrade.
+    image_prompt_gen = _build_image_prompt_gen(
+        args.mode, session_id=run_id)
     image_gen_obj = TuzzinaImageGenerator() \
         if args.mode == "--openai" else MockImageGenerator()
+    # Carry prompt LLM to pipeline via policy (no new param, no
+    # second media system).
+    cfg["image_prompt_gen"] = image_prompt_gen
     research_model, analysis_model = _build_models(
         args.mode, session_id=run_id)
     roles_resolved = []
@@ -333,6 +377,15 @@ def _main(argv=None) -> int:
             prefix = f"BRAIN_{role}_"
             roles_resolved.append({
                 "role": role.lower(),
+                "adapter": (os.environ.get(prefix + "ADAPTER") or
+                            "openai").strip(),
+                "protocol": (os.environ.get(prefix + "PROTOCOL") or "").strip() or None,
+                "model": os.environ.get(prefix + "MODEL") or "gpt-4.1",
+            })
+        if image_prompt_gen is not None:
+            prefix = "BRAIN_IMAGE_PROMPT_"
+            roles_resolved.append({
+                "role": "image_prompt",
                 "adapter": (os.environ.get(prefix + "ADAPTER") or
                             "openai").strip(),
                 "protocol": (os.environ.get(prefix + "PROTOCOL") or "").strip() or None,

@@ -1,5 +1,66 @@
 # Changelog
 
+## Unreleased — Brain Image Agent (prompt LLM)
+
+- New Image Agent role: the LLM that turns the campaign Image
+  Skill + topic/brand context into the single image prompt.
+  Tuzzina still owns bytes/storage/publishing unchanged.
+- `g2.generators.OpenAIImagePromptGenerator` (real transport,
+  same per-role adapter/session/base contract as the Text
+  Agent) + `MockImagePromptGenerator` (deterministic, tests).
+- `g2.pipeline` uses the agent prompt when configured; when no
+  Image Agent exists the previous deterministic assembly is
+  kept. A configured-but-failing agent propagates — no silent
+  downgrade.
+- `run_cycle._build_image_prompt_gen`: optional role. Absent
+  `BRAIN_IMAGE_PROMPT_*` = feature off (None); partial config
+  fails closed; `--mock` uses the mock.
+- Tuzzina side: `AI_ROLES`/`LLM_ROLES` gain `image_prompt`;
+  `brain.activity` forwards it as an optional role (missing
+  assignment never fails a run); settings UI lists it.
+- Tests: 8 new in `tests/test_image_agent.py` (prompt used,
+  deterministic fallback, failure propagates, env resolution).
+
+## Unreleased — Stage L 24h readiness prep (no deploy, no publish)
+
+- Dry-run only: 24-slot bounded window (`window_publish_ats`
+  hourly UTC + `materialize_slots`) proven deterministic
+  with 24 unique in-window slot IDs; full mocked campaign
+  simulation (19 success, 2 no-op, 1 claim-lost, 1
+  generation-failed, 1 publication-failed, 1 local
+  companion) plus worker-B restart (19 already-complete,
+  non-terminal retried once, zero duplicate creates).
+- Read-only findings: live candidate pool is empty (no
+  persisted `candidate-pool` row), so early production
+  slots would NO_OP until discovery fills it; 3
+  `brainpub:%` rows exist (1 live external leftover from
+  the prior session + 2 DRAFT debug rows, both
+  `releaseId: None`). Nothing published, deleted, or
+  deployed in Stage L.
+
+## Unreleased — Stage K-5 campaign proof (no deploy)
+
+- `src/slots.py`: `run_campaign`/`run_campaign_slots` accept
+  `mode` and forward it to `run_slot_content` (was: accepted
+  on `run_campaign_slots` but dropped, so every campaign post
+  silently built as `draft` and could never publish
+  externally). Default stays `draft`. No other behavior
+  change.
+- Tests: 5 new in `tests/test_campaign_slots.py` (mode
+  propagation `now`/`draft` through both entry points down
+  to `create_post post_type`; campaign companion main+child
+  value items with deterministic `:main`/`:comment` ids and
+  no-duplicate replay). Suite 941/941.
+- Live K-5 pilot (single authorized external post, since
+  cleaned up): fresh `k5-pilot-20260918b` campaign via
+  `run_campaign(mode="now")` published Facebook post
+  `1326634327193967_122106060909474468` (state PUBLISHED),
+  replay returned `already-complete` with zero new posts,
+  restart skipped the published slot. Mocked generation
+  emits no companion marker, so the live post had no
+  companion; the companion path is proven locally by the
+  new tests instead.
+
 ## Unreleased — Stage J idempotent publication handoff (no deploy)
 
 - New `src/slot_publish.py`: SlotContent in, idempotent

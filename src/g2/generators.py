@@ -143,6 +143,52 @@ class MockImageGenerator(ImageGenerator):
         return png, "mock-64x64.png"
 
 
+class MockImagePromptGenerator:
+    """Deterministic image prompt for tests: topic -> prompt."""
+    def generate_prompt(self, topic: str, brand: dict,
+                        policy: dict | None = None) -> str:
+        return f"{topic} — studio scene, clean background, soft light"
+
+
+class OpenAIImagePromptGenerator:
+    """Image Agent LLM — prompt only, no bytes.
+
+    Campaign context + Image Skill + post topic → single image
+    prompt string. Transport identical to Text Agent (adapter with
+    credential+model, session_id, base_url). Image bytes remain
+    Tuzzina-owned via TuzzinaClient.generate_image.
+    """
+    def __init__(self, api_key: str = "", model: str = "gpt-4.1",
+                 adapter=None):
+        if adapter is None:
+            if not api_key:
+                raise RuntimeError("OPENAI_API_KEY is not set")
+            from llm.adapters import OpenAIAdapter
+            adapter = OpenAIAdapter(api_key, model)
+        self._adapter = adapter
+
+    def generate_prompt(self, topic: str, brand: dict,
+                        policy: dict | None = None) -> str:
+        from skills.loader import get_skill
+        campaign_skills = policy.get("skills") if isinstance(
+            policy, dict) else None
+        skill = get_skill(
+            "image", (campaign_skills or {}).get("image"))
+        parts = [skill["instructions"]]
+        from channels.instructions import build_visual as _visual
+        visual = _visual(policy, video_rules=False)
+        if visual:
+            parts.append(visual)
+        # keep prompt request short; campaign context already in skill
+        parts.append(
+            f"Post topic: {topic[:200]}. Brand: {brand.get('name','')}. "
+            "Return one image prompt only, under 60 words, no explanation.")
+        sys = "\n\n".join(parts)
+        return self._adapter.complete(
+            sys, f"Topic: {topic}", temperature=0.7, max_tokens=200,
+            timeout=60).strip()
+
+
 class TuzzinaImageGenerator(ImageGenerator):
     """Delegation marker: image prompt decisions are executed by
     Tuzzina's existing image tool, never locally.
