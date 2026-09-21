@@ -287,9 +287,18 @@ class OpenAIRoleCase(unittest.TestCase):
         with self.assertRaises(AnalysisError):
             OpenAIAnalysisModel("k").analyze(self._result(), policy())
 
-    def test_empty_research_raises(self):
-        with self.assertRaises(AnalysisError):
-            OpenAIAnalysisModel("k").analyze(research([]), policy())
+    def test_empty_research_ineligible_without_llm(self):
+        calls = []
+
+        def _open(req, timeout=None):
+            calls.append(req)
+            return FakeResp(_openai_body())
+
+        urllib.request.urlopen = _open
+        o = OpenAIAnalysisModel("k").analyze(research([]), policy())
+        self.assertFalse(o.eligible)
+        self.assertIn("no-findings", o.meta["reason"])
+        self.assertEqual(calls, [])
 
     def _user_text(self, pol):
         seen = {}

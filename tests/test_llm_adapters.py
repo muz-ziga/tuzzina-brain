@@ -1294,6 +1294,23 @@ class FencedJsonCase(unittest.TestCase):
         with self.assertRaises(ResearchError):
             model._validate(_research_json()[:20], [it], False)
 
+    def test_research_accepts_empty_findings(self):
+        # Legitimate outcome (no item met the skill rules):
+        # kept as data so analysis stops cleanly, never retried.
+        import json as _json
+        from research.models import OpenAIResearchModel
+        from contracts import SourceItem
+        it = SourceItem(source_id="g-1", source_type="rss",
+                        source_url="u", title="T", text="Body words.",
+                        item_id="g-1", content_hash="h")
+        model = OpenAIResearchModel(adapter=OpenAIAdapter("k", "m"))
+        raw = _json.dumps({"summary": "Nothing qualified.",
+                           "findings": [], "topics": [],
+                           "entities": []})
+        out = model._validate(raw, [it], False)
+        self.assertEqual(out.findings, [])
+        self.assertTrue(out.summary)
+
     def test_analysis_accepts_fenced(self):
         from research.analysis import OpenAIAnalysisModel
         from research.models import Finding, ResearchResult

@@ -222,7 +222,9 @@ class OpenAIResearchModel(ResearchModel):
             "the item text (excerpt must quote it); kind=inference for "
             "anything you conclude, with confidence low unless two or "
             "more items support it. Every finding MUST list only input "
-            "IDs. No other keys, no prose outside the JSON.")
+            "IDs. \"findings\" may be [] when no input item meets the "
+            "skill rules (say why in summary). No other keys, no prose "
+            "outside the JSON.")
         from channels.instructions import build as _skill
         skill = _skill(policy)
         if skill:
@@ -282,8 +284,12 @@ class OpenAIResearchModel(ResearchModel):
         known = {_trace_id(it) for it in items}
         findings: list[Finding] = []
         raw_findings = data.get("findings")
-        if not isinstance(raw_findings, list) or not raw_findings:
+        if not isinstance(raw_findings, list):
             raise ResearchError("invalid-output")
+        # Empty findings is a legitimate outcome: no input item
+        # met the skill rules. Analysis turns it into a clean
+        # ineligible verdict (no-op stop) instead of the run
+        # retrying a correct answer forever. Summary still required.
         for f in raw_findings[:MAX_FINDINGS]:
             if not isinstance(f, dict):
                 raise ResearchError("invalid-output")

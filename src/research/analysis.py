@@ -250,7 +250,18 @@ class OpenAIAnalysisModel(AnalysisModel):
         view = _policy_view(policy)
         findings = _findings_of(result)[:MAX_FINDINGS]
         if not findings:
-            raise AnalysisError("empty-research")
+            # Nothing qualified: clean ineligible verdict with no
+            # LLM spend (mirrors the mock no-findings path). The
+            # workflow stops this run as a no-op downstream.
+            return ContentOpportunity(
+                eligible=False, topic="", angle="",
+                rationale="no-findings; 0 fact(s) over "
+                          "0 source item(s)", facts=[],
+                source_item_ids=[], content_format="post",
+                media_intent="none", audience=view["audience"],
+                language=view["language"], priority="normal",
+                confidence="low", constraints=[],
+                model=self.model, meta={"reason": "no-findings"})
         known = set()
         parts = []
         from skills.editorial import quote_untrusted
