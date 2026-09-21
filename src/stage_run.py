@@ -260,6 +260,16 @@ def _classify_terminal(err: object) -> bool:
     return classify_stage_error(err) == "terminal"
 
 
+def stage_error_envelope(stage: str, err: object) -> tuple:
+    """Map ANY stage exception to its (stage, status, payload,
+    error) envelope tuple. The single place where exceptions
+    become envelopes, so a NameError-class harness bug here is
+    impossible to ship untested (see test below)."""
+    if _classify_terminal(err):
+        return (stage, TERMINAL, None, str(err))
+    return (stage, RETRYABLE, None, str(err))
+
+
 def _stage_ctx(args, run_id: str, base: dict | None = None) -> dict:
     """Assemble the stage context: shared base setup plus role
     models/generators and pass-through prior-stage outputs.
@@ -359,6 +369,8 @@ def _run_stage_mode(stage: str, input_path: str, base) -> int:
     except ValueError as e:
         print(f"error: {e}", file=_sys.stderr)
         return 2
+    # Harness setup (files, env, client): FileNotFoundError /
+    # ValueError here mean broken configuration -> exit 2.
     try:
         run_id = (getattr(base, "run_id", "") or "").strip() or \
             uuid.uuid4().hex
@@ -370,6 +382,14 @@ def _run_stage_mode(stage: str, input_path: str, base) -> int:
             return _emit_stage(stage, TERMINAL, None,
                                "mock-live-refused")
         ctx = _stage_ctx(base, run_id, stage_input)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=_sys.stderr)
+        return 2
+    # Stage execution: EVERY domain failure (including ValueError
+    # from stage input validation) maps to a structured
+    # envelope, never a bare exit code — the workflow needs the
+    # stage identity and retry/terminal verdict, not a code.
+    try:
         if stage == "research":
             payload = run_research_stage(ctx)
         elif stage == "analysis":
@@ -382,12 +402,8 @@ def _run_stage_mode(stage: str, input_path: str, base) -> int:
             payload = run_execute_stage(ctx)
         else:
             return _harness_error(f"unknown-stage:{stage}")
-    except (FileNotFoundError, ValueError) as e:
-        print(f"error: {e}", file=_sys.stderr)
-        return 2
     except Exception as e:
-        return _emit_stage(stage, TERMINAL if _classify_terminal(e)
-                           else RETRYABLE_STAGE_FAILURE, None, str(e))
+        return _emit_stage(*stage_error_envelope(stage, e))
     return _emit_stage(stage, SUCCESS, payload)
 
 

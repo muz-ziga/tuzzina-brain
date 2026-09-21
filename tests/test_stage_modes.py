@@ -286,6 +286,119 @@ class ExecuteStageCase(unittest.TestCase):
         self.assertEqual(out["media"], [])
 
 
+class EnvelopeMappingCase(unittest.TestCase):
+    def test_retryable_error_maps_to_retryable_envelope(self):
+        from llm.adapters import LLMError
+        from stage_run import RETRYABLE, SUCCESS, TERMINAL, \
+            stage_error_envelope
+        stage, status, payload, error = stage_error_envelope(
+            "research", LLMError("empty-content"))
+        self.assertEqual((stage, status, payload), ("research", RETRYABLE, None))
+        self.assertIn("empty-content", error)
+        self.assertEqual(RETRYABLE, "RETRYABLE_STAGE_FAILURE")
+        self.assertEqual(TERMINAL, "TERMINAL_FAILURE")
+        self.assertEqual(SUCCESS, "SUCCESS")
+
+    def test_terminal_error_maps_to_terminal_envelope(self):
+        from stage_run import TERMINAL, stage_error_envelope
+        stage, status, payload, error = stage_error_envelope(
+            "analysis", ValueError("bad-config"))
+        self.assertEqual((stage, status, payload),
+                         ("analysis", TERMINAL, None))
+        self.assertIn("bad-config", error)
+
+    def test_envelope_round_trip_through_emit(self):
+        import io
+        from contextlib import redirect_stdout
+        from stage_run import stage_error_envelope
+        from llm.adapters import LLMError
+        import json as _json
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            from stage_run import _emit_stage
+            rc = _emit_stage(
+                *stage_error_envelope("text", LLMError("http-503")))
+        self.assertEqual(rc, 0)
+        line = buf.getvalue().strip()
+        self.assertTrue(line.startswith("BRAIN_STAGE "))
+        env = _json.loads(line[len("BRAIN_STAGE "):])
+        self.assertEqual(env["status"], "RETRYABLE_STAGE_FAILURE")
+        self.assertEqual(env["stage"], "text")
+
+
+class StageModeErrorPathCase(unittest.TestCase):
+    def test_stage_exception_becomes_retryable_envelope(self):
+        # Regression: the exception-to-envelope mapping itself
+        # must never raise (a NameError here once turned every
+        # retryable failure into an exit-1 crash).
+        import io
+        import json as _json
+        from contextlib import redirect_stdout
+        import stage_run as _sr
+        from llm.adapters import LLMError
+        real_research = _sr.run_research_stage
+        real_ctx = _sr._stage_ctx
+
+        def boom(_ctx):
+            raise LLMError("empty-content")
+
+        class Base:
+            mode = "--openai"
+            dry_run = True
+            state_store = "memory"
+            strategy_by_integration = "int-1"
+            campaign = "c.yaml"
+            run_id = "r-1"
+
+        _sr.run_research_stage = boom
+        _sr._stage_ctx = lambda base, run_id, stage_input: {}
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                rc = _sr._run_stage_mode("research", "", Base())
+        finally:
+            _sr.run_research_stage = real_research
+            _sr._stage_ctx = real_ctx
+        self.assertEqual(rc, 0)
+        line = buf.getvalue().strip()
+        self.assertTrue(line.startswith("BRAIN_STAGE "))
+        env = _json.loads(line[len("BRAIN_STAGE "):])
+        self.assertEqual(env["status"], "RETRYABLE_STAGE_FAILURE")
+        self.assertEqual(env["stage"], "research")
+
+    def test_stage_terminal_error_becomes_terminal_envelope(self):
+        import io
+        import json as _json
+        from contextlib import redirect_stdout
+        import stage_run as _sr
+        real_text = _sr.run_text_stage
+        real_ctx = _sr._stage_ctx
+
+        def boom(_ctx):
+            raise ValueError("bad-config")
+
+        class Base:
+            mode = "--openai"
+            dry_run = True
+            state_store = "memory"
+            strategy_by_integration = "int-1"
+            campaign = "c.yaml"
+            run_id = "r-1"
+
+        _sr.run_text_stage = boom
+        _sr._stage_ctx = lambda base, run_id, stage_input: {}
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                rc = _sr._run_stage_mode("text", "", Base())
+        finally:
+            _sr.run_text_stage = real_text
+            _sr._stage_ctx = real_ctx
+        self.assertEqual(rc, 0)
+        env = _json.loads(buf.getvalue().strip()[len("BRAIN_STAGE "):])
+        self.assertEqual(env["status"], "TERMINAL_FAILURE")
+
+
 class CliCase(unittest.TestCase):
     def test_bad_stage_rejected(self):
         self.assertEqual(
