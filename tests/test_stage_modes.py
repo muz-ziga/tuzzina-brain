@@ -1,0 +1,302 @@
+"""Stage-scoped Brain entry points: contracts without duplication.
+
+Proves, with scripted adapters and stub clients (no network,
+no keys, no live calls):
+1. analysis/text/prompt stages return validated payloads.
+2. failing stages raise with the original domain error
+   (callers map to envelopes; contracts unchanged).
+3. serialization round-trips (dict -> object -> dict).
+4. FixedText/FixedPrompt replay is byte-identical to the
+   legacy path for the same validated strings.
+5. execute dry-run performs zero writes and assigns
+   deterministic value ids.
+6. CLI harness fails closed (exit 2) on bad args/files.
+"""
+import json
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from g2.generators import (FixedPromptGenerator, FixedTextGenerator,
+                           MockImageGenerator, MockTextGenerator)
+from g2.pipeline import build_package
+from llm.adapters import LLMError
+from research.models import _trace_id
+from stage_run import (_as_opportunity, _as_research_result,
+                       _as_source_item, _to_jsonable, main_stage,
+                       run_analysis_stage, run_execute_stage,
+                       run_prompt_stage, run_text_stage)
+
+
+class ScriptAdapter:
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self.calls = []
+
+    def complete(self, system, user, *, temperature=0.7, max_tokens=400,
+                 timeout=60):
+        self.calls.append((system, user))
+        if not self._outcomes:
+            raise AssertionError("adapter called past script end")
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+def _item_dict(i=0):
+    return {
+        "source_id": f"s-{i}", "source_type": "rss",
+        "source_url": f"https://demo.test/{i}",
+        "title": f"Harbor news {i}",
+        "text": "Harbor masterclass announced today.",
+        "images": [], "links": [], "hashtags": [],
+        "published_at": "2026-09-08T09:00:00+00:00",
+        "platform": "rss", "item_id": f"g-{i}",
+        "content_hash": f"h{i}",
+    }
+
+
+def _research_dict(tid="g-0"):
+    return {
+        "summary": "s", "findings": [
+            {"statement": "Harbor masterclass announced",
+             "kind": "fact", "confidence": "high",
+             "item_ids": [tid], "excerpt": "Harbor masterclass"}],
+        "topics": ["t"], "entities": [], "item_ids": [tid],
+        "earliest_published": "", "latest_published": "",
+        "model": "", "meta": {}}
+
+
+def _opp_dict(media="none"):
+    return {
+        "eligible": True, "topic": "Harbor masterclass",
+        "angle": "Loudness basics", "rationale": "R",
+        "facts": ["Harbor masterclass announced"],
+        "source_item_ids": ["g-0"], "content_format": "post",
+        "media_intent": media, "audience": "a", "language": "en",
+        "priority": "normal", "confidence": "high",
+        "constraints": [], "model": "", "meta": {}}
+
+
+BRAND = {"tone": "bold", "audience": "founders",
+         "banned_words": ["spam"], "preferred_words": ["launch"],
+         "cta_style": "Try it now"}
+POLICY = {"brand": dict(BRAND), "language": {"default": "en"},
+          "hashtags": {"enabled": False}, "links_policy": "hide",
+          "pillars": [], "generation": {}, "media": {}}
+
+
+class FakeClient:
+    def __init__(self):
+        self.released = []
+        self.calls = []
+
+    def release_claim(self, key, run_id):
+        self.released.append((key, run_id))
+        return 1
+
+
+class RoundTripCase(unittest.TestCase):
+    def test_source_item_round_trip(self):
+        raw = _item_dict()
+        back = _to_jsonable(_as_source_item(raw))
+        for key in ("source_id", "title", "text", "item_id",
+                    "platform"):
+            self.assertEqual(back[key], raw[key])
+
+    def test_research_round_trip(self):
+        back = _to_jsonable(_as_research_result(_research_dict()))
+        self.assertEqual(back["findings"][0]["kind"], "fact")
+        self.assertEqual(back["summary"], "s")
+
+    def test_opportunity_round_trip(self):
+        back = _to_jsonable(_as_opportunity(_opp_dict("image")))
+        self.assertTrue(back["eligible"])
+        self.assertEqual(back["media_intent"], "image")
+
+    def test_rejects_garbage(self):
+        for fn, bad in ((_as_source_item, []),
+                        (_as_research_result, "x"),
+                        (_as_opportunity, None)):
+            with self.assertRaises(ValueError):
+                fn(bad)
+
+
+class AnalysisStageCase(unittest.TestCase):
+    def _ctx(self, adapter):
+        from research.analysis import OpenAIAnalysisModel
+        return {"client": FakeClient(), "run_id": "r1",
+                "cfg": dict(POLICY),
+                "analysis_model": OpenAIAnalysisModel(adapter=adapter),
+                "research": _research_dict(),
+                "items": [_item_dict()],
+                "claimed": []}
+
+    def test_valid_opportunity(self):
+        from research.analysis import OpenAIAnalysisModel  # noqa
+        adapter = ScriptAdapter([json.dumps({
+            "eligible": True, "topic": "T", "angle": "A",
+            "rationale": "R", "facts": ["Harbor masterclass announced"],
+            "source_item_ids": ["g-0"], "content_format": "post",
+            "media_intent": "none", "audience": "a", "language": "en",
+            "priority": "normal", "confidence": "high",
+            "constraints": []})])
+        out = run_analysis_stage(self._ctx(adapter))
+        self.assertTrue(out["opportunity"]["eligible"])
+        self.assertEqual(out["claimed"], [])
+
+    def test_invalid_output_propagates(self):
+        adapter = ScriptAdapter([LLMError("empty-content")] * 3)
+        with self.assertRaises(Exception) as ctx:
+            run_analysis_stage(self._ctx(adapter))
+        self.assertIn("model-error", str(ctx.exception))
+
+
+class TextStageCase(unittest.TestCase):
+    def _ctx(self, adapter):
+        from g2.generators import OpenAITextGenerator
+        return {"client": FakeClient(), "run_id": "r1",
+                "cfg": dict(POLICY),
+                "text_gen": OpenAITextGenerator(api_key="k",
+                                                adapter=adapter),
+                "opportunity": _opp_dict(),
+                "items": [_item_dict()],
+                "claimed": []}
+
+    def test_valid_text(self):
+        out = run_text_stage(self._ctx(ScriptAdapter(["Hello harbor"])))
+        self.assertIn("Hello harbor", out["text"])
+
+    def test_text_failure_releases_claims(self):
+        client = FakeClient()
+        ctx = self._ctx(ScriptAdapter([LLMError("http-500")] * 3))
+        ctx["client"] = client
+        ctx["claimed"] = ["k1"]
+        with self.assertRaises(Exception):
+            run_text_stage(ctx)
+        self.assertEqual(client.released, [("k1", "r1")])
+
+
+class PromptStageCase(unittest.TestCase):
+    def _ctx(self, adapter):
+        from g2.generators import OpenAIImagePromptGenerator
+        return {"client": FakeClient(), "run_id": "r1",
+                "cfg": dict(POLICY),
+                "prompt_gen": OpenAIImagePromptGenerator(
+                    api_key="k", adapter=adapter),
+                "topic": "Harbor day",
+                "claimed": []}
+
+    def test_valid_prompt(self):
+        out = run_prompt_stage(
+            self._ctx(ScriptAdapter(["Studio scene, soft light"])))
+        self.assertEqual(out["prompt"], "Studio scene, soft light")
+
+    def test_prompt_failure_propagates(self):
+        with self.assertRaises(Exception):
+            run_prompt_stage(
+                self._ctx(ScriptAdapter([LLMError("empty-content")] * 3)))
+
+
+class FixedReplayCase(unittest.TestCase):
+    def test_fixed_text_matches_legacy_path(self):
+        from contracts import SourceItem
+        item = SourceItem(**_item_dict())
+        brand, policy = dict(BRAND), dict(POLICY)
+        legacy = build_package(
+            item, brand, policy.get("language"),
+            policy.get("hashtags"), "hide",
+            MockTextGenerator(), None, platform="facebook",
+            policy=policy)
+        fixed = build_package(
+            item, brand, policy.get("language"),
+            policy.get("hashtags"), "hide",
+            FixedTextGenerator(legacy.content), None,
+            platform="facebook", policy=policy)
+        self.assertEqual(fixed.content, legacy.content)
+        self.assertEqual(fixed.hashtags, legacy.hashtags)
+
+    def test_fixed_prompt_matches_legacy_path(self):
+        from contracts import SourceItem
+        item = SourceItem(**_item_dict())
+        brand, policy = dict(BRAND), dict(POLICY)
+        legacy = build_package(
+            item, brand, policy.get("language"),
+            policy.get("hashtags"), "hide",
+            MockTextGenerator(), MockImageGenerator(),
+            platform="facebook", policy=policy)
+        fixed_policy = dict(policy)
+        fixed_policy["image_prompt_gen"] = FixedPromptGenerator(
+            legacy.media[0]["prompt"])
+        fixed = build_package(
+            item, brand, policy.get("language"),
+            policy.get("hashtags"), "hide",
+            MockTextGenerator(), MockImageGenerator(),
+            platform="facebook", policy=fixed_policy)
+        self.assertEqual(fixed.media[0]["prompt"],
+                         legacy.media[0]["prompt"])
+
+
+class ExecuteStageCase(unittest.TestCase):
+    def _ctx(self):
+        return {
+            "client": FakeClient(), "run_id": "run-9",
+            "cfg": dict(POLICY),
+            "opportunity": _opp_dict(),
+            "items": [_item_dict()],
+            "text": "Harbor post body here",
+            "prompt": None,
+            "claimed": ["k1"],
+            "dry_run": True, "mode": "draft",
+            "state_store": "memory",
+            "integration_id": "int-1",
+            "schedule": {"timezone": "UTC", "times": ["09:00"]},
+        }
+
+    def test_dry_run_writes_nothing_with_deterministic_ids(self):
+        client = FakeClient()
+        ctx = self._ctx()
+        ctx["client"] = client
+        out = run_execute_stage(ctx)
+        self.assertEqual(out["post_ids"], [])
+        self.assertEqual(out["intents"], 1)
+        self.assertEqual(out["packages"], 1)
+        # Claims released at end even on the dry path.
+        self.assertEqual(client.released, [("k1", "run-9")])
+
+    def test_deterministic_value_ids_shape(self):
+        out = run_execute_stage(self._ctx())
+        self.assertEqual(out["value_ids"], ["brainrun:run-9:0:main"])
+        self.assertEqual(out["media_prompts"], [])
+
+    def test_image_intent_records_prompt_without_resolving(self):
+        # Image intent + dry-run: the Fixed replay prompt lands in
+        # the package (visible as media_prompts evidence) while
+        # zero Tuzzina calls happen (no bytes, no upload).
+        ctx = self._ctx()
+        ctx["opportunity"] = _opp_dict("image")
+        ctx["prompt"] = "STUDIO PROMPT HERE"
+        out = run_execute_stage(ctx)
+        self.assertEqual(out["intents"], 1)
+        self.assertEqual(out["media_prompts"], ["STUDIO PROMPT HERE"])
+        self.assertEqual(out["post_ids"], [])
+        self.assertEqual(out["media"], [])
+
+
+class CliCase(unittest.TestCase):
+    def test_bad_stage_rejected(self):
+        self.assertEqual(
+            main_stage(["--stage", "nope", "campaign.yaml"]), 2)
+
+    def test_missing_input_file_rejected(self):
+        self.assertEqual(
+            main_stage(["--stage", "research", "--stage-input",
+                        "C:\\nope\\missing.json", "campaign.yaml",
+                        "--strategy-by-integration", "x"]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

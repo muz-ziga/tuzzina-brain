@@ -179,8 +179,10 @@ def run_slot_content(exec_ctx, *, research_model=None,
             out.skipped.append("analysis:research-off")
         if research_active:
             try:
-                out.research = research_model.research(
-                    [item], policy)
+                from stages import run_stage
+                out.research = run_stage(
+                    "research",
+                    lambda: research_model.research([item], policy))
             except Exception as e:
                 return _terminal(out, STATUS_RESEARCH_FAILED,
                                  f"{type(e).__name__}: {e}",
@@ -190,8 +192,11 @@ def run_slot_content(exec_ctx, *, research_model=None,
             out.skipped.append("analysis:research-off")
         if analysis_active:
             try:
-                out.opportunity = analysis_model.analyze(
-                    out.research, policy, [item])
+                from stages import run_stage
+                out.opportunity = run_stage(
+                    "analysis",
+                    lambda: analysis_model.analyze(
+                        out.research, policy, [item]))
             except Exception as e:
                 return _terminal(out, STATUS_ANALYSIS_FAILED,
                                  f"{type(e).__name__}: {e}",
@@ -232,11 +237,14 @@ def run_slot_content(exec_ctx, *, research_model=None,
                 meta={"reason": "text-only-no-analysis"})
             shaped = shape_item_for_g2(item, item_plan)
             try:
-                out.packages.append(build_package(
-                    shaped, brand, language, hs_cfg,
-                    links_policy, text_gen, gen_image,
-                    platform=item.platform or "facebook",
-                    limits=None, policy=policy))
+                from stages import run_stage
+                out.packages.append(run_stage(
+                    "package",
+                    lambda: build_package(
+                        shaped, brand, language, hs_cfg,
+                        links_policy, text_gen, gen_image,
+                        platform=item.platform or "facebook",
+                        limits=None, policy=policy)))
             except Exception as e:
                 return _terminal(out, STATUS_GENERATION_FAILED,
                                  f"{type(e).__name__}: {e}",
@@ -304,11 +312,14 @@ def run_slot_content(exec_ctx, *, research_model=None,
         gen_image = image_gen_for(gen_plan, image_gen)
         shaped = shape_item_for_g2(item, gen_plan)
         try:
-            out.packages.append(build_package(
-                shaped, brand, language, hs_cfg, links_policy,
-                text_gen, gen_image,
-                platform=item.platform or "facebook",
-                limits=None, policy=policy))
+            from stages import run_stage
+            out.packages.append(run_stage(
+                "package",
+                lambda: build_package(
+                    shaped, brand, language, hs_cfg, links_policy,
+                    text_gen, gen_image,
+                    platform=item.platform or "facebook",
+                    limits=None, policy=policy)))
         except Exception as e:
             return _terminal(out, STATUS_GENERATION_FAILED,
                              f"{type(e).__name__}: {e}", release,

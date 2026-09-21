@@ -639,7 +639,7 @@ def complete_with_retry(adapter, system: str, user: str, *,
                         base_delay: float = 1.0,
                         max_delay: float = 8.0,
                         jitter: bool = True,
-                        sleep=time.sleep,
+                        sleep=None,
                         stats: dict | None = None) -> str:
     """Execute ONE logical LLM task with classified retries.
 
@@ -659,6 +659,9 @@ def complete_with_retry(adapter, system: str, user: str, *,
     """
     if max_attempts < 1:
         raise ValueError("max_attempts must be >= 1")
+    # Resolved at call time so tests can substitute a fake clock
+    # without touching production defaults.
+    _sleep = sleep if sleep is not None else time.sleep
     retried: list = []
     last: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
@@ -686,7 +689,7 @@ def complete_with_retry(adapter, system: str, user: str, *,
             delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
             if jitter:
                 delay += random.uniform(0, base_delay)
-            sleep(delay)
+            _sleep(delay)
     assert last is not None  # max_attempts >= 1 guarantees a pass
     raise last
 

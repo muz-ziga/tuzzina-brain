@@ -544,6 +544,13 @@ def _main(argv=None) -> int:
 
 
 def main(argv=None) -> int:
+    # Stage-scoped entry for durable orchestration: delegates to
+    # the stage runner when --stage is present, otherwise runs
+    # the legacy whole-cycle path unchanged.
+    import sys as _sys
+    if "--stage" in list(argv or _sys.argv[1:]):
+        from stage_run import main_stage
+        return main_stage(argv)
     try:
         return _main(argv)
     except (FileNotFoundError, ValueError) as e:

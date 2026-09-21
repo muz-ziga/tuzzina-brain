@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased — Durable stage loop support (stage-scoped entry)
+
+- New `src/stage_run.py`: `--stage research|analysis|text|
+  prompt|execute` modes reusing existing domain functions;
+  `BRAIN_STAGE` envelope (`SUCCESS`/`RETRYABLE_STAGE_FAILURE`/
+  `TERMINAL_FAILURE`), 1MB payload guard, deterministic
+  `brainrun:{runId}:{i}` value ids + `ai/{runId}/{i}` media
+  key hints for idempotent replays.
+- `FixedTextGenerator`/`FixedPromptGenerator` replay validated
+  strings byte-identically through the existing pipeline.
+- `TuzzinaClient.generate_image` + `run._resolve_media` accept
+  an optional key hint (omitted preserves legacy behavior).
+- Shared `collect_all_sources` / `claim_collected_items`
+  extracted in `research/cycle.py` (behavior identical).
+- Tests: 17 new in `tests/test_stage_modes.py` (contracts,
+  replay fidelity, deterministic ids, harness fail-closed).
+
+## Unreleased — Current-stage durable retry (shared stage layer)
+
+- New `src/stages.py`: `run_stage()` retries the SAME logical
+  stage in place (default 3 attempts, 45s base backoff capped
+  at 180s + jitter) with `SUCCESS` / `RETRYABLE_STAGE_FAILURE`
+  / `TERMINAL_FAILURE` envelope constructors and a
+  `classify_stage_error()` that reuses the provider classifier
+  (domain `model-error:` wrappers unwrap to the inner code).
+- Wired at research + analysis + package call sites in both
+  `research/cycle.py` and `slot_content.py`; control flow
+  unchanged (terminal/exhausted errors propagate exactly as
+  before, only later). Execute/publish deliberately excluded
+  (side effects stay under existing idempotent paths).
+- One stderr trace line per stage retry (code only, never
+  prompts) so rescued stages are visible in orchestrator logs.
+- Tests: 14 new in `tests/test_stage_retry.py` (rescue, backoff
+  caps, terminal fast-fail, envelopes, vocabulary, trace line,
+  full-cycle integration without restart).
+
 ## Unreleased — Generic LLM task retry (shared execution layer)
 
 - New `llm.adapters.complete_with_retry` + `classify_llm_error`:

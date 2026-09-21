@@ -213,6 +213,106 @@ def _collect_search(source: dict, n: int, *, store,
                                    pending), rep
 
 
+class ClaimFailed(Exception):
+    """Claimer transport failure. Carries the exact legacy message
+    ("<Type>: claim-failed"); callers fail the cycle closed with
+    NOTHING committed (existing at-least-once rule)."""
+
+
+def collect_all_sources(sources, store, now: str, out,
+                        pending: list) -> None:
+    """Shared collection loop: poll every configured source,
+    appending reports to out.sources, NEW items to out.items, and
+    staged monitor results to pending. Unknown source types raise
+    ValueError with partial state already appended (fail-closed,
+    same as the inlined loop this replaces). Search failures stay
+    per-source evidence and never fail the collection."""
+    for source in sources or []:
+        if source.get("enabled") is False:
+            continue
+        stype = (source.get("type") or "").strip().lower()
+        n = max(1, int(source.get("n") or 3))
+        if stype == "rss":
+            if not (source.get("url") or "").strip():
+                raise ValueError("rss-source-missing-url")
+            items, res = _collect_rss(source, store, now, 50)
+            rep = SourceReport("rss", source["url"].strip(),
+                               True, "", len(res.items),
+                               len(items))
+            pending.append(res)
+        elif stype == "youtube":
+            if not (source.get("channel_id") or "").strip():
+                raise ValueError("youtube-source-missing-channel")
+            items, res = _collect_youtube(source, store, now, 50)
+            rep = SourceReport(
+                "youtube", source["channel_id"].strip(),
+                True, "", len(res.items), len(items))
+            pending.append(res)
+        elif stype == "website":
+            if not (source.get("url") or "").strip():
+                raise ValueError("website-source-missing-url")
+            items, res = _collect_website(source, n, store=store,
+                                          now=now)
+            rep = SourceReport("website", source["url"].strip(),
+                               True, "", len(res.items), len(items))
+            pending.append(res)
+        elif stype in ("web", "news", "social.facebook",
+                         "social.instagram", "social.x"):
+            try:
+                items, res, rep = _collect_search(
+                    source, n, store=store, now=now)
+            except Exception as e:
+                # Search failure is per-source evidence, never
+                # a cycle failure: record the reason and
+                # continue with the healthy sources (no
+                # fabrication, no state staged, so a later
+                # retry re-polls cleanly).
+                name = type(e).__name__
+                rep = SourceReport(
+                    stype, (source.get("query") or "").strip(),
+                    False, f"{name}: {str(e)[:200]}", 0, 0)
+                items = []
+                out.sources.append(rep)
+                continue
+            pending.append(res)
+        else:
+            raise ValueError(f"unknown-source-type:{stype or '?'}")
+        out.sources.append(rep)
+        out.items.extend(items)
+
+
+def claim_collected_items(out, claimer) -> None:
+    """Atomic cross-slot claim (optional, injected like the
+    model roles): each NEW item is claimed by stable
+    identity before any LLM spends budget. Losers drop out
+    (treated like already-seen: another slot owns them).
+    A claimer transport failure raises ClaimFailed with
+    NOTHING committed, so the next cycle redelivers
+    the same NEW items (at-least-once preserved). No
+    claimer wired (legacy callers, unit tests) means no
+    claiming: behavior is byte-identical to before."""
+    if claimer is None or not out.items:
+        return
+    kept = []
+    try:
+        for item in out.items:
+            key, _ = stable_identity(
+                getattr(item, "platform", ""),
+                getattr(item, "external_id", ""),
+                getattr(item, "source_url", "") or
+                getattr(item, "source_id", ""),
+                getattr(item, "title", ""),
+                getattr(item, "text", ""))
+            if claimer(key):
+                out.claimed.append(key)
+                kept.append(item)
+            else:
+                out.skipped.append(f"claimed-by-other:{key}")
+    except Exception as e:
+        raise ClaimFailed(f"{type(e).__name__}: claim-failed")
+    out.items = kept
+
+
 def run_cycle(sources: list, *, store=None, policy: dict | None = None,
               schedule: dict | None = None, now: str = "",
               text_gen=None, image_gen=None, research_model=None,
@@ -242,89 +342,14 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
         links_policy = policy.get("links_policy", "hide")
         cta_style = str(brand.get("cta_style") or "Learn more")
 
-        for source in sources or []:
-            if source.get("enabled") is False:
-                continue
-            stype = (source.get("type") or "").strip().lower()
-            n = max(1, int(source.get("n") or 3))
-            if stype == "rss":
-                if not (source.get("url") or "").strip():
-                    raise ValueError("rss-source-missing-url")
-                items, res = _collect_rss(source, store, now, 50)
-                rep = SourceReport("rss", source["url"].strip(),
-                                   True, "", len(res.items),
-                                   len(items))
-                pending.append(res)
-            elif stype == "youtube":
-                if not (source.get("channel_id") or "").strip():
-                    raise ValueError("youtube-source-missing-channel")
-                items, res = _collect_youtube(source, store, now, 50)
-                rep = SourceReport(
-                    "youtube", source["channel_id"].strip(),
-                    True, "", len(res.items), len(items))
-                pending.append(res)
-            elif stype == "website":
-                if not (source.get("url") or "").strip():
-                    raise ValueError("website-source-missing-url")
-                items, res = _collect_website(source, n, store=store,
-                                              now=now)
-                rep = SourceReport("website", source["url"].strip(),
-                                   True, "", len(res.items), len(items))
-                pending.append(res)
-            elif stype in ("web", "news", "social.facebook",
-                             "social.instagram", "social.x"):
-                try:
-                    items, res, rep = _collect_search(
-                        source, n, store=store, now=now)
-                except Exception as e:
-                    # Search failure is per-source evidence, never
-                    # a cycle failure: record the reason and
-                    # continue with the healthy sources (no
-                    # fabrication, no state staged, so a later
-                    # retry re-polls cleanly).
-                    name = type(e).__name__
-                    rep = SourceReport(
-                        stype, (source.get("query") or "").strip(),
-                        False, f"{name}: {str(e)[:200]}", 0, 0)
-                    items = []
-                    out.sources.append(rep)
-                    continue
-                pending.append(res)
-            else:
-                raise ValueError(f"unknown-source-type:{stype or '?'}")
-            out.sources.append(rep)
-            out.items.extend(items)
-
-        # Atomic cross-slot claim (optional, injected like the
-        # model roles): each NEW item is claimed by stable
-        # identity before any LLM spends budget. Losers drop out
-        # (treated like already-seen: another slot owns them).
-        # A claimer transport failure fails the cycle closed
-        # with NOTHING committed, so the next cycle redelivers
-        # the same NEW items (at-least-once preserved). No
-        # claimer wired (legacy callers, unit tests) means no
-        # claiming: behavior is byte-identical to before.
-        if claimer is not None and out.items:
-            from research.monitor import stable_identity
-            kept = []
-            try:
-                for item in out.items:
-                    key, _ = stable_identity(
-                        getattr(item, "platform", ""),
-                        getattr(item, "external_id", ""),
-                        getattr(item, "source_url", "") or
-                        getattr(item, "source_id", ""),
-                        getattr(item, "title", ""),
-                        getattr(item, "text", ""))
-                    if claimer(key):
-                        out.claimed.append(key)
-                        kept.append(item)
-                    else:
-                        out.skipped.append(f"claimed-by-other:{key}")
-            except Exception as e:
-                out.error = f"{type(e).__name__}: claim-failed"
-                return out
-            out.items = kept
+        # Shared collection + claim (module helpers above):
+        # identical behavior, reused by stage-scoped runs.
+        collect_all_sources(sources, store, now, out, pending)
+        try:
+            claim_collected_items(out, claimer)
+        except ClaimFailed as e:
+            out.error = str(e)
+            return out
 
         # Role participation (campaign-owned): resolved up front so
         # every return path below reports which stages this cycle
@@ -357,13 +382,19 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
         analysis_active = "analysis" in roles
         text_active = "text" in roles
         if research_active:
-            out.research = research_model.research(out.items, policy)
+            from stages import run_stage
+            out.research = run_stage(
+                "research",
+                lambda: research_model.research(out.items, policy))
         if not research_active:
             analysis_active = False
             out.skipped.append("analysis:research-off")
         if analysis_active:
-            out.opportunity = analysis_model.analyze(
-                out.research, policy, list(out.items))
+            from stages import run_stage
+            out.opportunity = run_stage(
+                "analysis",
+                lambda: analysis_model.analyze(
+                    out.research, policy, list(out.items)))
             if not out.opportunity.eligible:
                 for res in pending:
                     res.commit(store)
@@ -414,11 +445,14 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
                     media_intent="none",
                     meta={"reason": "text-only-no-analysis"})
                 shaped = shape_item_for_g2(_one, item_plan)
-                out.packages.append(build_package(
-                    shaped, brand, language, hs_cfg,
-                    links_policy, text_gen, gen_image,
-                    platform=_one.platform or
-                    "facebook", limits=None, policy=policy))
+                from stages import run_stage
+                out.packages.append(run_stage(
+                    "package",
+                    lambda: build_package(
+                        shaped, brand, language, hs_cfg,
+                        links_policy, text_gen, gen_image,
+                        platform=_one.platform or
+                        "facebook", limits=None, policy=policy)))
             out.planned = plan(out.packages, schedule)
             for p in out.planned:
                 out.intents.append(build_intent(
@@ -491,10 +525,13 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
         _one = primary_item_for(out.opportunity, out.items)
         if _one is not None:
             shaped = shape_item_for_g2(_one, gen_plan)
-            out.packages.append(build_package(
-                shaped, brand, language, hs_cfg, links_policy,
-                text_gen, gen_image, platform=_one.platform or
-                "facebook", limits=None, policy=policy))
+            from stages import run_stage
+            out.packages.append(run_stage(
+                "package",
+                lambda: build_package(
+                    shaped, brand, language, hs_cfg, links_policy,
+                    text_gen, gen_image, platform=_one.platform or
+                    "facebook", limits=None, policy=policy)))
         out.planned = plan(out.packages, schedule)
         for p in out.planned:
             out.intents.append(build_intent(

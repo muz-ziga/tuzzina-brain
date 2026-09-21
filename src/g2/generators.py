@@ -151,6 +151,33 @@ class MockImagePromptGenerator:
         return f"{topic} — studio scene, clean background, soft light"
 
 
+class FixedTextGenerator(TextGenerator):
+    """Validated-output replay: returns a text string produced and
+    validated by an earlier stage instead of calling an LLM. Pure
+    deterministic passthrough; used by the execute stage so the
+    text role is never re-invoked after its SUCCESS."""
+
+    def __init__(self, text: str):
+        self._text = text or ""
+
+    def generate(self, title: str, summary: str, brand: dict,
+                 policy: dict | None = None) -> str:
+        return self._text
+
+
+class FixedPromptGenerator:
+    """Validated-output replay for the image prompt: returns the
+    prompt string produced by the Image Agent stage. Same
+    deterministic role as FixedTextGenerator."""
+
+    def __init__(self, prompt: str):
+        self._prompt = prompt or ""
+
+    def generate_prompt(self, topic: str, brand: dict,
+                        policy: dict | None = None) -> str:
+        return self._prompt
+
+
 class OpenAIImagePromptGenerator:
     """Image Agent LLM — prompt only, no bytes.
 

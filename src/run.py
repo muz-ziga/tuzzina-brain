@@ -41,7 +41,8 @@ def _build_generators(mode: str):
     return G.MockTextGenerator(), G.MockImageGenerator()
 
 
-def _resolve_media(client: TuzzinaClient, m: dict) -> dict:
+def _resolve_media(client: TuzzinaClient, m: dict,
+                   key_hint: str | None = None) -> dict:
     """One planned media item -> Tuzzina {id, path} reference.
 
     url kind: existing upload_from_url (extracted source media).
@@ -49,12 +50,15 @@ def _resolve_media(client: TuzzinaClient, m: dict) -> dict:
     generate_image (Tuzzina's stored reference, no Brain-side bytes,
     no Brain-side upload). Mock/legacy generator kind:
     generate_png + upload_bytes (unit tests and --mock paths only).
+    key_hint is forwarded only to the delegated image call so a
+    replay addresses the same R2 object instead of minting a new
+    one; omitted preserves legacy behavior exactly.
     """
     if m.get("kind") == "url":
         return client.upload_from_url(m["url"])
     gen = m["generator"]
     if isinstance(gen, G.TuzzinaImageGenerator):
-        return client.generate_image(m["prompt"])
+        return client.generate_image(m["prompt"], key_hint=key_hint)
     blob, fname = gen.generate_png(m["prompt"])
     return client.upload_bytes(blob, fname, "image/png")
 

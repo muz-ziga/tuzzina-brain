@@ -344,7 +344,8 @@ class TuzzinaClient:
         """
         return self.base.rstrip("/") + "/mcp"
 
-    def generate_image(self, prompt: str) -> dict:
+    def generate_image(self, prompt: str,
+                       key_hint: str | None = None) -> dict:
         """Delegate image generation to Tuzzina's existing image tool.
 
         Speaks the already-exposed MCP endpoint (POST base + "/mcp",
@@ -355,7 +356,10 @@ class TuzzinaClient:
         reference. The brain never sees image bytes and performs
         no upload for delegated images. Fail-closed: any error
         raises TuzzinaError; there is no local fallback (no local
-        image engine exists anymore).
+        image engine exists anymore). key_hint is an optional
+        caller-chosen R2 object key prefix for idempotent
+        replays (same key overwrites instead of duplicating);
+        omitted means server-assigned (legacy behavior).
         """
         if not prompt or not str(prompt).strip():
             raise TuzzinaError("prompt is required")
@@ -368,8 +372,10 @@ class TuzzinaClient:
             raise TuzzinaError(
                 "Tuzzina image delegation failed during handshake")
         try:
-            result = client.call_tool(
-                "generateImageTool", {"prompt": str(prompt)})
+            tool_args: dict = {"prompt": str(prompt)}
+            if key_hint:
+                tool_args["keyHint"] = str(key_hint)
+            result = client.call_tool("generateImageTool", tool_args)
         except McpError as e:
             msg = str(e)
             if msg.startswith("tool-error:"):
