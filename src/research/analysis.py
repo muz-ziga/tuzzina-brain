@@ -320,11 +320,22 @@ class OpenAIAnalysisModel(AnalysisModel):
             truncated = True
         else:
             truncated = False
+        def _check(raw: str) -> None:
+            # Same shared contract as research: invalid task
+            # output retries the SAME analysis task.
+            try:
+                self._validate(raw, known, truncated)
+            except AnalysisError:
+                from llm.adapters import LLMError
+                raise LLMError("invalid-output")
+
         try:
-            from llm.adapters import LLMError
-            raw = self._adapter.complete(
-                prompt, context, temperature=0.2, max_tokens=800,
-                timeout=90)
+            from llm.adapters import LLMError, complete_with_retry
+            stats: dict = {}
+            raw = complete_with_retry(
+                self._adapter, prompt, context,
+                temperature=0.2, max_tokens=800, timeout=90,
+                validate=_check, task="analysis", stats=stats)
         except (TimeoutError, socket.timeout):
             raise AnalysisError("model-timeout")
         except LLMError as e:

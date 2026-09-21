@@ -234,11 +234,25 @@ class OpenAIResearchModel(ResearchModel):
             "research",
             (campaign_skills or {}).get("research"))["instructions"]
         body_text = "\n\n---\n\n".join(blocks)
+
+        def _check(raw: str) -> None:
+            # Contract failures retry at the shared execution
+            # layer: translate to its invalid-output code so a
+            # reasoning-only / malformed / schema-invalid reply
+            # repeats the SAME task instead of failing the run.
+            try:
+                self._validate(raw, items, truncated)
+            except ResearchError:
+                from llm.adapters import LLMError
+                raise LLMError("invalid-output")
+
         try:
-            from llm.adapters import LLMError
-            raw = self._adapter.complete(
-                prompt, body_text, temperature=0.2, max_tokens=1500,
-                timeout=90)
+            from llm.adapters import LLMError, complete_with_retry
+            stats: dict = {}
+            raw = complete_with_retry(
+                self._adapter, prompt, body_text,
+                temperature=0.2, max_tokens=1500, timeout=90,
+                validate=_check, task="research", stats=stats)
         except (TimeoutError, socket.timeout):
             raise ResearchError("model-timeout")
         except LLMError as e:

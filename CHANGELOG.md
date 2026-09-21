@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — Generic LLM task retry (shared execution layer)
+
+- New `llm.adapters.complete_with_retry` + `classify_llm_error`:
+  an LLM task succeeds ONLY on transport success PLUS valid
+  task output. HTTP 200 with reasoning-only / empty / malformed
+  output, 429 / 5xx / timeouts / connection errors retry the
+  SAME task (same adapter/session/args) with exponential
+  backoff + jitter (default 3 attempts); auth / unknown model /
+  bad config / provider refusals fail closed immediately.
+- All four LLM roles execute through it (research, analysis,
+  text, image prompt); validators feed `invalid-output` into
+  the same classifier, so malformed/schema-invalid replies no
+  longer terminate a run on first attempt. Domain error
+  contracts (`ResearchError`, `AnalysisError`) unchanged.
+- Tests: 28 new in `tests/test_llm_retry.py` (classification,
+  retry/rescue, backoff caps, identity stability, exhaustion,
+  no-duplicate-side-effects).
+
 ## Unreleased — Brain Image Agent (prompt LLM)
 
 - New Image Agent role: the LLM that turns the campaign Image

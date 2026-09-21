@@ -15,14 +15,24 @@ feature matrix. Unknown keys fail closed.
 
 Shared helper _post_json owns HTTP POST + JSON + timeout + HTTP
 status normalization ONLY. Auth, schemas, and extraction stay in
-the adapters. No retry anywhere (fail-fast, like every Brain
-network call): timeouts propagate raw so roles keep their
-existing *-timeout categories.
+the adapters.
+
+Task retry lives in ONE place: complete_with_retry (below). An
+LLM task attempt succeeds ONLY on transport success PLUS a valid
+task result; HTTP 200 with reasoning-only / empty / malformed
+output is a retryable failure, classified by classify_llm_error.
+Every role model (research, analysis, text, image prompt) executes
+through it, so no role reimplements retry. Retries are bounded
+(max_attempts), back off exponentially with jitter, preserve the
+same adapter/session/args (task identity), and never touch
+downstream side effects (these calls are pure reads).
 """
 from __future__ import annotations
 import json
+import random
 import re
 import socket
+import time
 import urllib.error
 import urllib.request
 
@@ -569,6 +579,116 @@ ADAPTERS = {
     AnthropicAdapter.adapter_key: AnthropicAdapter,
     OpenCodeZenAdapter.adapter_key: OpenCodeZenAdapter,
 }
+
+
+# Task-failure classification for the shared retry policy.
+# Retryable: the attempt MIGHT succeed if repeated (transient
+# transport trouble, rate limits, server errors, or an upstream
+# response that arrived intact but carries no usable task output:
+# reasoning-only / empty / malformed / schema-invalid content).
+# Non-retryable: repeating the identical request cannot help
+# (bad credentials, unknown model/protocol, broken config, or a
+# provider decision such as a refusal). Unknown failures default
+# to non-retryable (fail-closed: never retry blindly).
+_RETRYABLE_LLM_CODES = frozenset([
+    "empty-content",
+    "malformed-response",
+    "invalid-output",
+])
+
+
+def classify_llm_error(err: object) -> str:
+    """Classify ANY exception from an LLM task attempt as
+    "retryable" or "non_retryable". Pure; never raises; never
+    touches credentials, prompts, or bodies."""
+    if isinstance(err, LLMError):
+        code = str(err.args[0]) if err.args else ""
+        head = code.split(":")[0].strip()
+        if head in _RETRYABLE_LLM_CODES:
+            return "retryable"
+        if head == "transport" or head.startswith("transport-"):
+            # transport / transport-<Type>: DNS/refused/reset /
+            # interrupted — retryable within the attempt budget.
+            return "retryable"
+        if head.startswith("http-"):
+            try:
+                status = int(head[len("http-"):])
+            except ValueError:
+                return "non_retryable"
+            if status == 429 or 500 <= status <= 599:
+                return "retryable"
+            return "non_retryable"
+        # refusal:* and anything unrecognized: the provider
+        # decided, or we do not understand it — do not retry.
+        return "non_retryable"
+    if isinstance(err, (TimeoutError, socket.timeout, ConnectionError,
+                        urllib.error.URLError)):
+        return "retryable"
+    # ValueError/KeyError/TypeError/AttributeError and friends:
+    # programming or configuration errors that repeat identically.
+    return "non_retryable"
+
+
+def complete_with_retry(adapter, system: str, user: str, *,
+                        temperature: float = 0.7,
+                        max_tokens: int = 400,
+                        timeout: int = 60,
+                        validate=None,
+                        task: str = "",
+                        max_attempts: int = 3,
+                        base_delay: float = 1.0,
+                        max_delay: float = 8.0,
+                        jitter: bool = True,
+                        sleep=time.sleep,
+                        stats: dict | None = None) -> str:
+    """Execute ONE logical LLM task with classified retries.
+
+    adapter.complete() is attempted with identical args every
+    time (same adapter/session/model: task identity preserved).
+    When validate is given it runs per attempt and must return
+    None on a valid result or raise LLMError("invalid-output")
+    otherwise, so malformed/schema-invalid output retries at
+    this same layer instead of killing the workflow.
+
+    Returns the validated raw string. Raises the LAST failure
+    when attempts exhaust (domain callers map it to their own
+    error contract, unchanged). stats, when given, receives
+    {"attempts": n, "retried": [codes...], "task": task}.
+    No side effects: these calls are pure provider reads, so a
+    repeated attempt cannot duplicate posts, images, or rows.
+    """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+    retried: list = []
+    last: BaseException | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            raw = adapter.complete(
+                system, user, temperature=temperature,
+                max_tokens=max_tokens, timeout=timeout)
+            if validate is not None:
+                validate(raw)
+            if stats is not None:
+                stats.update({"attempts": attempt, "retried": retried,
+                              "task": task})
+            return raw
+        except Exception as e:
+            last = e
+            if classify_llm_error(e) == "non_retryable" or \
+                    attempt >= max_attempts:
+                if stats is not None:
+                    stats.update({"attempts": attempt,
+                                  "retried": retried, "task": task})
+                raise
+            code = str(e.args[0]) if isinstance(e, LLMError) and \
+                e.args else type(e).__name__
+            retried.append(code)
+            delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
+            if jitter:
+                delay += random.uniform(0, base_delay)
+            sleep(delay)
+    assert last is not None  # max_attempts >= 1 guarantees a pass
+    raise last
 
 
 def resolve_adapter(adapter_key: str, protocol: str | None = None):

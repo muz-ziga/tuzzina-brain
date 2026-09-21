@@ -120,10 +120,11 @@ class OpenAITextGenerator(TextGenerator):
             parts.append(
                 f"Write one social post, max {max_chars} chars.")
         sys = "\n\n".join(parts)
-        return self._adapter.complete(
-            sys, f"Title: {title}\nSummary: {summary}",
-            temperature=0.7, max_tokens=400,
-            timeout=60).strip()
+        from llm.adapters import complete_with_retry
+        return complete_with_retry(
+            self._adapter, sys, f"Title: {title}\nSummary: {summary}",
+            temperature=0.7, max_tokens=400, timeout=60,
+            task="text").strip()
 
 
 def _chunk(tag: bytes, data: bytes) -> bytes:
@@ -184,9 +185,14 @@ class OpenAIImagePromptGenerator:
             f"Post topic: {topic[:200]}. Brand: {brand.get('name','')}. "
             "Return one image prompt only, under 60 words, no explanation.")
         sys = "\n\n".join(parts)
-        return self._adapter.complete(
-            sys, f"Topic: {topic}", temperature=0.7, max_tokens=200,
-            timeout=60).strip()
+        from llm.adapters import complete_with_retry
+        # Same generic retry as every other role: a reasoning-only
+        # or empty prompt reply repeats the task; only a validated
+        # prompt may reach the Tuzzina image execution path.
+        return complete_with_retry(
+            self._adapter, sys, f"Topic: {topic}",
+            temperature=0.7, max_tokens=200, timeout=60,
+            task="image_prompt").strip()
 
 
 class TuzzinaImageGenerator(ImageGenerator):
