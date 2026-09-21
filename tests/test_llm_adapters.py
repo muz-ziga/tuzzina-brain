@@ -1260,6 +1260,40 @@ class FencedJsonCase(unittest.TestCase):
         self.assertTrue(out.summary)
         self.assertEqual(len(out.findings), 1)
 
+    def test_unwrap_tolerates_trailing_brace(self):
+        # Live failure: model closed the JSON twice
+        # ({...}}) — the object is complete, only the tail is
+        # stray. The reply must be accepted, not retried.
+        from llm.adapters import unwrap_model_json
+        import json as _json
+        obj = _research_json()
+        self.assertEqual(unwrap_model_json(obj + "}"), obj)
+        self.assertEqual(
+            unwrap_model_json("Here you go:\n" + obj + "\nDone."), obj)
+
+    def test_unwrap_rejects_truncated(self):
+        # No balanced close: still invalid (never fabricate a
+        # repair, the retry layer asks the model again).
+        from llm.adapters import unwrap_model_json
+        import json as _json
+        obj = _research_json()
+        cut = obj[: len(obj) // 2]
+        self.assertEqual(unwrap_model_json(cut), cut)
+        self.assertEqual(unwrap_model_json("no braces here"),
+                         "no braces here")
+
+    def test_research_accepts_trailing_brace(self):
+        from research.models import OpenAIResearchModel, ResearchError
+        from contracts import SourceItem
+        it = SourceItem(source_id="g-1", source_type="rss",
+                        source_url="u", title="T", text="Body words.",
+                        item_id="g-1", content_hash="h")
+        model = OpenAIResearchModel(adapter=OpenAIAdapter("k", "m"))
+        out = model._validate(_research_json() + "}", [it], False)
+        self.assertEqual(len(out.findings), 1)
+        with self.assertRaises(ResearchError):
+            model._validate(_research_json()[:20], [it], False)
+
     def test_analysis_accepts_fenced(self):
         from research.analysis import OpenAIAnalysisModel
         from research.models import Finding, ResearchResult

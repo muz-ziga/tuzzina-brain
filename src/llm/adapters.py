@@ -205,25 +205,69 @@ def _structure_sketch(data: object) -> str:
     return ": " + _redact_secrets(sketch)[:_SKETCH_TOTAL_CHARS].strip()
 
 
+def _first_json_object(text: str) -> str:
+    """Extract the first balanced {...} object (string/escape
+    aware). Models sometimes close the JSON twice or append
+    trailing punctuation; the validators need the object the
+    model meant, not the stray tail. Returns "" when no
+    balanced object exists (truncated output stays invalid).
+    Never raises."""
+    try:
+        start = text.index("{")
+    except ValueError:
+        return ""
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return ""
+
+
 def unwrap_model_json(raw: str) -> str:
     """Strip markdown code fences around model JSON output.
     Some models wrap their JSON-only reply in ```json fences
     despite JSON-only instructions; the strict validators reject
     anything that is not parseable, so fences are removed here
-    before parsing. Returns the stripped text unchanged when no
-    fence is present. Never raises."""
+    before parsing. When the fenced/stripped text still does not
+    parse as one JSON value (e.g. a doubled closing brace or
+    trailing punctuation), fall back to the first balanced
+    object so a complete reply is not discarded for its tail.
+    Returns the stripped text unchanged when no fence is present
+    and no balanced object exists. Never raises."""
     try:
         text = (raw or "").strip()
-        if not text.startswith("```"):
-            return text
-        first_nl = text.find("\n")
-        if first_nl == -1:
-            return ""
-        text = text[first_nl + 1:]
-        last = text.rfind("```")
-        if last != -1:
-            text = text[:last]
-        return text.strip()
+        if text.startswith("```"):
+            first_nl = text.find("\n")
+            if first_nl == -1:
+                return ""
+            text = text[first_nl + 1:]
+            last = text.rfind("```")
+            if last != -1:
+                text = text[:last]
+            text = text.strip()
+        else:
+            try:
+                json.loads(text)
+                return text
+            except Exception:
+                pass
+        balanced = _first_json_object(text)
+        return balanced if balanced else text
     except Exception:
         return raw or ""
 
