@@ -650,6 +650,7 @@ def run_research_stage(ctx: dict) -> dict:
     from research.cycle import (ClaimFailed, CycleResult,
                                 claim_collected_items,
                                 collect_all_sources)
+    from research.models import MAX_ITEMS
     store, cfg = ctx["store"], ctx["cfg"]
     client, run_id = ctx["client"], ctx["run_id"]
     out = CycleResult()
@@ -686,7 +687,12 @@ def run_research_stage(ctx: dict) -> dict:
         # research-off path exactly.
         for res in pending:
             res.commit(store)
-        return {"items": _to_jsonable(out.items),
+        # Carry at most what the research LLM would read
+        # (MAX_ITEMS): the full collection (up to 80 items x
+        # ~4KB) bursts the 512KB stage envelope and kills the
+        # run with oversize payload. Claims stay held; execute
+        # releases them. items_new keeps the discovery count.
+        return {"items": _to_jsonable(out.items[:MAX_ITEMS]),
                 "research": None,
                 "claimed": list(out.claimed),
                 "committed": True,
@@ -703,7 +709,7 @@ def run_research_stage(ctx: dict) -> dict:
         raise
     for res in pending:
         res.commit(store)
-    return {"items": _to_jsonable(out.items),
+    return {"items": _to_jsonable(out.items[:MAX_ITEMS]),
             "research": _to_jsonable(result),
             "claimed": list(out.claimed),
             "committed": True,

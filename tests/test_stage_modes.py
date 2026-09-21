@@ -27,7 +27,8 @@ from research.models import _trace_id
 from stage_run import (_as_opportunity, _as_research_result,
                        _as_source_item, _to_jsonable, main_stage,
                        run_analysis_stage, run_execute_stage,
-                       run_prompt_stage, run_text_stage)
+                       run_prompt_stage, run_research_stage,
+                       run_text_stage)
 
 
 class ScriptAdapter:
@@ -397,6 +398,46 @@ class StageModeErrorPathCase(unittest.TestCase):
         self.assertEqual(rc, 0)
         env = _json.loads(buf.getvalue().strip()[len("BRAIN_STAGE "):])
         self.assertEqual(env["status"], "TERMINAL_FAILURE")
+
+
+class ResearchPayloadCapCase(unittest.TestCase):
+    def test_full_collection_trimmed_to_max_items(self):
+        # Regression: a campaign collecting up to 80 items
+        # (~4KB each) burst the 512KB stage envelope and died
+        # with oversize payload. The research LLM only ever
+        # reads MAX_ITEMS, so the stage carries exactly those;
+        # items_new keeps the discovery count, claims stay held.
+        import research.cycle as _cyc
+        from contracts import SourceItem
+        from research.models import MAX_ITEMS, ResearchResult
+        real_collect = _cyc.collect_all_sources
+
+        def fake_collect(sources, store, now, out, pending):
+            for i in range(MAX_ITEMS * 4):
+                out.items.append(SourceItem(
+                    source_id="s-%d" % i, source_type="website",
+                    source_url="https://x/%d" % i,
+                    title="t-%d" % i, text="w" * 4000))
+
+        class Model:
+            def research(self, items, cfg):
+                return ResearchResult(
+                    summary="s", findings=[], topics=[],
+                    entities=[], item_ids=[], model="stub",
+                    meta={})
+
+        ctx = {"store": object(), "cfg": {},
+               "client": object(), "run_id": "r-1",
+               "sources": [{"type": "website", "url": "https://x"}],
+               "now": "t", "research_model": Model()}
+        _cyc.collect_all_sources = fake_collect
+        try:
+            payload = run_research_stage(ctx)
+        finally:
+            _cyc.collect_all_sources = real_collect
+        self.assertEqual(payload["items_new"], MAX_ITEMS * 4)
+        self.assertLessEqual(len(payload["items"]), MAX_ITEMS)
+        self.assertLess(len(json.dumps(payload)), 512 * 1024)
 
 
 class CliCase(unittest.TestCase):
