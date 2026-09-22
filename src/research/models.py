@@ -266,6 +266,20 @@ class OpenAIResearchModel(ResearchModel):
             raise ResearchError(f"model-error: {e}")
         return self._validate(raw, items, truncated, contract_id)
 
+    def agent_turn(self, system: str, user: str,
+                   *, timeout: int = 90,
+                   max_tokens: int = 1500) -> str:
+        """ONE agent-loop turn: transport only, NO contract
+        validation here. The loop owns turn validation (it counts
+        malformed turns and can adapt), so this call retries only
+        transport/classified failures — never a contract failure.
+        Phase 2: used exclusively by the research agent path."""
+        from llm.adapters import complete_with_retry
+        return complete_with_retry(
+            self._adapter, system, user,
+            temperature=0.2, max_tokens=max_tokens, timeout=timeout,
+            task="research_agent")
+
     def _validate(self, raw: str, items: list,
                   truncated: bool,
                   contract_id: str = "legacy-v1") -> ResearchResult:

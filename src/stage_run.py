@@ -923,6 +923,181 @@ def _opp_pseudo_findings(opportunity, items) -> list:
     return out
 
 
+def _research_agent_skill(cfg: dict):
+    """The assigned research skill doc when it declares a CUSTOM
+    semantic contract. Absent contract means the frozen legacy
+    path (unchanged behavior), so this returns None."""
+    from skills.loader import get_skill
+    campaign_skills = cfg.get("skills") if isinstance(cfg, dict) \
+        else None
+    doc = get_skill("research",
+                    (campaign_skills or {}).get("research"))
+    if doc.get("contract_id") != "custom" or not doc.get("contract"):
+        return None
+    return doc
+
+
+def _agent_discovered_items(history) -> list:
+    """SourceItem-shaped dicts for everything the agent discovered
+    through capabilities (typed records already match the stage
+    item shape). Used for evidence, dedupe, and downstream
+    citation; never treated as instructions."""
+    out = []
+    for entry in history or []:
+        if not isinstance(entry, dict):
+            continue
+        result = entry.get("result")
+        if not isinstance(result, dict) or not result.get("ok"):
+            continue
+        for rec in result.get("items") or []:
+            if isinstance(rec, dict) and rec.get("item_id"):
+                out.append(rec)
+    return out
+
+
+def _mark_discovered_seen(store, items, now: str) -> None:
+    """Dedupe bookkeeping for agent-discovered material: the same
+    canonical identity a later discovery would produce, committed
+    under one agent source id so a later cycle does not rediscover
+    the same pages. Best-effort: bookkeeping never fails a run."""
+    if not items:
+        return
+    try:
+        from research.monitor import classify_candidates
+        source_id = "discovery-agent"
+        candidates = [{"carrier": it, "item_id": it.get("item_id", ""),
+                       "content_hash": "",
+                       "published_at": it.get("published_at", "")}
+                      for it in items if it.get("item_id")]
+        _classified, pending = classify_candidates(
+            source_id, candidates, store.load(source_id), now)
+        pending.commit(store)
+    except Exception:
+        pass
+
+
+def _research_agent_payload(ctx, out, roles, skills, store,
+                            pending, dry_run) -> dict:
+    """Phase 2 research path: the agent loop owns the decision
+    (capability calls, or a declared final outcome). Emptiness is
+    data here — the agent is invoked with `items = []` exactly as
+    with items; there is no empty-input branch on this path."""
+    from research import agent_loop, tools
+    from research.models import MAX_ITEMS, ResearchError
+    cfg = ctx["cfg"]
+    skill_doc = _research_agent_skill(cfg)
+    contract = skill_doc["contract"]
+    try:
+        tool_limits = tools.enabled_tools(cfg.get("capabilities"))
+    except tools.ToolError as e:
+        raise ResearchError("capabilities-invalid:" + str(e))
+    budget = agent_loop.campaign_tool_budget(cfg.get("budgets"))
+    model = ctx.get("research_model")
+    if not hasattr(model, "agent_turn"):
+        raise ResearchError("research-model-cannot-run-agent")
+
+    def _invoke(system: str, user: str) -> str:
+        return model.agent_turn(system, user)
+
+    loop = agent_loop.run_loop(
+        invoke=_invoke, skill_doc=skill_doc, contract=contract,
+        tool_names=list(tool_limits), tool_limits=tool_limits,
+        tool_calls=budget, items=out.items, now=str(ctx.get("now") or ""))
+
+    error = loop.get("error") or ""
+    if error and error != "budget_exhausted":
+        # Real failure (malformed turns, exhausted liveness,
+        # transport): loud, and the stage retry contract applies.
+        raise ResearchError("research-agent:" + error)
+    if error == "budget_exhausted" and not loop.get("outcome"):
+        # Policy outcome: the campaign budget is spent. A clean
+        # stop, never an exception (design: stop(budget_exhausted)).
+        for res in pending:
+            res.commit(store)
+        return {"items": [], "research": None, "claimed": [],
+                "committed": True,
+                "sources_checked": len(out.sources),
+                "items_new": len(out.items),
+                "discovery": _to_jsonable(out.sources),
+                "roles": roles,
+                "roles_resolved": ctx.get("roles_resolved") or [],
+                "skills_used": skills, "queued": False,
+                "outcome": None,
+                "agent_usage": loop.get("usage") or {},
+                "agent_stop": "budget_exhausted"}
+
+    discovered = _agent_discovered_items(loop.get("history"))
+    all_items = (_to_jsonable(out.items[:MAX_ITEMS]) + discovered)
+    if not dry_run:
+        _mark_discovered_seen(store, discovered,
+                              str(ctx.get("now") or ""))
+    for res in pending:
+        res.commit(store)
+
+    artifacts = loop.get("artifacts") or {}
+    findings = artifacts.get("findings")
+    has_findings = isinstance(findings, list) and len(findings) > 0
+
+    if not has_findings and not dry_run:
+        # Nothing usable: same unpublished-queue fallback the
+        # legacy starving cycle uses, so material that failed to
+        # post earlier is retried instead of dropped.
+        take = _queue_take(ctx["client"])
+        if take is not None:
+            result, qitems = take
+            return {"items": _to_jsonable(qitems),
+                    "research": _to_jsonable(result),
+                    "claimed": list(out.claimed),
+                    "committed": True,
+                    "sources_checked": len(out.sources),
+                    "items_new": len(out.items),
+                    "discovery": _to_jsonable(out.sources),
+                    "roles": roles,
+                    "roles_resolved": ctx.get("roles_resolved") or [],
+                    "skills_used": skills, "queued": True,
+                    "outcome": loop.get("outcome"),
+                    "agent_usage": loop.get("usage") or {}}
+
+    if not has_findings:
+        # Declared no-material outcome (or dry run): clean stop.
+        return {"items": [], "research": None,
+                "claimed": list(out.claimed), "committed": True,
+                "sources_checked": len(out.sources),
+                "items_new": len(out.items),
+                "discovery": _to_jsonable(out.sources),
+                "roles": roles,
+                "roles_resolved": ctx.get("roles_resolved") or [],
+                "skills_used": skills, "queued": False,
+                "outcome": loop.get("outcome"),
+                "agent_usage": loop.get("usage") or {}}
+
+    research = {
+        "summary": str(artifacts.get("summary") or "")[:1000],
+        "findings": [f for f in findings if isinstance(f, dict)],
+        "topics": [str(t)[:60] for t in (artifacts.get("topics") or [])
+                   if isinstance(t, str)][:10],
+        "entities": [str(e)[:60] for e in (artifacts.get("entities") or [])
+                     if isinstance(e, str)][:10],
+        "item_ids": sorted({str(i.get("item_id"))
+                            for i in all_items
+                            if isinstance(i, dict) and i.get("item_id")}),
+        "model": "agent",
+        "meta": {"outcome": loop.get("outcome"),
+                 "usage": loop.get("usage") or {}},
+    }
+    return {"items": all_items[:MAX_ITEMS * 2],
+            "research": research,
+            "claimed": list(out.claimed), "committed": True,
+            "sources_checked": len(out.sources),
+            "items_new": len(out.items),
+            "discovery": _to_jsonable(out.sources),
+            "roles": roles,
+            "roles_resolved": ctx.get("roles_resolved") or [],
+            "skills_used": skills, "queued": False,
+            "outcome": loop.get("outcome"),
+            "agent_usage": loop.get("usage") or {}}
+
+
 def run_research_stage(ctx: dict) -> dict:
     """Collect + claim + research LLM. Commits collection state
     on success (mirrors the legacy cycle); on failure nothing is
@@ -954,6 +1129,13 @@ def run_research_stage(ctx: dict) -> dict:
         roles = list(SKILL_TYPES)
     skills = [_trace_skill("research", cfg)] \
         if "research" in roles else []
+    # Phase 2 split: a research skill declaring a CUSTOM semantic
+    # contract runs the generic agent loop (capability calls, no
+    # empty-input branch). Every other skill keeps the frozen
+    # legacy path below, byte-identical to before.
+    if "research" in roles and _research_agent_skill(cfg) is not None:
+        return _research_agent_payload(
+            ctx, out, roles, skills, store, pending, dry_run)
     if not out.items:
         for res in pending:
             res.commit(store)
