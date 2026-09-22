@@ -28,7 +28,7 @@ from stage_run import (_as_opportunity, _as_research_result,
                        _as_source_item, _to_jsonable, main_stage,
                        run_analysis_stage, run_execute_stage,
                        run_prompt_stage, run_research_stage,
-                       run_text_stage)
+                       run_text_stage, STAGE_BASE_KEYS)
 
 
 class ScriptAdapter:
@@ -438,6 +438,48 @@ class ResearchPayloadCapCase(unittest.TestCase):
         self.assertEqual(payload["items_new"], MAX_ITEMS * 4)
         self.assertLessEqual(len(payload["items"]), MAX_ITEMS)
         self.assertLess(len(json.dumps(payload)), 512 * 1024)
+
+
+class AnalysisSeesResearchCase(unittest.TestCase):
+    def test_base_keys_carry_research(self):
+        # Regression: "research" was missing from the carried
+        # keys, so analysis always read an empty result and every
+        # run ended as a no-findings no-op no matter what the
+        # research agent found.
+        self.assertIn("research", STAGE_BASE_KEYS)
+
+    def test_analysis_honors_carried_research(self):
+        # The carried research findings must drive the verdict:
+        # a FACT finding means eligible, not no-findings.
+        from contracts import SourceItem
+        from research.analysis import MockAnalysisModel
+        from research.models import Finding, ResearchResult
+        it = SourceItem(source_id="g-1", source_type="website",
+                        source_url="https://x/1", title="T",
+                        text="Body words.", item_id="g-1",
+                        content_hash="h")
+
+        class Client:
+            def release_claim(self, key, run_id):
+                pass
+
+        ctx = {"client": Client(), "run_id": "r-1",
+               "cfg": {"brand": {"tone": "direct",
+                                 "audience": "producers"},
+                       "language": {"default": "en"},
+                       "pillars": [], "media": {}},
+               "research": _to_jsonable(ResearchResult(
+                   summary="S",
+                   findings=[Finding(
+                       statement="Fact words", kind="fact",
+                       confidence="high", item_ids=["g-1"],
+                       excerpt="Fact")],
+                   topics=["t"], entities=[], item_ids=["g-1"],
+                   model="stub", meta={})),
+               "items": [_to_jsonable(it)], "claimed": [],
+               "analysis_model": MockAnalysisModel()}
+        payload = run_analysis_stage(ctx)
+        self.assertTrue(payload["opportunity"]["eligible"])
 
 
 class CliCase(unittest.TestCase):

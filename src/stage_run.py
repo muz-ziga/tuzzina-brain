@@ -40,6 +40,13 @@ import uuid
 
 STAGE_ORDER = ("research", "analysis", "text", "prompt", "execute")
 
+# Prior-stage outputs carried into a stage's context. Every key
+# a downstream stage reads must appear here: analysis reads
+# "research" (its verdict needs the findings), so dropping it
+# silently starves analysis into a permanent no-findings no-op.
+STAGE_BASE_KEYS = ("opportunity", "research", "items", "text",
+                   "prompt", "claimed")
+
 SUCCESS = "SUCCESS"
 RETRYABLE = "RETRYABLE_STAGE_FAILURE"
 TERMINAL = "TERMINAL_FAILURE"
@@ -304,8 +311,7 @@ def _stage_ctx(args, run_id: str, base: dict | None = None) -> dict:
 
     ctx["claimer"] = None if args.dry_run else _claimer
     if isinstance(base, dict):
-        for key in ("opportunity", "items", "text", "prompt",
-                    "claimed"):
+        for key in STAGE_BASE_KEYS:
             if key in base:
                 ctx[key] = base[key]
     return ctx
