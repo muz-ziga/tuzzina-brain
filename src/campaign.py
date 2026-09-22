@@ -73,6 +73,7 @@ def load_campaign(path: str) -> dict:
     lang = cfg.get("language") or {}
     hs = cfg.get("hashtags") or {}
     sched = cfg.get("schedule") or {}
+    flow = cfg.get("flow") or {}
     return {
         "brand": {
             "name": str(brand["name"]).strip(),
@@ -99,4 +100,8 @@ def load_campaign(path: str) -> dict:
                      "times": list(sched.get("times") or [])},
         "skills": clean_skills,
         "roles": clean_roles,
+        # Flow identity passthrough (evidence only in Phase 1:
+        # routing still follows the default map in code; the id
+        # records which map version the trigger resolved).
+        "flow": dict(flow) if isinstance(flow, dict) else {},
     }

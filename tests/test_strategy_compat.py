@@ -104,6 +104,19 @@ class RoundtripTest(unittest.TestCase):
         self.assertEqual(list(back.visual.visual_rules),
                          ["no text overlays"])
 
+    def test_media_prefer_parses_and_rejects_garbage(self):
+        from channels.strategy_store import _from_yaml_dict
+        s = _from_yaml_dict({"integration_id": "x",
+                             "strategy": {"media": {
+                                 "min_items": 1,
+                                 "prefer": "image"}}})
+        self.assertEqual(s.media.min_items, 1)
+        self.assertEqual(s.media.prefer, "image")
+        with self.assertRaises(ValueError):
+            _from_yaml_dict({"integration_id": "x",
+                             "strategy": {"media": {
+                                 "prefer": "hologram"}}})
+
     def test_invalid_new_fields_fail_closed(self):
         from channels.strategy_store import _from_yaml_dict
         with self.assertRaises(ValueError):
@@ -139,6 +152,24 @@ class MergeTest(unittest.TestCase):
                                channel_meta={"identifier": "facebook"})
         self.assertEqual(cfg["language"]["default"], "ar")
         self.assertEqual(cfg["language"]["output_override"], "fr")
+
+    def test_media_merges_under_media_key(self):
+        # Regression: the merge emitted "media_policy" while every
+        # reader (analysis _policy_view, generation video_config,
+        # legacy run path) reads "media" — the section was dead.
+        # The merged key is the single contract between writer and
+        # readers; "media_policy" must never reappear.
+        from channels.strategy import MediaPolicy
+        s = _strategy(media=MediaPolicy(min_items=1, prefer="image"))
+        cfg = resolve_strategy(_project(), s,
+                               channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["media"],
+                         {"min_items": 1, "prefer": "image"})
+        self.assertNotIn("media_policy", cfg)
+        from research.analysis import _policy_view
+        self.assertEqual(
+            _policy_view(cfg)["media"],
+            {"min_items": 1, "prefer": "image"})
 
     def test_no_provider_fields_introduced(self):
         s = _strategy(
@@ -311,7 +342,7 @@ class SourcesTest(unittest.TestCase):
                             "url": "https://t.test/feed", "n": 3}],
                "sources_from": "channel",
                "channel_meta": {"identifier": "facebook"},
-               "media_policy": {}}
+               "media": {}}
         rc = run_mod._execute(cfg, "--mock", DeadClient(),
                               "integ-1", "draft", True)
         self.assertEqual(rc, 2)

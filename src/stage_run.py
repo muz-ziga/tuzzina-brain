@@ -248,15 +248,20 @@ def _echo_roles() -> list:
 
 def _trace_skill(skill_type: str, cfg: dict):
     """Skill traceability fragment for one stage (mirrors
-    run_cycle._main per-stage resolution)."""
+    run_cycle._main per-stage resolution). Records the resolved
+    semantic contract and flow ids so run evidence shows exactly
+    which behavior version produced each stage (never silent)."""
     from skills.loader import get_skill
     campaign_skills = cfg.get("skills") if isinstance(
         cfg, dict) else None
     skill = get_skill(skill_type,
                       (campaign_skills or {}).get(skill_type))
+    flow = (cfg.get("flow") or {}) if isinstance(cfg, dict) else {}
     return {"stage": skill_type, "type": skill_type,
             "id": skill["id"], "version": skill["version"],
-            "source": skill.get("source", "default")}
+            "source": skill.get("source", "default"),
+            "contract": skill.get("contract_id", "legacy-v1"),
+            "flow": str(flow.get("version") or "default-v1")}
 
 
 def _classify_terminal(err: object) -> bool:

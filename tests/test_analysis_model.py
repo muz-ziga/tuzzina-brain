@@ -287,6 +287,22 @@ class OpenAIRoleCase(unittest.TestCase):
         with self.assertRaises(AnalysisError):
             OpenAIAnalysisModel("k").analyze(self._result(), policy())
 
+    def test_custom_contract_skips_floors(self):
+        # Custom contract: eligible=true with empty facts passes
+        # shape (bool + lists); legacy-v1 still rejects it.
+        from research.analysis import AnalysisError
+        body = json.loads(json.loads(_openai_body())["choices"][0]["message"]["content"])
+        body["facts"] = []
+        raw = json.dumps({"choices": [{"message": {"content": json.dumps(body)}}]})
+        import research.analysis as _am
+        real = _am.OpenAIAnalysisModel._validate
+        out = real(
+            _am.OpenAIAnalysisModel("k"), raw, {"g-1"}, False, "custom")
+        self.assertTrue(out.eligible)
+        with self.assertRaises(AnalysisError):
+            real(_am.OpenAIAnalysisModel("k"), raw, {"g-1"}, False,
+                 "legacy-v1")
+
     def test_empty_research_ineligible_without_llm(self):
         calls = []
 

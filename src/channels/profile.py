@@ -122,13 +122,19 @@ def resolve_strategy(project_cfg: dict, strategy,
         sources_from = "campaign"
 
     mentions = {"style": (strategy.mentions.style
-                          if _is_set_s(strategy.mentions.style)
-                          else "inline")}
+                        if _is_set_s(strategy.mentions.style)
+                        else "inline")}
+    # Merged under "media" (not "media_policy"): this is the key
+    # analysis (_policy_view), generation (video_config), and the
+    # legacy run path all read. A second name would silently
+    # disconnect the strategy section from every reader.
     media = {}
     if _is_set_s(strategy.media.min_items):
         media["min_items"] = int(strategy.media.min_items)
     if _is_set_s(strategy.media.max_items):
         media["max_items"] = int(strategy.media.max_items)
+    if _is_set_s(strategy.media.prefer):
+        media["prefer"] = str(strategy.media.prefer).strip().lower()
 
     # Content/generation/visual policy: channel strategy is the
     # source (campaign carries none today); absent stays default.
@@ -158,7 +164,7 @@ def resolve_strategy(project_cfg: dict, strategy,
     out["sources"] = sources
     out["sources_from"] = sources_from
     out["mentions"] = mentions
-    out["media_policy"] = media
+    out["media"] = media
     out["content"] = content
     out["generation"] = generation
     out["visual"] = visual

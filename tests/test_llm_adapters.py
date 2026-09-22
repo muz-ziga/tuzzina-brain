@@ -1294,6 +1294,28 @@ class FencedJsonCase(unittest.TestCase):
         with self.assertRaises(ResearchError):
             model._validate(_research_json()[:20], [it], False)
 
+    def test_research_custom_contract_skips_floors(self):
+        # Custom contract: shape holds (ids ⊆ known) but legacy
+        # floors (enum membership, non-empty summary) do not apply.
+        import json as _json
+        from research.models import OpenAIResearchModel
+        from contracts import SourceItem
+        it = SourceItem(source_id="g-1", source_type="rss",
+                        source_url="u", title="T", text="Body words.",
+                        item_id="g-1", content_hash="h")
+        model = OpenAIResearchModel(adapter=OpenAIAdapter("k", "m"))
+        raw = _json.dumps({"summary": "", "findings": [{
+            "statement": "S", "kind": "weird-kind",
+            "confidence": "maybe", "item_ids": ["g-1"],
+            "excerpt": "E"}], "topics": [], "entities": []})
+        out = model._validate(raw, [it], False, "custom")
+        self.assertEqual(len(out.findings), 1)
+        self.assertEqual(out.findings[0].kind, "weird-kind")
+        # Same payload under legacy-v1 still fails the floors.
+        from research.models import ResearchError
+        with self.assertRaises(ResearchError):
+            model._validate(raw, [it], False, "legacy-v1")
+
     def test_research_accepts_empty_findings(self):
         # Legitimate outcome (no item met the skill rules):
         # kept as data so analysis stops cleanly, never retried.

@@ -131,7 +131,9 @@ def _execute(cfg: dict, mode: str, client: TuzzinaClient,
         print("no content extracted; nothing to do")
         return 1
     # Media policy (strategy) + adapter bounds (platform).
-    media_policy = cfg.get("media_policy") or {}
+    # Reads the merged "media" key (see channels.profile):
+    # "media_policy" was a dead alias nothing wrote.
+    media_policy = cfg.get("media") or {}
     kept: list[ContentPackage] = []
     for pkg in packages:
         try:

@@ -54,6 +54,43 @@ class LoaderCase(unittest.TestCase):
             (skill["id"], skill["version"], skill["enabled"]),
             ("text-x1", 3, True))
         self.assertIn("Do the thing", skill["instructions"])
+        # No contract block: explicit legacy-v1, never silent.
+        self.assertIsNone(skill["contract"])
+        self.assertEqual(skill["contract_id"], "legacy-v1")
+
+    def test_contract_block_accepted(self):
+        doc = _doc()
+        doc["config"] = {"contract": {
+            "version": 1,
+            "outcomes": {
+                "findings": {"keys": {"summary": "string",
+                                      "findings": "list"}},
+                "no_material": {"keys": {"summary": "string"}}},
+            "id_refs": ["findings"]}}
+        _write(self.tmp, "text.yaml", doc)
+        skill = get_skill("text")
+        self.assertEqual(skill["contract_id"], "custom")
+        self.assertEqual(
+            skill["contract"]["outcomes"]["no_material"],
+            {"keys": {"summary": "string"}})
+        self.assertEqual(skill["contract"]["id_refs"], ["findings"])
+
+    def test_contract_malformed_fails_closed(self):
+        for bad in ({"version": 2, "outcomes": {"a": {"keys": {"x": "string"}}}},
+                    {"version": 1, "outcomes": {}},
+                    {"version": 1,
+                     "outcomes": {"a": {"keys": {"x": "nonsense"}}}},
+                    {"version": 1,
+                     "outcomes": {"a": {"keys": {}}}},
+                    {"version": 1,
+                     "outcomes": "nope"},
+                    "nope"):
+            doc = _doc()
+            doc["config"] = {"contract": bad}
+            _write(self.tmp, "text.yaml", doc)
+            clear_cache()
+            with self.assertRaises(SkillError):
+                get_skill("text")
 
     def test_unknown_type_fails_closed(self):
         with self.assertRaises(SkillError):

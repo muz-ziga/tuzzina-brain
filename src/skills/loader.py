@@ -57,6 +57,16 @@ COMPANION_MARKER = "---COMPANION---"
 _REQUIRED = ("id", "name", "type", "version", "instructions")
 _OPTIONAL = ("enabled", "config")
 
+# Canonical semantic-contract schema (single shape — R2 decision).
+# Lives under config.contract so no top-level key is added and no
+# migration is needed. Absent contract resolves to "legacy-v1"
+# (frozen current floors, recorded in evidence — never silent).
+# Runtime understands only keys/types/sizes/set-membership here;
+# any semantic floor stays inside legacy-v1 or skill text.
+CONTRACT_VERSION = 1
+CONTRACT_TYPES = ("string", "string[]", "boolean", "number", "list")
+LEGACY_CONTRACT_ID = "legacy-v1"
+
 
 class SkillError(ValueError):
     """Skill misuse: missing/disabled/invalid skill document or
@@ -129,11 +139,62 @@ def _load_document(skill_type: str, name=None) -> dict:
     config = doc.get("config", {})
     if not isinstance(config, dict):
         raise SkillError(f"invalid-skill:{skill_type}:config")
+    contract, contract_id = _load_contract(config, skill_type)
     return {"id": doc["id"].strip(), "name": doc["name"].strip(),
             "type": skill_type, "version": doc["version"],
             "enabled": enabled,
             "instructions": doc["instructions"].strip(),
-            "config": dict(config)}
+            "config": dict(config), "contract": contract,
+            "contract_id": contract_id}
+
+
+def _load_contract(config: dict, skill_type: str) -> tuple:
+    """Validate the optional config.contract block (structure
+    only: version/outcomes/keys/types/id_refs). Absent means
+    "legacy-v1" (current floors, frozen and labeled). Malformed
+    means SkillError (fail-closed, like every other misuse)."""
+    raw = config.get("contract")
+    if raw is None:
+        return None, LEGACY_CONTRACT_ID
+    if not isinstance(raw, dict):
+        raise SkillError(f"invalid-contract:{skill_type}:not-mapping")
+    version = raw.get("version", CONTRACT_VERSION)
+    if version != CONTRACT_VERSION:
+        raise SkillError(
+            f"invalid-contract:{skill_type}:unsupported-version")
+    outcomes = raw.get("outcomes")
+    if not isinstance(outcomes, dict) or not outcomes:
+        raise SkillError(
+            f"invalid-contract:{skill_type}:outcomes-required")
+    clean_outcomes = {}
+    for name, spec in outcomes.items():
+        if not isinstance(name, str) or not name.strip():
+            raise SkillError(
+                f"invalid-contract:{skill_type}:bad-outcome-name")
+        if not isinstance(spec, dict):
+            raise SkillError(
+                f"invalid-contract:{skill_type}:bad-outcome-spec")
+        keys = spec.get("keys")
+        if not isinstance(keys, dict) or not keys:
+            raise SkillError(
+                f"invalid-contract:{skill_type}:keys-required")
+        for key, typ in keys.items():
+            if not isinstance(key, str) or not key.strip():
+                raise SkillError(
+                    f"invalid-contract:{skill_type}:bad-key-name")
+            if typ not in CONTRACT_TYPES:
+                raise SkillError(
+                    f"invalid-contract:{skill_type}:bad-key-type")
+        clean_outcomes[name.strip()] = {
+            "keys": dict(keys)}
+    id_refs = raw.get("id_refs", [])
+    if not isinstance(id_refs, list) or \
+            not all(isinstance(x, str) and x.strip()
+                    for x in id_refs):
+        raise SkillError(f"invalid-contract:{skill_type}:bad-id-refs")
+    return ({"version": CONTRACT_VERSION,
+             "outcomes": clean_outcomes,
+             "id_refs": [x.strip() for x in id_refs]}, "custom")
 
 
 def get_skill(skill_type: str, assignment=None) -> dict:

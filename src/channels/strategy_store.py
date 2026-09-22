@@ -128,7 +128,8 @@ def _to_yaml_dict(s: ChannelStrategy) -> dict:
         strat["links_policy"] = s.links_policy
     if _is_set(s.mentions.style):
         strat["mentions"] = {"style": s.mentions.style}
-    if _is_set(s.media.min_items) or _is_set(s.media.max_items):
+    if _is_set(s.media.min_items) or _is_set(s.media.max_items) \
+            or _is_set(s.media.prefer):
         strat["media"] = _media_to(s.media)
     if _is_set(s.visual.visual_rules) or _is_set(s.visual.video_rules):
         strat["visual"] = _visual_to(s.visual)
@@ -209,6 +210,8 @@ def _media_to(m) -> dict:
         out["min_items"] = int(m.min_items)
     if _is_set(m.max_items):
         out["max_items"] = int(m.max_items)
+    if _is_set(m.prefer):
+        out["prefer"] = str(m.prefer).strip().lower()
     return out
 
 
@@ -404,9 +407,21 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
     md = strat_cfg.get("media") or {}
     if not isinstance(md, dict):
         raise _err("'strategy.media' must be a mapping")
+    prefer = _opt_str(md.get("prefer"))
+    if _is_set(prefer):
+        if not isinstance(prefer, str):
+            raise _err("'strategy.media.prefer' must be "
+                       "image|video|none")
+        prefer = prefer.strip().lower()
+        if prefer not in ("image", "video", "none"):
+            raise _err("'strategy.media.prefer' must be "
+                       "image|video|none")
+    else:
+        prefer = _MISSING
     media = MediaPolicy(
         min_items=_opt_int(md.get("min_items")),
         max_items=_opt_int(md.get("max_items")),
+        prefer=prefer,
     )
 
     vi = strat_cfg.get("visual") or {}

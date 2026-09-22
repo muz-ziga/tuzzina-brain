@@ -232,9 +232,14 @@ class OpenAIResearchModel(ResearchModel):
         from skills.loader import get_skill
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
-        prompt += "\n\n" + get_skill(
+        skill_doc = get_skill(
             "research",
-            (campaign_skills or {}).get("research"))["instructions"]
+            (campaign_skills or {}).get("research"))
+        prompt += "\n\n" + skill_doc["instructions"]
+        # Semantic floors follow the skill's declared contract
+        # ("legacy-v1" when absent: frozen current behavior,
+        # recorded in evidence). Structural shape always applies.
+        contract_id = skill_doc.get("contract_id", "legacy-v1")
         body_text = "\n\n---\n\n".join(blocks)
 
         def _check(raw: str) -> None:
@@ -243,7 +248,7 @@ class OpenAIResearchModel(ResearchModel):
             # reasoning-only / malformed / schema-invalid reply
             # repeats the SAME task instead of failing the run.
             try:
-                self._validate(raw, items, truncated)
+                self._validate(raw, items, truncated, contract_id)
             except ResearchError:
                 from llm.adapters import LLMError
                 raise LLMError("invalid-output")
@@ -259,13 +264,20 @@ class OpenAIResearchModel(ResearchModel):
             raise ResearchError("model-timeout")
         except LLMError as e:
             raise ResearchError(f"model-error: {e}")
-        return self._validate(raw, items, truncated)
+        return self._validate(raw, items, truncated, contract_id)
 
     def _validate(self, raw: str, items: list,
-                  truncated: bool) -> ResearchResult:
+                  truncated: bool,
+                  contract_id: str = "legacy-v1") -> ResearchResult:
         # The chat API wraps our JSON in an envelope; unwrap exactly
         # one level, then validate strictly. Anything else is
         # invalid output (never coerced, never trusted).
+        #
+        # Split contract: structural shape ALWAYS applies (types,
+        # keys, sizes, id-set membership of item_ids). Semantic
+        # floors (vocabularies, non-emptiness) apply ONLY under
+        # "legacy-v1" (frozen, recorded in evidence); custom
+        # contracts carry their own meaning.
         from llm.adapters import unwrap_model_json
         try:
             data = json.loads(unwrap_model_json(raw))
@@ -297,12 +309,12 @@ class OpenAIResearchModel(ResearchModel):
             conf = f.get("confidence")
             ids = f.get("item_ids")
             stmt = f.get("statement")
-            if kind not in (FACT, INFERENCE) or \
-                    conf not in (HIGH, MEDIUM, LOW) or \
-                    not isinstance(ids, list) or not ids or \
+            if not isinstance(kind, str) or \
+                    not isinstance(conf, str) or \
+                    not isinstance(ids, list) or \
                     not all(isinstance(i, str) and i in known
                             for i in ids) or \
-                    not isinstance(stmt, str) or not stmt.strip():
+                    not isinstance(stmt, str):
                 raise ResearchError("invalid-output")
             excerpt = f.get("excerpt", "")
             findings.append(Finding(
@@ -310,6 +322,11 @@ class OpenAIResearchModel(ResearchModel):
                 item_ids=list(ids),
                 excerpt=excerpt[:300] if isinstance(excerpt, str)
                 else ""))
+        if contract_id == "legacy-v1":
+            from research.legacy_contract import research_floors
+            research_floors(data, known, (
+                FACT, INFERENCE, HIGH, MEDIUM, LOW, MAX_FINDINGS,
+                ResearchError))
         topics = data.get("topics", [])
         entities = data.get("entities", [])
         if not isinstance(topics, list) or not isinstance(entities, list) \
@@ -317,7 +334,7 @@ class OpenAIResearchModel(ResearchModel):
                 not all(isinstance(e, str) for e in entities):
             raise ResearchError("invalid-output")
         summary = data.get("summary", "")
-        if not isinstance(summary, str) or not summary.strip():
+        if not isinstance(summary, str):
             raise ResearchError("invalid-output")
         earliest, latest = _date_range(items)
         return ResearchResult(

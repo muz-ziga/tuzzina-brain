@@ -16,8 +16,8 @@ Contract notes:
 - `policy` is a plain Brain-vocabulary dict the caller assembles,
   e.g. {"brand": {...}, "language": {"default": "ar"},
   "pillars": [...], "generation": {...}, "media": {...}}.
-  Pillars/generation live in campaign + ChannelStrategy; the
-  resolved run cfg carries brand/language/media_policy. Only
+  Pillars/generation/media live in campaign + ChannelStrategy;
+  the resolved run cfg carries brand/language/media. Only
   allowlisted policy keys are ever read (anything provider-shaped
   is ignored by construction, asserted in tests).
 - Media intent: "none" | "image" | "video". Explicit
@@ -82,6 +82,9 @@ def _tokens(s: str) -> set[str]:
 
 
 def _policy_view(policy) -> dict:
+    # Reads policy["media"]: the merged key channels.profile
+    # emits (strategy.media.prefer/min_items). Any other key
+    # name silently disconnects the section.
     if not isinstance(policy, dict):
         raise AnalysisError("invalid-policy")
     brand = policy.get("brand") or {}
@@ -303,9 +306,13 @@ class OpenAIAnalysisModel(AnalysisModel):
         from skills.loader import get_skill
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
-        context += "\n\n" + get_skill(
+        skill_doc = get_skill(
             "analysis",
-            (campaign_skills or {}).get("analysis"))["instructions"]
+            (campaign_skills or {}).get("analysis"))
+        context += "\n\n" + skill_doc["instructions"]
+        # Same split as research: structure always, semantic
+        # floors only under "legacy-v1" (frozen, recorded).
+        contract_id = skill_doc.get("contract_id", "legacy-v1")
         recent = policy.get("recent_topics") \
             if isinstance(policy, dict) else None
         if isinstance(recent, list) and recent:
@@ -335,7 +342,7 @@ class OpenAIAnalysisModel(AnalysisModel):
             # Same shared contract as research: invalid task
             # output retries the SAME analysis task.
             try:
-                self._validate(raw, known, truncated)
+                self._validate(raw, known, truncated, contract_id)
             except AnalysisError:
                 from llm.adapters import LLMError
                 raise LLMError("invalid-output")
@@ -351,10 +358,15 @@ class OpenAIAnalysisModel(AnalysisModel):
             raise AnalysisError("model-timeout")
         except LLMError as e:
             raise AnalysisError(f"model-error: {e}")
-        return self._validate(raw, known, truncated)
+        return self._validate(raw, known, truncated, contract_id)
 
     def _validate(self, raw: str, known: set,
-                  truncated: bool) -> ContentOpportunity:
+                  truncated: bool,
+                  contract_id: str = "legacy-v1") -> ContentOpportunity:
+        # Split contract: structural shape ALWAYS applies (types,
+        # enum membership mirroring execution primitives, id-set
+        # membership). Semantic floors (non-empty facts,
+        # eligible-requires-facts) apply ONLY under "legacy-v1".
         from llm.adapters import unwrap_model_json
         try:
             data = json.loads(unwrap_model_json(raw))
@@ -381,11 +393,11 @@ class OpenAIAnalysisModel(AnalysisModel):
                 raise AnalysisError("invalid-output")
             facts = data.get("facts", [])
             if not isinstance(facts, list) or \
-                    not all(isinstance(f, str) and f.strip()
-                            for f in facts):
+                    not all(isinstance(f, str) for f in facts):
                 raise AnalysisError("invalid-output")
-            if eligible and not facts:
-                raise AnalysisError("invalid-output")
+            if contract_id == "legacy-v1":
+                from research.legacy_contract import analysis_floors
+                analysis_floors(data)
             media = data.get("media_intent", "none")
             prio = data.get("priority", "normal")
             conf = data.get("confidence", "low")

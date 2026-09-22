@@ -72,6 +72,9 @@ class MentionPolicy:
 class MediaPolicy:
     min_items: Any = _MISSING
     max_items: Any = _MISSING
+    # Intent baseline the analysis media suggestion honors
+    # ("image"/"video"); consumed via the merged "media" key.
+    prefer: Any = _MISSING
 
 
 @dataclass
