@@ -495,20 +495,65 @@ def run_text_stage(ctx: dict) -> dict:
             "skills_used": [_trace_skill("text", cfg)]}
 
 
+ICON_TAG_RE = r"\[icon:([A-Za-z0-9][A-Za-z0-9._/-]{0,120})\]\s*$"
+
+
+def _assets_manifest(client):
+    """Synced identity manifest ({version, tree, files, docs}),
+    best-effort: missing/broken reads mean no assets (current
+    behavior), never a failed run."""
+    try:
+        row = client.get_research_state("assets-manifest")
+    except Exception:
+        return {}
+    if not isinstance(row, dict):
+        return {}
+    assets = row.get("assets")
+    return assets if isinstance(assets, dict) else {}
+
+
+def _parse_icon_tag(prompt: str) -> tuple[str, str | None]:
+    """Split a trailing [icon:key] tag (the only channel the
+    immutable workflow forwards: the prompt string itself).
+    Unknown shape stays untouched (legacy prompts unaffected)."""
+    import re as _re
+    text = str(prompt or "")
+    match = _re.search(ICON_TAG_RE, text)
+    if not match:
+        return text, None
+    return text[:match.start()].rstrip(), match.group(1)
+
+
 def run_prompt_stage(ctx: dict) -> dict:
     """Image Agent prompt LLM (prompt only, never bytes). Pure
-    read; carried claims released only on terminal failure."""
+    read; carried claims released only on terminal failure. When
+    an identity manifest is synced, the agent also picks one
+    icon from it (two-step, fail-closed); the pick travels as a
+    trailing [icon:key] tag inside the prompt string because the
+    workflow forwards only that string downstream."""
     client, run_id = ctx["client"], ctx["run_id"]
     claimed = ctx.get("claimed") or []
     cfg = ctx["cfg"]
     try:
         brand = cfg.get("brand") or {}
-        prompt = ctx["prompt_gen"].generate_prompt(
-            str(ctx.get("topic") or ""), brand, cfg)
+        topic = str(ctx.get("topic") or "")
+        gen = ctx.get("prompt_gen")
+        manifest = _assets_manifest(client)
+        icon_key = None
+        if gen is not None and hasattr(gen, "select_icon"):
+            try:
+                icon_key = gen.select_icon(
+                    topic, manifest.get("assets", manifest))
+            except Exception:
+                icon_key = None
+        prompt = gen.generate_prompt(topic, brand, cfg)
+        if icon_key:
+            prompt = prompt.rstrip() + "\n[icon:%s]" % icon_key
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
-    return {"prompt": prompt, "claimed": list(claimed)}
+    return {"prompt": prompt, "claimed": list(claimed),
+            "icon_key": icon_key}
 
 
 def run_execute_stage(ctx: dict) -> dict:
@@ -640,6 +685,17 @@ def run_execute_stage(ctx: dict) -> dict:
             return result
         from run import _resolve_media
         service = InjectionService(tracer=StderrTracer())
+        prompt, icon_key = _parse_icon_tag(prompt)
+        # Composed ads only for icon-selected posts (legacy raw
+        # path untouched); the headline is the main post's first
+        # line, best-effort.
+        headline = None
+        if icon_key:
+            main = str(text or "").split("---COMPANION---", 1)[0]
+            for line in main.splitlines():
+                if line.strip():
+                    headline = line.strip()[:160]
+                    break
         post_ids: list = []
         media_refs: list = []
         for index, (intent, pkg) in enumerate(intents):
@@ -647,7 +703,8 @@ def run_execute_stage(ctx: dict) -> dict:
             for m in pkg.media:
                 up = _resolve_media(
                     client, m,
-                    key_hint="ai/%s/%d" % (run_id, index))
+                    key_hint="ai/%s/%d" % (run_id, index),
+                    headline=headline, icon_key=icon_key)
                 images.append({"id": up["id"], "path": up["path"]})
                 media_refs.append({"id": up["id"], "path": up["path"]})
             intent.media = images

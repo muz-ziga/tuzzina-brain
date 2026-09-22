@@ -150,6 +150,10 @@ class MockImagePromptGenerator:
                         policy: dict | None = None) -> str:
         return f"{topic} — studio scene, clean background, soft light"
 
+    def select_icon(self, topic: str, assets: dict | None) -> str | None:
+        """No LLM in mock/test: never selects (fail-closed)."""
+        return None
+
 
 class FixedTextGenerator(TextGenerator):
     """Validated-output replay: returns a text string produced and
@@ -220,6 +224,98 @@ class OpenAIImagePromptGenerator:
             self._adapter, sys, f"Topic: {topic}",
             temperature=0.7, max_tokens=200, timeout=60,
             task="image_prompt").strip()
+
+    def select_icon(self, topic: str,
+                    assets: dict | None) -> str | None:
+        """Two-step icon pick from the synced identity manifest
+        (tree first, then names of the chosen category). The agent
+        sees category counts plus one category's names — never the
+        whole library — so any library size fits the prompt. Any
+        unknown answer drops to no-icon (the post never dies for
+        an icon). Returns the full manifest key
+        (identity/<cat>/<name>.<ext>) or None."""
+        from llm.adapters import (LLMError, complete_with_retry,
+                                  unwrap_model_json)
+        import json as _json
+        if not isinstance(assets, dict):
+            return None
+        tree = assets.get("tree") or {}
+        files = assets.get("files") or {}
+        if not isinstance(tree, dict) or not isinstance(files, dict):
+            return None
+        cats = sorted(k for k, v in tree.items()
+                      if isinstance(v, dict) and
+                      (v.get("count") or 0) > 0)
+        if not cats:
+            return None
+        docs = assets.get("docs") or []
+        guide = "\n".join(str(d.get("text") or "")[:800]
+                          for d in docs[:2]
+                          if isinstance(d, dict)).strip()
+
+        def check_cat(raw: str) -> None:
+            try:
+                cat = _json.loads(unwrap_model_json(raw)) \
+                    .get("category")
+            except Exception:
+                raise LLMError("invalid-output")
+            if cat not in cats:
+                raise LLMError("invalid-output")
+
+        def check_icon(names):
+            def _check(raw: str) -> None:
+                try:
+                    icon = _json.loads(unwrap_model_json(raw)) \
+                        .get("icon")
+                except Exception:
+                    raise LLMError("invalid-output")
+                if icon not in names:
+                    raise LLMError("invalid-output")
+            return _check
+
+        tree_lines = "\n".join(
+            "%s (%d)" % (c, (tree[c] or {}).get("count", 0))
+            for c in cats)
+        cat_sys = ("Pick one icon category for the post topic. "
+                   "Reply JSON ONLY: {\"category\": name}.")
+        cat_user = "Topic: %s\nCategories:\n%s%s" % (
+            (topic or "")[:200], tree_lines,
+            ("\nGuide:\n" + guide) if guide else "")
+        try:
+            raw = complete_with_retry(
+                self._adapter, cat_sys, cat_user,
+                temperature=0.2, max_tokens=60, timeout=30,
+                validate=check_cat, task="icon_category",
+                max_attempts=2)
+            cat = _json.loads(unwrap_model_json(raw))["category"]
+        except Exception:
+            return None
+        names = sorted(
+            "%s/%s" % (f.get("category"), f.get("name"))
+            for f in files.values()
+            if isinstance(f, dict) and
+            f.get("category") == cat)[:120]
+        if not names:
+            return None
+        icon_sys = ("Pick one icon for the post topic. Reply JSON "
+                    "ONLY: {\"icon\": \"category/name\"}.")
+        icon_user = "Topic: %s\nIcons:\n%s" % (
+            (topic or "")[:200], "\n".join(names))
+        try:
+            raw = complete_with_retry(
+                self._adapter, icon_sys, icon_user,
+                temperature=0.2, max_tokens=60, timeout=30,
+                validate=check_icon(names), task="icon_pick",
+                max_attempts=2)
+            picked = _json.loads(unwrap_model_json(raw))["icon"]
+        except Exception:
+            return None
+        for key, f in files.items():
+            if isinstance(f, dict) and \
+                    "%s/%s" % (f.get("category"),
+                               f.get("name")) == picked:
+                return key
+        return None
 
 
 class TuzzinaImageGenerator(ImageGenerator):

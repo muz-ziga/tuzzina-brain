@@ -593,6 +593,79 @@ class QueueCase(unittest.TestCase):
         self.assertEqual(fc.states, {})
 
 
+class IconSelectCase(unittest.TestCase):
+    MANIFEST = {"tree": {"icons": {"count": 2}, "logos": {"count": 1}},
+                "files": {
+                    "identity/icons/play-circle.svg": {
+                        "category": "icons", "name": "play-circle",
+                        "ext": ".svg"},
+                    "identity/icons/waveform-bars.svg": {
+                        "category": "icons", "name": "waveform-bars",
+                        "ext": ".svg"},
+                    "identity/logos/acme.svg": {
+                        "category": "logos", "name": "acme",
+                        "ext": ".svg"}},
+                "docs": []}
+
+    class Adapter:
+        def __init__(self, script):
+            self.script = list(script)
+            self.calls = []
+
+        def complete(self, system, user, **kw):
+            self.calls.append((system, user))
+            return self.script.pop(0)
+
+    def test_two_step_pick_returns_key(self):
+        from g2.generators import OpenAIImagePromptGenerator
+        import json as _json
+        gen = OpenAIImagePromptGenerator(adapter=self.Adapter([
+            _json.dumps({"category": "icons"}),
+            _json.dumps({"icon": "icons/waveform-bars"})]))
+        self.assertEqual(
+            gen.select_icon("mix translation", self.MANIFEST),
+            "identity/icons/waveform-bars.svg")
+
+    def test_unknown_category_fails_closed(self):
+        from g2.generators import OpenAIImagePromptGenerator
+        import json as _json
+        gen = OpenAIImagePromptGenerator(adapter=self.Adapter([
+            _json.dumps({"category": "nope"}),
+            _json.dumps({"category": "nope"})]))
+        self.assertIsNone(
+            gen.select_icon("mix translation", self.MANIFEST))
+
+    def test_unknown_icon_fails_closed(self):
+        from g2.generators import OpenAIImagePromptGenerator
+        import json as _json
+        gen = OpenAIImagePromptGenerator(adapter=self.Adapter([
+            _json.dumps({"category": "icons"}),
+            _json.dumps({"icon": "icons/ghost"}),
+            _json.dumps({"icon": "icons/ghost"})]))
+        self.assertIsNone(
+            gen.select_icon("mix translation", self.MANIFEST))
+
+    def test_empty_manifest_selects_nothing(self):
+        from g2.generators import MockImagePromptGenerator
+        self.assertIsNone(
+            MockImagePromptGenerator().select_icon("t", {}))
+        from g2.generators import OpenAIImagePromptGenerator
+        adapter = self.Adapter([])
+        gen = OpenAIImagePromptGenerator(adapter=adapter)
+        self.assertIsNone(gen.select_icon("t", {}))
+        self.assertEqual(adapter.calls, [])
+
+    def test_icon_tag_round_trip(self):
+        from stage_run import _parse_icon_tag
+        prompt, key = _parse_icon_tag(
+            "A harbor at dawn\n[icon:identity/icons/play-circle.svg]")
+        self.assertEqual(prompt, "A harbor at dawn")
+        self.assertEqual(key, "identity/icons/play-circle.svg")
+        prompt, key = _parse_icon_tag("A harbor at dawn")
+        self.assertEqual(prompt, "A harbor at dawn")
+        self.assertIsNone(key)
+
+
 class CliCase(unittest.TestCase):
     def test_bad_stage_rejected(self):
         self.assertEqual(

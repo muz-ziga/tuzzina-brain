@@ -345,7 +345,9 @@ class TuzzinaClient:
         return self.base.rstrip("/") + "/mcp"
 
     def generate_image(self, prompt: str,
-                       key_hint: str | None = None) -> dict:
+                       key_hint: str | None = None,
+                       headline: str | None = None,
+                       icon_key: str | None = None) -> dict:
         """Delegate image generation to Tuzzina's existing image tool.
 
         Speaks the already-exposed MCP endpoint (POST base + "/mcp",
@@ -359,7 +361,9 @@ class TuzzinaClient:
         image engine exists anymore). key_hint is an optional
         caller-chosen R2 object key prefix for idempotent
         replays (same key overwrites instead of duplicating);
-        omitted means server-assigned (legacy behavior).
+        omitted means server-assigned (legacy behavior). headline
+        and icon_key are optional composer inputs (composed ad
+        path); omitted preserves the raw image path exactly.
         """
         if not prompt or not str(prompt).strip():
             raise TuzzinaError("prompt is required")
@@ -375,6 +379,10 @@ class TuzzinaClient:
             tool_args: dict = {"prompt": str(prompt)}
             if key_hint:
                 tool_args["keyHint"] = str(key_hint)
+            if headline:
+                tool_args["headline"] = str(headline)[:200]
+            if icon_key:
+                tool_args["iconKey"] = str(icon_key)[:150]
             result = client.call_tool("generateImageTool", tool_args)
         except McpError as e:
             msg = str(e)

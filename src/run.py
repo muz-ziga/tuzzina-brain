@@ -42,7 +42,9 @@ def _build_generators(mode: str):
 
 
 def _resolve_media(client: TuzzinaClient, m: dict,
-                   key_hint: str | None = None) -> dict:
+                   key_hint: str | None = None,
+                   headline: str | None = None,
+                   icon_key: str | None = None) -> dict:
     """One planned media item -> Tuzzina {id, path} reference.
 
     url kind: existing upload_from_url (extracted source media).
@@ -52,13 +54,17 @@ def _resolve_media(client: TuzzinaClient, m: dict,
     generate_png + upload_bytes (unit tests and --mock paths only).
     key_hint is forwarded only to the delegated image call so a
     replay addresses the same R2 object instead of minting a new
-    one; omitted preserves legacy behavior exactly.
+    one; omitted preserves legacy behavior exactly. headline and
+    icon_key are optional composer inputs (composed ad path);
+    omitted preserves the raw image path exactly.
     """
     if m.get("kind") == "url":
         return client.upload_from_url(m["url"])
     gen = m["generator"]
     if isinstance(gen, G.TuzzinaImageGenerator):
-        return client.generate_image(m["prompt"], key_hint=key_hint)
+        return client.generate_image(
+            m["prompt"], key_hint=key_hint, headline=headline,
+            icon_key=icon_key)
     blob, fname = gen.generate_png(m["prompt"])
     return client.upload_bytes(blob, fname, "image/png")
 
