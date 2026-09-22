@@ -28,7 +28,8 @@ from stage_run import (_as_opportunity, _as_research_result,
                        _as_source_item, _to_jsonable, main_stage,
                        run_analysis_stage, run_execute_stage,
                        run_prompt_stage, run_research_stage,
-                       run_text_stage, STAGE_BASE_KEYS)
+                       run_text_stage, STAGE_BASE_KEYS,
+                       QUEUE_SOURCE, _queue_consume, _queue_take)
 
 
 class ScriptAdapter:
@@ -480,6 +481,116 @@ class AnalysisSeesResearchCase(unittest.TestCase):
                "analysis_model": MockAnalysisModel()}
         payload = run_analysis_stage(ctx)
         self.assertTrue(payload["opportunity"]["eligible"])
+
+
+class QueueCase(unittest.TestCase):
+    class FakeClient:
+        def __init__(self, states=None, broken=False):
+            self.states = dict(states or {})
+            self.broken = broken
+
+        def get_research_state(self, source):
+            if self.broken:
+                raise ConnectionError("down")
+            return self.states.get(source)
+
+        def save_research_state(self, source, state):
+            if self.broken:
+                raise ConnectionError("down")
+            self.states[source] = state
+            return {}
+
+    def entry(self, stmt="Fact words", iid="g-1", attempts=0):
+        return {"statement": stmt, "kind": "fact",
+                "confidence": "high", "item_ids": [iid],
+                "excerpt": stmt[:60], "title": "T",
+                "text": "Body words.", "source_url": "https://x/1",
+                "attempts": attempts, "queued_at": "2026-01-01"}
+
+    def queued_state(self, entries):
+        return {QUEUE_SOURCE: {"candidates": {
+            ("g-%d" % i if e["item_ids"] == ["g-1"] else "q:%d" % i): e
+            for i, e in enumerate(entries)}}}
+
+    def test_starving_cycle_reuses_queue(self):
+        # No fresh items + parked findings = the run proceeds
+        # on queued material instead of stopping with nothing.
+        import research.cycle as _cyc
+        real_collect = _cyc.collect_all_sources
+        fc = self.FakeClient(self.queued_state([self.entry()]))
+        _cyc.collect_all_sources = lambda *a: None
+        try:
+            payload = run_research_stage(
+                {"store": object(), "cfg": {}, "client": fc,
+                 "run_id": "r-1", "sources": [], "now": "t",
+                 "dry_run": False})
+        finally:
+            _cyc.collect_all_sources = real_collect
+        self.assertTrue(payload["queued"])
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(
+            payload["research"]["findings"][0]["statement"],
+            "Fact words")
+        saved = fc.states[QUEUE_SOURCE]["candidates"]
+        self.assertEqual(list(saved.values())[0]["attempts"], 1)
+
+    def test_ineligible_parks_findings(self):
+        # Analysis says no: the findings park for the next
+        # cycle instead of dying with this run.
+        from research.analysis import ContentOpportunity
+
+        class Nope:
+            def analyze(self, result, policy, items=None):
+                return ContentOpportunity(
+                    eligible=False, rationale="no-fit")
+
+        fc = self.FakeClient()
+        finding = {"statement": "Fact words", "kind": "fact",
+                   "confidence": "high", "item_ids": ["g-1"],
+                   "excerpt": "Fact words"}
+        item = {"source_id": "g-1", "source_type": "website",
+                "source_url": "https://x/1", "title": "T",
+                "text": "Body words.", "item_id": "g-1"}
+        payload = run_analysis_stage(
+            {"client": fc, "run_id": "r-1", "cfg": {},
+             "research": {"summary": "S", "findings": [finding],
+                          "topics": [], "entities": [],
+                          "item_ids": ["g-1"], "model": "m",
+                          "meta": {}},
+             "items": [item], "claimed": [],
+             "analysis_model": Nope(), "dry_run": False,
+             "now": "t"})
+        self.assertFalse(payload["opportunity"]["eligible"])
+        saved = fc.states[QUEUE_SOURCE]["candidates"]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(
+            list(saved.values())[0]["statement"], "Fact words")
+
+    def test_publish_consumes_queue(self):
+        # Posted entries leave; the rest stays unpublished.
+        fc = self.FakeClient(self.queued_state(
+            [self.entry("One", "g-1"), self.entry("Two", "g-2")]))
+        _queue_consume(fc, ["g-1"])
+        saved = fc.states[QUEUE_SOURCE]["candidates"]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(
+            list(saved.values())[0]["statement"], "Two")
+
+    def test_stale_entries_drop(self):
+        fc = self.FakeClient(self.queued_state(
+            [self.entry(attempts=3)]))
+        self.assertIsNone(_queue_take(fc))
+        self.assertEqual(
+            fc.states[QUEUE_SOURCE]["candidates"], {})
+
+    def test_broken_transport_never_clobbers(self):
+        fc = self.FakeClient(broken=True)
+        self.assertIsNone(_queue_take(fc))
+        from stage_run import _queue_add
+        _queue_add(fc, [{"statement": "S", "kind": "fact",
+                         "confidence": "high", "item_ids": ["g-9"],
+                         "excerpt": "S"}], [], "t")
+        self.assertEqual(fc.states, {})
 
 
 class CliCase(unittest.TestCase):

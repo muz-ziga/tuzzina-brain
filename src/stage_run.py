@@ -441,6 +441,12 @@ def run_analysis_stage(ctx: dict) -> dict:
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
+    if not opportunity.eligible and not bool(ctx.get("dry_run")):
+        # Findings that did not reach a post park in the queue
+        # (deduped inside); the next starving cycle reuses them
+        # first instead of stopping with nothing.
+        _queue_add(client, research.findings, items,
+                   str(ctx.get("now") or ""))
     return {"opportunity": _to_jsonable(opportunity),
             "claimed": list(claimed),
             "skills_used": [_trace_skill("analysis", cfg)]}
@@ -559,6 +565,12 @@ def run_execute_stage(ctx: dict) -> dict:
             eff_media, links_policy, allowed)
         if fmt is None:
             result["format_reason"] = freason
+            if not dry_run:
+                # Format gate killed an eligible opportunity:
+                # park its facts instead of dropping them.
+                _queue_add(client,
+                           _opp_pseudo_findings(opportunity, items),
+                           items, str(ctx.get("now") or ""))
             return result
         gen_plan = plan_generation(
             opportunity, items,
@@ -619,6 +631,12 @@ def run_execute_stage(ctx: dict) -> dict:
                     result["media_prompts"].append(_m["prompt"])
         result["intents"] = len(intents)
         if dry_run or not intents:
+            if not dry_run:
+                # Eligible but nothing to inject: park the facts
+                # for the next cycle instead of dropping them.
+                _queue_add(client,
+                           _opp_pseudo_findings(opportunity, items),
+                           items, str(ctx.get("now") or ""))
             return result
         from run import _resolve_media
         service = InjectionService(tracer=StderrTracer())
@@ -641,9 +659,206 @@ def run_execute_stage(ctx: dict) -> dict:
                 opportunity is not None:
             _record_published_topic(
                 client, opportunity.topic, opportunity.angle)
+        if post_ids:
+            # Published = gone from the queue; whatever remains
+            # there is still unpublished by definition.
+            _queue_consume(client, opportunity.source_item_ids
+                           if opportunity is not None else [])
         return result
     finally:
         _release_keys(client, run_id, claimed)
+
+
+QUEUE_SOURCE = "unpublished-queue"
+QUEUE_CAP = 10  # entries kept; small enough for one stage envelope
+QUEUE_MAX_ATTEMPTS = 3  # fallback reuses before a stale entry drops
+
+
+def _field(o, name: str, default=""):
+    if isinstance(o, dict):
+        return o.get(name, default)
+    return getattr(o, name, default)
+
+
+def _queue_key(item_ids, statement: str) -> str:
+    ids = [str(i) for i in (item_ids or []) if str(i).strip()]
+    if ids:
+        return ids[0]
+    return "q:" + (statement or "")[:120]
+
+
+def _queue_load(client):
+    """Unpublished findings, oldest first. None on transport
+    failure (callers must skip saves then, never clobber the
+    queue with a partial view); [] when the queue is empty."""
+    try:
+        row = client.get_research_state(QUEUE_SOURCE)
+    except Exception:
+        return None
+    if not isinstance(row, dict):
+        return []
+    cands = row.get("candidates")
+    if not isinstance(cands, dict):
+        return []
+    out = [e for e in cands.values() if isinstance(e, dict)]
+    out.sort(key=lambda e: str(e.get("queued_at") or ""))
+    return out
+
+
+def _queue_save(client, entries) -> None:
+    """Best-effort persist. Reuses the opaque `candidates` state
+    key, so no server change is needed. Never fails the run."""
+    try:
+        client.save_research_state(
+            QUEUE_SOURCE,
+            {"candidates": {
+                _queue_key(e.get("item_ids"),
+                           str(e.get("statement") or "")): e
+                for e in (entries or [])[:QUEUE_CAP]}})
+    except Exception:
+        pass
+
+
+def _queue_entry(finding, items_by_id: dict, now: str) -> dict:
+    ids = [str(i) for i in (_field(finding, "item_ids") or [])]
+    stub = {}
+    for i in ids:
+        if i in items_by_id:
+            stub = items_by_id[i]
+            break
+    conf = _field(finding, "confidence", "medium")
+    kind = _field(finding, "kind", "fact")
+    return {
+        "statement": str(_field(finding, "statement") or "")[:500],
+        "kind": kind if kind in ("fact", "inference") else "fact",
+        "confidence": conf if conf in ("high", "medium", "low")
+        else "medium",
+        "item_ids": ids,
+        "excerpt": str(_field(finding, "excerpt") or "")[:300],
+        "title": str(_field(stub, "title") or "")[:200],
+        "text": str(_field(stub, "text") or "")[:2000],
+        "source_url": str(_field(stub, "source_url") or "")[:500],
+        "attempts": 0, "queued_at": now}
+
+
+def _items_by_id(items) -> dict:
+    out = {}
+    for it in items or []:
+        for k in (str(_field(it, "item_id") or ""),
+                  str(_field(it, "source_id") or "")):
+            if k and k not in out:
+                out[k] = it
+    return out
+
+
+def _queue_add(client, findings, items, now: str) -> None:
+    """Park findings that did not reach a post (dedupe by key,
+    attempts preserved, capped). The next starving cycle reuses
+    them before giving up."""
+    queued = _queue_load(client)
+    if queued is None:
+        return
+    items_by_id = _items_by_id(items)
+    have = {_queue_key(e.get("item_ids"),
+                       str(e.get("statement") or ""))
+            for e in queued}
+    for f in findings or []:
+        if not str(_field(f, "statement") or "").strip():
+            continue
+        e = _queue_entry(f, items_by_id, now)
+        key = _queue_key(e["item_ids"], e["statement"])
+        if key not in have:
+            have.add(key)
+            queued.append(e)
+    _queue_save(client, queued)
+
+
+def _queue_take(client):
+    """Oldest entries due for reuse (attempts bumped, stale
+    dropped). Returns (findings, items, rest) with rest already
+    persisted; use findings/items as this cycle's research."""
+    from contracts import SourceItem
+    from research.models import MAX_FINDINGS, Finding, ResearchResult
+    queued = _queue_load(client)
+    if not queued:
+        return None
+    use, rest = [], []
+    for e in queued:
+        attempts = int(e.get("attempts") or 0) + 1
+        # ponytail: 3 reuses then drop; raise QUEUE_MAX_ATTEMPTS
+        # if evergreen material should linger longer.
+        if attempts > QUEUE_MAX_ATTEMPTS:
+            continue
+        e = dict(e, attempts=attempts)
+        if len(use) < MAX_FINDINGS:
+            use.append(e)
+        else:
+            rest.append(e)
+    _queue_save(client, use + rest)
+    if not use:
+        return None
+    findings = [Finding(
+        statement=e["statement"], kind=e["kind"],
+        confidence=e["confidence"], item_ids=list(e["item_ids"]),
+        excerpt=e["excerpt"]) for e in use]
+    items = [SourceItem(
+        source_id=e["item_ids"][0] if e["item_ids"] else "queue",
+        source_type="queue",
+        source_url=e.get("source_url") or "",
+        title=e.get("title") or e["statement"][:200],
+        text=e.get("text") or e["statement"],
+        item_id=e["item_ids"][0] if e["item_ids"] else "") for e in use]
+    seen_topics = []
+    for e in use:
+        title = str(e.get("title") or "").strip()[:60]
+        if title and title not in seen_topics:
+            seen_topics.append(title)
+    result = ResearchResult(
+        summary="Reusing %d unpublished finding(s) from the queue." % len(use),
+        findings=findings,
+        topics=seen_topics or ["unpublished"],
+        entities=[], item_ids=sorted({i for e in use for i in e["item_ids"]}),
+        model="queue", meta={"from_queue": True})
+    return result, items
+
+
+def _queue_consume(client, source_item_ids) -> None:
+    """Drop queued entries that reached a post (published =
+    gone; whatever remains is still unpublished)."""
+    queued = _queue_load(client)
+    if not queued:
+        return
+    used = {str(i) for i in (source_item_ids or [])}
+    rest = [e for e in queued
+            if not (e.get("item_ids") and
+                    {str(i) for i in e["item_ids"]} <= used)]
+    if len(rest) != len(queued):
+        _queue_save(client, rest)
+
+
+# ponytail: queue lives in the stage path only; the legacy
+# run_cycle keeps forward-only behavior until a legacy run
+# proves it needs the same treatment.
+
+
+def _opp_pseudo_findings(opportunity, items) -> list:
+    """Finding-shaped dicts from an opportunity that produced no
+    post (execute sees facts, not findings), so the material can
+    park in the queue like any other unposted finding."""
+    by_id = _items_by_id(items)
+    conf = _field(opportunity, "confidence", "medium")
+    conf = conf if conf in ("high", "medium", "low") else "medium"
+    sids = [str(s) for s in
+            (_field(opportunity, "source_item_ids") or [])]
+    out = []
+    for fact in (_field(opportunity, "facts") or []):
+        if not str(fact or "").strip():
+            continue
+        ids = [s for s in sids if s in by_id] or list(by_id)[:1]
+        out.append({"statement": str(fact)[:500], "kind": "fact",
+                    "confidence": conf, "item_ids": ids,
+                    "excerpt": str(fact)[:300]})
+    return out
 
 
 def run_research_stage(ctx: dict) -> dict:
@@ -659,6 +874,7 @@ def run_research_stage(ctx: dict) -> dict:
     from research.models import MAX_ITEMS
     store, cfg = ctx["store"], ctx["cfg"]
     client, run_id = ctx["client"], ctx["run_id"]
+    dry_run = bool(ctx.get("dry_run"))
     out = CycleResult()
     pending: list = []
     collect_all_sources(ctx["sources"], store, ctx["now"], out,
@@ -679,6 +895,22 @@ def run_research_stage(ctx: dict) -> dict:
     if not out.items:
         for res in pending:
             res.commit(store)
+        # Starving cycle: reuse unpublished findings first
+        # instead of giving up (dry runs never touch the
+        # shared queue).
+        if not dry_run:
+            take = _queue_take(client)
+            if take is not None:
+                result, qitems = take
+                return {"items": _to_jsonable(qitems),
+                        "research": _to_jsonable(result),
+                        "claimed": [], "committed": True,
+                        "sources_checked": len(out.sources),
+                        "items_new": 0,
+                        "discovery": _to_jsonable(out.sources),
+                        "roles": roles,
+                        "roles_resolved": ctx.get("roles_resolved") or [],
+                        "skills_used": skills, "queued": True}
         return {"items": [], "research": None, "claimed": [],
                 "committed": True,
                 "sources_checked": len(out.sources),
@@ -686,7 +918,7 @@ def run_research_stage(ctx: dict) -> dict:
                 "discovery": _to_jsonable(out.sources),
                 "roles": roles,
                 "roles_resolved": ctx.get("roles_resolved") or [],
-                "skills_used": skills}
+                "skills_used": skills, "queued": False}
     if "research" not in roles:
         # Research role off: collection still ran (items needed
         # downstream), but no LLM call — mirrors the legacy
@@ -715,6 +947,22 @@ def run_research_stage(ctx: dict) -> dict:
         raise
     for res in pending:
         res.commit(store)
+    if not result.findings and not dry_run:
+        # Model found nothing usable: same fallback as the
+        # no-items branch above (queue first, clean stop last).
+        take = _queue_take(client)
+        if take is not None:
+            result, qitems = take
+            return {"items": _to_jsonable(qitems),
+                    "research": _to_jsonable(result),
+                    "claimed": list(out.claimed),
+                    "committed": True,
+                    "sources_checked": len(out.sources),
+                    "items_new": len(out.items),
+                    "discovery": _to_jsonable(out.sources),
+                    "roles": roles,
+                    "roles_resolved": ctx.get("roles_resolved") or [],
+                    "skills_used": skills, "queued": True}
     return {"items": _to_jsonable(out.items[:MAX_ITEMS]),
             "research": _to_jsonable(result),
             "claimed": list(out.claimed),
@@ -724,4 +972,4 @@ def run_research_stage(ctx: dict) -> dict:
             "discovery": _to_jsonable(out.sources),
             "roles": roles,
             "roles_resolved": ctx.get("roles_resolved") or [],
-            "skills_used": skills}
+            "skills_used": skills, "queued": False}
