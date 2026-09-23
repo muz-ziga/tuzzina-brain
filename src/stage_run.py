@@ -534,15 +534,21 @@ def _assets_manifest(client):
 
 
 def _parse_icon_tag(prompt: str) -> tuple[str, str | None]:
-    """Split a trailing [icon:key] tag (the only channel the
-    immutable workflow forwards: the prompt string itself).
-    Unknown shape stays untouched (legacy prompts unaffected)."""
+    """Split the [icon:key] tag channel (the only channel the
+    immutable workflow forwards: the prompt string itself). The
+    model sometimes emits its own hallucinated tag mid-prompt, so
+    ALL tag occurrences are stripped from the image prompt while
+    the LAST well-formed one wins as the key. Legacy prompts
+    (no tags) stay untouched."""
     import re as _re
     text = str(prompt or "")
-    match = _re.search(ICON_TAG_RE, text)
-    if not match:
+    matches = list(_re.finditer(
+        r"\[icon:([A-Za-z0-9][A-Za-z0-9._/-]{0,120})\]", text))
+    if not matches:
         return text, None
-    return text[:match.start()].rstrip(), match.group(1)
+    stripped = _re.sub(
+        r"\s*\[icon:[A-Za-z0-9][A-Za-z0-9._/-]{0,120}\]", "", text)
+    return stripped.strip(), matches[-1].group(1)
 
 
 def run_prompt_stage(ctx: dict) -> dict:

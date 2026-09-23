@@ -665,6 +665,19 @@ class IconSelectCase(unittest.TestCase):
         self.assertEqual(prompt, "A harbor at dawn")
         self.assertIsNone(key)
 
+    def test_hallucinated_mid_prompt_tag_stripped(self):
+        # Live failure: the model emitted its own [icon:...] tag
+        # mid-prompt while the stage appended the real one. The
+        # image prompt must carry no tag text at all; the last
+        # well-formed tag wins as the key.
+        from stage_run import _parse_icon_tag
+        prompt, key = _parse_icon_tag(
+            "A translucent hourglass.  \n\n[icon:waveform_audio]\n"
+            "[icon:identity/icons/note.png]")
+        self.assertEqual(prompt, "A translucent hourglass.")
+        self.assertEqual(key, "identity/icons/note.png")
+        self.assertNotIn("[icon:", prompt)
+
 
 class LegacyOutcomeCase(unittest.TestCase):
     def test_research_outcomes_cover_all_legacy_branches(self):
