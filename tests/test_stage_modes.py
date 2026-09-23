@@ -666,6 +666,150 @@ class IconSelectCase(unittest.TestCase):
         self.assertIsNone(key)
 
 
+class LegacyOutcomeCase(unittest.TestCase):
+    def test_research_outcomes_cover_all_legacy_branches(self):
+        # Legacy outcome map (V2 flow lookup): off when the role
+        # is off, no_material when empty, findings otherwise.
+        # V1 ignores the extra key (it reads items/roles).
+        import research.cycle as _cyc
+        from contracts import SourceItem
+        real_collect = _cyc.collect_all_sources
+
+        def empty_collect(sources, store, now, out, pending):
+            pass
+
+        class Model:
+            def research(self, items, cfg):
+                from research.models import ResearchResult
+                return ResearchResult(
+                    summary="s", findings=[], topics=[],
+                    entities=[], item_ids=[], model="stub",
+                    meta={})
+
+        base = {"store": object(), "cfg": {},
+                "client": object(), "run_id": "r-1",
+                "sources": [], "now": "t",
+                "research_model": Model(), "dry_run": False}
+        _cyc.collect_all_sources = empty_collect
+        try:
+            out = run_research_stage(dict(base))
+        finally:
+            _cyc.collect_all_sources = real_collect
+        self.assertEqual(out["outcome"], "no_material")
+        self.assertEqual(out["items"], [])
+
+        def one_collect(sources, store, now, out, pending):
+            out.items.append(SourceItem(
+                source_id="s-1", source_type="website",
+                source_url="https://x/1", title="t", text="w"))
+
+        _cyc.collect_all_sources = one_collect
+        try:
+            out = run_research_stage(dict(base))
+        finally:
+            _cyc.collect_all_sources = real_collect
+        self.assertEqual(out["outcome"], "findings")
+        self.assertEqual(len(out["items"]), 1)
+
+    def test_research_off_outcome_without_model(self):
+        import research.cycle as _cyc
+        real_collect = _cyc.collect_all_sources
+
+        def one_collect(sources, store, now, out, pending):
+            from contracts import SourceItem
+            out.items.append(SourceItem(
+                source_id="s-1", source_type="website",
+                source_url="https://x/1", title="t", text="w"))
+
+        class Boom:
+            def research(self, items, cfg):
+                raise AssertionError("model must not run")
+
+        _cyc.collect_all_sources = one_collect
+        try:
+            out = run_research_stage(
+                {"store": object(), "cfg": {"roles": ["text"]},
+                 "client": object(), "run_id": "r-1",
+                 "sources": [], "now": "t",
+                 "research_model": Boom(), "dry_run": False})
+        finally:
+            _cyc.collect_all_sources = real_collect
+        self.assertEqual(out["outcome"], "off")
+        self.assertIsNone(out["research"])
+
+    def test_analysis_text_prompt_execute_outcomes(self):
+        from research.analysis import ContentOpportunity
+        from stage_run import (run_execute_stage, run_prompt_stage,
+                               run_text_stage)
+
+        class Client:
+            def release_claim(self, key, run_id):
+                pass
+
+        policy = {"brand": {"tone": "direct",
+                            "audience": "Libya"},
+                  "language": {"default": "ar"},
+                  "pillars": [], "generation": {}, "media": {}}
+        opp = {"eligible": True, "topic": "T", "angle": "A",
+               "rationale": "R", "facts": ["Fact words here"],
+               "source_item_ids": ["g-1"], "content_format": "post",
+               "media_intent": "image", "audience": "a",
+               "language": "ar", "priority": "normal",
+               "confidence": "high", "constraints": []}
+        no = dict(opp, eligible=False, media_intent="none")
+        item = {"source_id": "g-1", "source_type": "website",
+                "source_url": "https://x/1", "title": "T",
+                "text": "Body words here.", "item_id": "g-1"}
+
+        class Eligible:
+            def analyze(self, result, policy, items=None):
+                return ContentOpportunity(**opp)
+
+        class Ineligible:
+            def analyze(self, result, policy, items=None):
+                return ContentOpportunity(**no)
+
+        research = {"summary": "S", "findings": [{
+            "statement": "Fact words here", "kind": "fact",
+            "confidence": "high", "item_ids": ["g-1"],
+            "excerpt": "Fact words here"}],
+            "topics": [], "entities": [], "item_ids": ["g-1"],
+            "model": "m", "meta": {}}
+        base = {"client": Client(), "run_id": "r-1", "cfg": policy,
+                "research": research, "items": [item],
+                "claimed": [], "dry_run": True}
+        yes = run_analysis_stage(dict(base, analysis_model=Eligible()))
+        self.assertEqual(yes["opportunity"]["eligible"], True)
+        self.assertEqual(yes["outcome"], "eligible")
+        no_out = run_analysis_stage(
+            dict(base, analysis_model=Ineligible()))
+        self.assertEqual(no_out["outcome"], "ineligible")
+
+        class Text:
+            def generate(self, title, summary, brand, cfg):
+                return "Post words here."
+
+        tout = run_text_stage(dict(
+            base, opportunity=yes["opportunity"], text_gen=Text()))
+        self.assertTrue(tout["text"])
+        self.assertEqual(tout["outcome"], "drafted_image")
+
+        class Prompt:
+            def generate_prompt(self, topic, brand, cfg):
+                return "A calm harbor."
+
+        pout = run_prompt_stage(dict(
+            base, topic="T", prompt_gen=Prompt()))
+        self.assertEqual(pout["outcome"], "ready")
+        self.assertEqual(pout["prompt"], "A calm harbor.")
+
+        eout = run_execute_stage(dict(
+            base, opportunity=yes["opportunity"], text="Post words.",
+            prompt="A calm harbor.", mode="draft",
+            integration_id="int-1", schedule={}))
+        self.assertEqual(eout["outcome"], "done")
+
+
 class CliCase(unittest.TestCase):
     def test_bad_stage_rejected(self):
         self.assertEqual(

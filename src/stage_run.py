@@ -452,9 +452,14 @@ def run_analysis_stage(ctx: dict) -> dict:
         # first instead of stopping with nothing.
         _queue_add(client, research.findings, items,
                    str(ctx.get("now") or ""))
+    # Legacy outcome map (V2 flow lookup): the verdict IS the
+    # outcome. No thresholds or branches here — the flow map
+    # decides what an ineligible verdict means downstream.
     return {"opportunity": _to_jsonable(opportunity),
             "claimed": list(claimed),
-            "skills_used": [_trace_skill("analysis", cfg)]}
+            "skills_used": [_trace_skill("analysis", cfg)],
+            "outcome": ("eligible" if opportunity.eligible
+                        else "ineligible")}
 
 
 def run_text_stage(ctx: dict) -> dict:
@@ -496,8 +501,19 @@ def run_text_stage(ctx: dict) -> dict:
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
+    # Legacy outcome map (V2 flow lookup): image intent means the
+    # prompt stage runs next, anything else goes to execute. The
+    # intent itself comes from the opportunity/policy data — this
+    # line only reports it as the declared outcome, it never
+    # decides what the intent should be. Role gating (image role
+    # off) lives in the trigger-time effective flow, not here.
+    intent = ""
+    if opportunity is not None:
+        intent = str(getattr(opportunity, "media_intent", "") or "")
     return {"text": text, "claimed": list(claimed),
-            "skills_used": [_trace_skill("text", cfg)]}
+            "skills_used": [_trace_skill("text", cfg)],
+            "outcome": ("drafted_image" if intent == "image"
+                        else "drafted")}
 
 
 ICON_TAG_RE = r"\[icon:([A-Za-z0-9][A-Za-z0-9._/-]{0,120})\]\s*$"
@@ -558,7 +574,7 @@ def run_prompt_stage(ctx: dict) -> dict:
         _release_keys(client, run_id, claimed)
         raise
     return {"prompt": prompt, "claimed": list(claimed),
-            "icon_key": icon_key}
+            "icon_key": icon_key, "outcome": "ready"}
 
 
 def run_execute_stage(ctx: dict) -> dict:
@@ -621,6 +637,9 @@ def run_execute_stage(ctx: dict) -> dict:
                 _queue_add(client,
                            _opp_pseudo_findings(opportunity, items),
                            items, str(ctx.get("now") or ""))
+            # Legacy outcome map: a gated execute still ends the
+            # chain (its terminal status is recorded, not routed).
+            result["outcome"] = "done"
             return result
         gen_plan = plan_generation(
             opportunity, items,
@@ -687,6 +706,8 @@ def run_execute_stage(ctx: dict) -> dict:
                 _queue_add(client,
                            _opp_pseudo_findings(opportunity, items),
                            items, str(ctx.get("now") or ""))
+            # Legacy outcome map: no intents still ends the chain.
+            result["outcome"] = "done"
             return result
         from run import _resolve_media
         service = InjectionService(tracer=StderrTracer())
@@ -726,6 +747,7 @@ def run_execute_stage(ctx: dict) -> dict:
             # there is still unpublished by definition.
             _queue_consume(client, opportunity.source_item_ids
                            if opportunity is not None else [])
+        result["outcome"] = "done"
         return result
     finally:
         _release_keys(client, run_id, claimed)
@@ -937,6 +959,33 @@ def _research_agent_skill(cfg: dict):
     return doc
 
 
+def _agent_trace(loop: dict) -> list:
+    """Redacted turn log for run evidence: action/tool names and
+    the final outcome only — no prompts, no raw outputs, no
+    source content. Proves the loop shape (invoke → tool calls →
+    final) without leaking anything. A loop-level stop (budget
+    exhaustion) is recorded as its own outcome here too, so the
+    distinction can never collapse downstream."""
+    trace = []
+    for entry in (loop.get("history") or []):
+        if not isinstance(entry, dict):
+            continue
+        result = entry.get("result")
+        trace.append({
+            "action": "tool_call",
+            "tool": str(entry.get("tool") or ""),
+            "ok": bool(isinstance(result, dict) and result.get("ok")),
+            "error": str(result.get("error") or "")
+            if isinstance(result, dict) else "",
+        })
+    trace.append({"action": "final",
+                  "outcome": loop.get("outcome")
+                  if loop.get("outcome") is not None
+                  else (loop.get("error") or None),
+                  "error": str(loop.get("error") or "")})
+    return trace
+
+
 def _agent_discovered_items(history) -> list:
     """SourceItem-shaped dicts for everything the agent discovered
     through capabilities (typed records already match the stage
@@ -1012,6 +1061,9 @@ def _research_agent_payload(ctx, out, roles, skills, store,
     if error == "budget_exhausted" and not loop.get("outcome"):
         # Policy outcome: the campaign budget is spent. A clean
         # stop, never an exception (design: stop(budget_exhausted)).
+        # Recorded as its OWN outcome — never reinterpreted as
+        # no_material (gate: the distinction must survive in
+        # trace/history forever).
         for res in pending:
             res.commit(store)
         return {"items": [], "research": None, "claimed": [],
@@ -1022,9 +1074,9 @@ def _research_agent_payload(ctx, out, roles, skills, store,
                 "roles": roles,
                 "roles_resolved": ctx.get("roles_resolved") or [],
                 "skills_used": skills, "queued": False,
-                "outcome": None,
+                "outcome": "budget_exhausted",
                 "agent_usage": loop.get("usage") or {},
-                "agent_stop": "budget_exhausted"}
+                "agent_trace": _agent_trace(loop)}
 
     discovered = _agent_discovered_items(loop.get("history"))
     all_items = (_to_jsonable(out.items[:MAX_ITEMS]) + discovered)
@@ -1056,7 +1108,8 @@ def _research_agent_payload(ctx, out, roles, skills, store,
                     "roles_resolved": ctx.get("roles_resolved") or [],
                     "skills_used": skills, "queued": True,
                     "outcome": loop.get("outcome"),
-                    "agent_usage": loop.get("usage") or {}}
+                    "agent_usage": loop.get("usage") or {},
+                    "agent_trace": _agent_trace(loop)}
 
     if not has_findings:
         # Declared no-material outcome (or dry run): clean stop.
@@ -1069,7 +1122,8 @@ def _research_agent_payload(ctx, out, roles, skills, store,
                 "roles_resolved": ctx.get("roles_resolved") or [],
                 "skills_used": skills, "queued": False,
                 "outcome": loop.get("outcome"),
-                "agent_usage": loop.get("usage") or {}}
+                "agent_usage": loop.get("usage") or {},
+                "agent_trace": _agent_trace(loop)}
 
     research = {
         "summary": str(artifacts.get("summary") or "")[:1000],
@@ -1095,7 +1149,8 @@ def _research_agent_payload(ctx, out, roles, skills, store,
             "roles_resolved": ctx.get("roles_resolved") or [],
             "skills_used": skills, "queued": False,
             "outcome": loop.get("outcome"),
-            "agent_usage": loop.get("usage") or {}}
+            "agent_usage": loop.get("usage") or {},
+            "agent_trace": _agent_trace(loop)}
 
 
 def run_research_stage(ctx: dict) -> dict:
@@ -1154,7 +1209,11 @@ def run_research_stage(ctx: dict) -> dict:
                         "discovery": _to_jsonable(out.sources),
                         "roles": roles,
                         "roles_resolved": ctx.get("roles_resolved") or [],
-                        "skills_used": skills, "queued": True}
+                        "skills_used": skills, "queued": True,
+                        # Legacy outcome map (V2 flow lookup): the
+                        # queue always carries usable findings, so a
+                        # take means proceed; empty still means stop.
+                        "outcome": "findings"}
         return {"items": [], "research": None, "claimed": [],
                 "committed": True,
                 "sources_checked": len(out.sources),
@@ -1162,7 +1221,8 @@ def run_research_stage(ctx: dict) -> dict:
                 "discovery": _to_jsonable(out.sources),
                 "roles": roles,
                 "roles_resolved": ctx.get("roles_resolved") or [],
-                "skills_used": skills, "queued": False}
+                "skills_used": skills, "queued": False,
+                "outcome": "no_material"}
     if "research" not in roles:
         # Research role off: collection still ran (items needed
         # downstream), but no LLM call — mirrors the legacy
@@ -1183,7 +1243,11 @@ def run_research_stage(ctx: dict) -> dict:
                 "discovery": _to_jsonable(out.sources),
                 "roles": roles,
                 "roles_resolved": ctx.get("roles_resolved") or [],
-                "skills_used": skills}
+                "skills_used": skills,
+                # Legacy outcome map: research role off never runs
+                # the model, so downstream treats it as "proceed
+                # without research" (V1 text-only path).
+                "outcome": "off"}
     try:
         result = ctx["research_model"].research(out.items, cfg)
     except Exception:
@@ -1206,7 +1270,10 @@ def run_research_stage(ctx: dict) -> dict:
                     "discovery": _to_jsonable(out.sources),
                     "roles": roles,
                     "roles_resolved": ctx.get("roles_resolved") or [],
-                    "skills_used": skills, "queued": True}
+                    "skills_used": skills, "queued": True,
+                    # Legacy outcome map: a queue take always
+                    # carries usable findings, so proceed.
+                    "outcome": "findings"}
     return {"items": _to_jsonable(out.items[:MAX_ITEMS]),
             "research": _to_jsonable(result),
             "claimed": list(out.claimed),
@@ -1216,4 +1283,7 @@ def run_research_stage(ctx: dict) -> dict:
             "discovery": _to_jsonable(out.sources),
             "roles": roles,
             "roles_resolved": ctx.get("roles_resolved") or [],
-            "skills_used": skills, "queued": False}
+            "skills_used": skills, "queued": False,
+            # Legacy outcome map: non-empty collection reached the
+            # model, so downstream proceeds (analysis decides).
+            "outcome": "findings"}

@@ -465,16 +465,21 @@ class StageIntegrationCase(unittest.TestCase):
                              "custom")
 
     def test_budget_exhaustion_stops_cleanly(self):
+        # budget_exhausted is its OWN outcome: recorded distinctly
+        # and never reinterpreted as no_material (gate: the
+        # distinction must survive in trace/history forever).
         self._patch_skill("Keep searching.")
         payload, _model, seen = self._run(
             "Keep searching.",
             [_tool_call("discovery.search", {"query": "a"}),
              _tool_call("discovery.search", {"query": "b"})],
             {"discovery": {}}, {"max_tool_calls": 1})
-        self.assertIsNone(payload["outcome"])
-        self.assertEqual(payload["agent_stop"], "budget_exhausted")
+        self.assertEqual(payload["outcome"], "budget_exhausted")
         self.assertEqual(payload["items"], [])
         self.assertEqual(seen["calls"], 1)
+        trace = payload["agent_trace"]
+        self.assertEqual(trace[-1]["action"], "final")
+        self.assertEqual(trace[-1]["outcome"], "budget_exhausted")
 
 
 class _MemStore:
