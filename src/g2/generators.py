@@ -220,10 +220,22 @@ class OpenAIImagePromptGenerator:
         # Same generic retry as every other role: a reasoning-only
         # or empty prompt reply repeats the task; only a validated
         # prompt may reach the Tuzzina image execution path.
-        return complete_with_retry(
+        raw = complete_with_retry(
             self._adapter, sys, f"Topic: {topic}",
             temperature=0.7, max_tokens=200, timeout=60,
             task="image_prompt").strip()
+        # The Image Skill documents the two-step icon channel, so
+        # models sometimes echo its scaffolding (category / icon /
+        # icon:name) around the real prompt. That is template
+        # metadata, never image content: it must not reach the
+        # generator, and the real key still travels as the
+        # trailing [icon:key] tag the stage appends.
+        import re as _re
+        return "\n".join(
+            ln for ln in raw.splitlines()
+            if not _re.match(
+                r"^\s*(?:category|icon|icon:[A-Za-z0-9._/-]{1,120})\s*$",
+                ln, _re.I)).strip()
 
     def select_icon(self, topic: str,
                     assets: dict | None) -> str | None:

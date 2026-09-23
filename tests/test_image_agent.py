@@ -41,6 +41,37 @@ class MockPromptTest(unittest.TestCase):
         self.assertTrue(p.strip())
 
 
+class PromptScaffoldingTest(unittest.TestCase):
+    class _Adapter:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def complete(self, system, user, **kw):
+            return self.raw
+
+    def _gen(self, raw):
+        return G.OpenAIImagePromptGenerator(adapter=self._Adapter(raw))
+
+    def test_icon_template_scaffolding_stripped(self):
+        # Live failure: the model echoed the Skill's icon-channel
+        # template (category / icon / icon:<name>) around the real
+        # prompt. Only the visual prompt may reach the generator.
+        out = self._gen(
+            "category\nicon\n\nA single translucent fader lever, "
+            "centered left on a dark gradient, minimalist, portrait 4:5.\n\n"
+            "icon:play_compare\n").generate_prompt("t", BRAND, {})
+        self.assertEqual(
+            out,
+            "A single translucent fader lever, centered left on a dark "
+            "gradient, minimalist, portrait 4:5.")
+
+    def test_prompt_mentioning_icon_kept(self):
+        out = self._gen(
+            "A small icon of a play button floats beside a fader, "
+            "minimalist, portrait 4:5.").generate_prompt("t", BRAND, {})
+        self.assertIn("icon of a play button", out)
+
+
 class PipelineAgentTest(unittest.TestCase):
     def _pkg(self, policy):
         return build_package(item(), BRAND, {}, {"enabled": False},
