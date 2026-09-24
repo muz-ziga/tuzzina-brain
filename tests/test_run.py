@@ -291,11 +291,13 @@ class ResolveMediaTest(unittest.TestCase):
             return {"id": "b1", "path": "x"}
 
         def delegated(prompt, key_hint=None, headline=None,
-                        icon_key=None):
+                        icon_key=None, layout=None, art_direction=None):
             seen["delegated"] = prompt
             seen["key_hint"] = key_hint
             seen["headline"] = headline
             seen["icon_key"] = icon_key
+            seen["layout"] = layout
+            seen["art_direction"] = art_direction
             return {"id": "m9", "path": "https://pub.r2.dev/ai.png"}
 
         c.upload_from_url = from_url
@@ -311,6 +313,30 @@ class ResolveMediaTest(unittest.TestCase):
         self.assertEqual(up["id"], "u1")
         self.assertNotIn("bytes", c.calls)
         self.assertNotIn("delegated", c.calls)
+
+    def test_delegated_kind_ships_the_zone_contract(self):
+        import run as run_mod
+        from g2 import generators as G
+        c = self._client()
+        run_mod._resolve_media(
+            c, {"kind": "generator",
+                "generator": G.TuzzinaImageGenerator(),
+                "prompt": "a calm sea"},
+            headline="Calm seas.",
+            icon_key="identity/icons/play.svg",
+            layout=dict(G.AD_LAYOUT),
+            art_direction={"icon": "use", "slot": "top-center",
+                           "palette": ["amber"], "text_align": "center"})
+        seen = c.calls
+        self.assertEqual(seen["art_direction"]["slot"], "top-center")
+        self.assertEqual(seen["art_direction"]["text_align"], "center")
+        self.assertEqual(seen["layout"]["text"]["x"], 72)
+        self.assertEqual(seen["layout"]["text"]["y"], 520)
+        self.assertEqual(seen["layout"]["text"]["maxWidth"], 752)
+        self.assertEqual(seen["layout"]["text"]["maxHeight"], 300)
+        self.assertEqual(seen["layout"]["subject"]["maxHeight"], 507)
+        self.assertEqual(seen["layout"]["width"], 896)
+        self.assertEqual(seen["layout"]["height"], 1152)
 
     def test_delegated_kind_skips_bytes_and_upload(self):
         import run as run_mod

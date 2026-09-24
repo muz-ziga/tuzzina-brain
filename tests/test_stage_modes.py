@@ -32,6 +32,13 @@ from stage_run import (_as_opportunity, _as_research_result,
                        QUEUE_SOURCE, _queue_consume, _queue_take)
 
 
+CONCEPT_JSON = (
+    '{"meaning": "the sea is calm before a storm", "subject": "a quiet '
+    'harbor", "relationship": "still water holding pressure underneath", '
+    '"brief_constraints": ["portrait framing"], "art_direction": '
+    '{"icon": "none", "slot": "", "palette": [], "text_align": "left"}}')
+
+
 class ScriptAdapter:
     def __init__(self, outcomes):
         self._outcomes = list(outcomes)
@@ -193,9 +200,131 @@ class PromptStageCase(unittest.TestCase):
                 "claimed": []}
 
     def test_valid_prompt(self):
-        out = run_prompt_stage(
-            self._ctx(ScriptAdapter(["Studio scene, soft light"])))
+        # Two calls now: the visual-concept decision, then the prompt
+        # rendered from that concept.
+        adapter = ScriptAdapter([
+            CONCEPT_JSON,
+            "Studio scene, soft light",
+        ])
+        out = run_prompt_stage(self._ctx(adapter))
         self.assertEqual(out["prompt"], "Studio scene, soft light")
+        self.assertEqual(out["concept"]["subject"], "a quiet harbor")
+        concept_system = adapter.calls[0][0]
+        self.assertIn("visual concept", concept_system.lower())
+        # The second call renders the prompt FROM that concept.
+        self.assertIn("a quiet harbor", adapter.calls[1][0])
+
+    def test_concept_driven_by_meaning_not_topic_label(self):
+        # The claim is in the semantic payload (angle/facts); the
+        # topic is only a label. The concept call must see the claim,
+        # and the rendered prompt must follow the concept.
+        adapter = ScriptAdapter([
+            '{"meaning": "one mix fails in one environment and holds '
+            'in another", "subject": "a single source feeding two very '
+            'different rooms", "relationship": "the same signal meeting '
+            'opposite conditions", "brief_constraints": ["high key with '
+            'deep shadows"], "art_direction": {"icon": "none", "slot": "", '
+            '"palette": ["amber", "slate"], "text_align": "left"}}',
+            "A single source line splitting toward two contrasting rooms, "
+            "warm key light, portrait.",
+        ])
+        ctx = self._ctx(adapter)
+        ctx["topic"] = "Try-before-you-pay mastering preview"
+        ctx["post"] = {
+            "topic": "Try-before-you-pay mastering preview",
+            "angle": "why the same mix collapses in a car but not on "
+                     "headphones",
+            "facts": ["car systems roll off low frequencies"],
+            "audience": "mix engineers",
+            "media_intent": "image",
+        }
+        out = run_prompt_stage(ctx)
+        # The claim travelled to the concept decision, not the label.
+        concept_user = adapter.calls[0][1]
+        self.assertIn("collapses in a car", concept_user)
+        self.assertIn("car systems roll off low frequencies", concept_user)
+        self.assertEqual(
+            out["concept"]["relationship"],
+            "the same signal meeting opposite conditions")
+        # The prompt writer consumed the concept, not the raw topic.
+        prompt_system = adapter.calls[1][0]
+        self.assertIn("Visual concept", prompt_system)
+        self.assertIn("one mix fails in one environment", prompt_system)
+        self.assertIn("Render the visual concept above exactly",
+                      prompt_system)
+
+    def test_visual_brief_reaches_concept_and_prompt(self):
+        # A different channel, a different brief, one generator: the
+        # concept is grounded in that channel's own post meaning and
+        # carries that channel's brief.
+        ctx = self._ctx(ScriptAdapter([
+            '{"meaning": "the viewer should judge whether a sourdough '
+            'starter is ready by its float test", "subject": "a glass jar '
+            'of starter rising under a float test", "relationship": "the '
+            'jar rising with the lid on shows the float test the post '
+            'explains", "brief_constraints": ["macro photography"], '
+            '"art_direction": {"icon": "none", "slot": "", "palette": '
+            '["wheat", "clay"], "text_align": "left"}}',
+            "A glass jar of sourdough starter rising, warm bench light, "
+            "portrait.",
+        ]))
+        ctx["cfg"] = dict(POLICY)
+        ctx["cfg"]["visual"] = {"brief": {
+            "palette": ["deep teal", "warm sand"],
+            "treatment": ["editorial photography"],
+            "contrast": ["high key with deep shadows"],
+        }}
+        ctx["post"] = {
+            "topic": "Sourdough starter float test",
+            "angle": "what the float test actually proves about a starter",
+            "facts": ["a float test only measures gas, not acid"],
+            "audience": "home bakers",
+            "media_intent": "image",
+        }
+        out = run_prompt_stage(ctx)
+        self.assertIn("float test", out["concept"]["subject"])
+        adapter = ctx["prompt_gen"]._adapter
+        self.assertIn("Palette: deep teal, warm sand.",
+                      adapter.calls[0][0])
+        self.assertIn("Treatment: editorial photography.",
+                      adapter.calls[0][0])
+        self.assertIn("Palette: deep teal, warm sand.",
+                      adapter.calls[1][0])
+
+    def test_icon_is_optional_when_the_concept_declines_it(self):
+        # The concept may decide no icon helps this post: then no icon
+        # is picked and none travels to the compositor.
+        adapter = ScriptAdapter([
+            '{"meaning": "the viewer can compare the original mix against '
+            'the mastered version before paying", "subject": "two audio '
+            'renderings side by side", "relationship": "the comparison '
+            'happens before paying", "brief_constraints": [], '
+            '"art_direction": {"icon": "none", "slot": "", "palette": [], '
+            '"text_align": "left"}}',
+            "Two audio renderings side by side, warm key light, portrait.",
+        ])
+        ctx = self._ctx(adapter)
+        ctx["post"] = {
+            "topic": "Try-before-you-pay mastering preview",
+            "angle": "compare the original mix with the mastered version "
+                     "before paying",
+            "facts": ["compare the original mix against the mastered version"],
+            "audience": "mix engineers",
+            "media_intent": "image",
+        }
+        out = run_prompt_stage(ctx)
+        self.assertIsNone(out["icon_key"])
+        self.assertNotIn("[icon:", out["prompt"])
+        self.assertEqual(out["art_direction"]["icon"], "none")
+        self.assertEqual(len(adapter.calls), 2)
+
+    def test_unusable_concept_blocks_the_prompt(self):
+        # A concept missing its fields is not rendered into a prompt.
+        with self.assertRaises(Exception):
+            run_prompt_stage(self._ctx(ScriptAdapter([
+                LLMError("invalid-output"),
+                LLMError("invalid-output"),
+            ])))
 
     def test_prompt_failure_propagates(self):
         with self.assertRaises(Exception):
@@ -448,6 +577,22 @@ class AnalysisSeesResearchCase(unittest.TestCase):
         # run ended as a no-findings no-op no matter what the
         # research agent found.
         self.assertIn("research", STAGE_BASE_KEYS)
+
+    def test_base_keys_carry_the_visual_semantic_payload(self):
+        # Regression: "topic" and "post" were missing, so the prompt
+        # stage received an empty payload in production and every
+        # image came from the Skill alone. The analysis output the
+        # visual concept must be built from has to reach the stage.
+        for key in ("topic", "post"):
+            self.assertIn(key, STAGE_BASE_KEYS)
+
+    def test_prompt_stage_payload_keys_are_carried(self):
+        # Regression: "topic" and "post" were missing, so the prompt
+        # stage received an empty payload in production and every
+        # image came from the Skill alone. The analysis output the
+        # visual concept must be built from has to reach the stage.
+        for key in ("topic", "post"):
+            self.assertIn(key, STAGE_BASE_KEYS)
 
     def test_analysis_honors_carried_research(self):
         # The carried research findings must drive the verdict:
@@ -808,13 +953,23 @@ class LegacyOutcomeCase(unittest.TestCase):
         self.assertEqual(tout["outcome"], "drafted_image")
 
         class Prompt:
-            def generate_prompt(self, topic, brand, cfg):
+            def generate_prompt(self, topic, brand, cfg, post=None):
+                Prompt.seen = (topic, post)
                 return "A calm harbor."
 
         pout = run_prompt_stage(dict(
-            base, topic="T", prompt_gen=Prompt()))
+            base, topic="T", prompt_gen=Prompt(),
+            post={"topic": "T", "angle": "why loudness fails",
+                  "facts": ["car speakers roll off below 60Hz"],
+                  "audience": "mix engineers", "media_intent": "image"}))
         self.assertEqual(pout["outcome"], "ready")
         self.assertEqual(pout["prompt"], "A calm harbor.")
+        # The analysis payload reaches the prompt generator intact.
+        self.assertEqual(Prompt.seen[0], "T")
+        self.assertEqual(Prompt.seen[1]["angle"], "why loudness fails")
+        self.assertEqual(Prompt.seen[1]["facts"],
+                         ["car speakers roll off below 60Hz"])
+        self.assertEqual(Prompt.seen[1]["audience"], "mix engineers")
 
         eout = run_execute_stage(dict(
             base, opportunity=yes["opportunity"], text="Post words.",

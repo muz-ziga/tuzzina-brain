@@ -215,6 +215,46 @@ class BuilderRoutingTest(unittest.TestCase):
         self.assertEqual(build_visual({}), "")
         self.assertEqual(build_visual(None), "")
 
+    def test_visual_brief_renders_per_field_and_omits_absent(self):
+        # Channel-scoped Visual Brief: every field is optional, only
+        # what the channel declares is rendered, and an empty brief
+        # adds nothing to the prompt.
+        brief = {
+            "palette": ["deep teal", "warm sand"],
+            "treatment": ["editorial photography", "soft natural light"],
+            "contrast": ["high key with deep shadows"],
+            "subject": ["one human-scale detail", "shallow depth"],
+            "character": "calm, craft-focused",
+        }
+        cfg = self._cfg()
+        cfg["visual"]["brief"] = brief
+        out = build_visual(cfg, video_rules=False)
+        self.assertIn("Palette: deep teal, warm sand.", out)
+        self.assertIn("Treatment: editorial photography; "
+                      "soft natural light.", out)
+        self.assertIn("Contrast: high key with deep shadows.", out)
+        self.assertIn("Subject and composition: one human-scale detail; "
+                      "shallow depth.", out)
+        self.assertIn("Visual character: calm, craft-focused.", out)
+        # A second, unrelated domain needs no code change: its own
+        # brief values are the only difference.
+        food = dict(cfg)
+        food["visual"] = dict(cfg["visual"])
+        food["visual"]["brief"] = {
+            "palette": ["charcoal", "burnt orange"],
+            "treatment": ["macro food photography"],
+        }
+        out_food = build_visual(food, video_rules=False)
+        self.assertIn("Palette: charcoal, burnt orange.", out_food)
+        self.assertIn("Treatment: macro food photography.", out_food)
+        self.assertNotIn("deep teal", out_food)
+        self.assertNotIn("Visual character", out_food)
+        empty = self._cfg()
+        empty["visual"]["brief"] = {}
+        self.assertEqual(
+            build_visual(empty, video_rules=False),
+            build_visual(self._cfg(), video_rules=False))
+
     def test_image_prompt_receives_visual(self):
         from g2.pipeline import build_package
         from g2.generators import MockImageGenerator, MockTextGenerator

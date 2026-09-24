@@ -84,6 +84,13 @@ class VisualPolicy:
     # prompts; Tuzzina still owns media transport/storage.
     visual_rules: Any = _MISSING
     video_rules: Any = _MISSING
+    # Channel-scoped Visual Brief: the channel's own visual
+    # identity for generated images — palette, treatment (medium),
+    # contrast, subject/composition preferences, and an optional
+    # brand visual character. Every field is optional; nothing is
+    # defaulted here, so a channel sets only what it owns and the
+    # generic prompt pipeline stays domain-agnostic.
+    brief: Any = _MISSING
 
 
 @dataclass

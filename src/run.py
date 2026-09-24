@@ -44,7 +44,9 @@ def _build_generators(mode: str):
 def _resolve_media(client: TuzzinaClient, m: dict,
                    key_hint: str | None = None,
                    headline: str | None = None,
-                   icon_key: str | None = None) -> dict:
+                   icon_key: str | None = None,
+                   layout: dict | None = None,
+                   art_direction: dict | None = None) -> dict:
     """One planned media item -> Tuzzina {id, path} reference.
 
     url kind: existing upload_from_url (extracted source media).
@@ -64,7 +66,8 @@ def _resolve_media(client: TuzzinaClient, m: dict,
     if isinstance(gen, G.TuzzinaImageGenerator):
         return client.generate_image(
             m["prompt"], key_hint=key_hint, headline=headline,
-            icon_key=icon_key)
+            icon_key=icon_key, layout=layout,
+            art_direction=art_direction)
     blob, fname = gen.generate_png(m["prompt"])
     return client.upload_bytes(blob, fname, "image/png")
 

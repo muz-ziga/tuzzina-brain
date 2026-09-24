@@ -45,7 +45,7 @@ STAGE_ORDER = ("research", "analysis", "text", "prompt", "execute")
 # "research" (its verdict needs the findings), so dropping it
 # silently starves analysis into a permanent no-findings no-op.
 STAGE_BASE_KEYS = ("opportunity", "research", "items", "text",
-                   "prompt", "claimed")
+                   "prompt", "claimed", "topic", "post")
 
 SUCCESS = "SUCCESS"
 RETRYABLE = "RETRYABLE_STAGE_FAILURE"
@@ -552,7 +552,8 @@ def _parse_icon_tag(prompt: str) -> tuple[str, str | None]:
 
 
 def run_prompt_stage(ctx: dict) -> dict:
-    """Image Agent prompt LLM (prompt only, never bytes). Pure
+    """Image Agent: explicit visual-concept decision, then image-prompt
+    rendering from that concept (prompt only, never bytes). Pure
     read; carried claims released only on terminal failure. When
     an identity manifest is synced, the agent also picks one
     icon from it (two-step, fail-closed); the pick travels as a
@@ -564,23 +565,46 @@ def run_prompt_stage(ctx: dict) -> dict:
     try:
         brand = cfg.get("brand") or {}
         topic = str(ctx.get("topic") or "")
+        post = ctx.get("post")
+        if not isinstance(post, dict):
+            post = {}
+        post.setdefault("topic", topic)
         gen = ctx.get("prompt_gen")
         manifest = _assets_manifest(client)
         icon_key = None
-        if gen is not None and hasattr(gen, "select_icon"):
+        prompt = None
+        concept = None
+        if gen is not None and hasattr(gen, "generate_concept"):
+            # Explicit visual-concept decision, own step, same stage:
+            # semantic post payload + the channel's Visual Brief in,
+            # one small concept structure out. Prompt rendering below
+            # consumes that concept instead of deciding the visual idea
+            # from the topic label.
+            concept = gen.generate_concept(post, cfg)
+        art = (concept or {}).get("art_direction") or {}
+        wants_icon = str(art.get("icon") or "use") == "use"
+        if gen is not None and wants_icon and hasattr(gen, "select_icon"):
             try:
                 icon_key = gen.select_icon(
                     topic, manifest.get("assets", manifest))
             except Exception:
                 icon_key = None
-        prompt = gen.generate_prompt(topic, brand, cfg)
+        if gen is not None and hasattr(gen, "generate_prompt"):
+            if concept is not None:
+                prompt = gen.generate_prompt(
+                    topic, brand, cfg, post, concept=concept)
+            else:
+                prompt = gen.generate_prompt(topic, brand, cfg, post)
+        else:
+            prompt = ""
         if icon_key:
             prompt = prompt.rstrip() + "\n[icon:%s]" % icon_key
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
     return {"prompt": prompt, "claimed": list(claimed),
-            "icon_key": icon_key, "outcome": "ready"}
+            "icon_key": icon_key, "concept": concept,
+            "art_direction": art, "outcome": "ready"}
 
 
 def run_execute_stage(ctx: dict) -> dict:
@@ -716,18 +740,31 @@ def run_execute_stage(ctx: dict) -> dict:
             result["outcome"] = "done"
             return result
         from run import _resolve_media
+        from g2.generators import AD_LAYOUT as _LAYOUT
         service = InjectionService(tracer=StderrTracer())
         prompt, icon_key = _parse_icon_tag(prompt)
-        # Composed ads only for icon-selected posts (legacy raw
-        # path untouched); the headline is the main post's first
-        # line, best-effort.
+        # Art direction for this ad: an icon is used only when a real
+        # manifest key was picked, and the concept's own decision is
+        # used when the caller carried it. Absent decision is the
+        # conservative default (no forced slot, left aligned text).
+        art = ctx.get("art_direction") or {}
+        if not isinstance(art, dict):
+            art = {}
+        art_direction = {
+            "icon": "use" if icon_key else "none",
+            "slot": str(art.get("slot") or "") if icon_key else "",
+            "palette": list(art.get("palette") or [])[:6],
+            "text_align": str(art.get("text_align") or "left"),
+        }
+        # Composed ads: the headline is the main post's first line,
+        # best-effort, and independent of the icon channel — a
+        # failed icon pick must never drop the text layer.
+        main = str(text or "").split("---COMPANION---", 1)[0]
         headline = None
-        if icon_key:
-            main = str(text or "").split("---COMPANION---", 1)[0]
-            for line in main.splitlines():
-                if line.strip():
-                    headline = line.strip()[:160]
-                    break
+        for line in main.splitlines():
+            if line.strip():
+                headline = line.strip()[:160]
+                break
         post_ids: list = []
         media_refs: list = []
         for index, (intent, pkg) in enumerate(intents):
@@ -736,7 +773,8 @@ def run_execute_stage(ctx: dict) -> dict:
                 up = _resolve_media(
                     client, m,
                     key_hint="ai/%s/%d" % (run_id, index),
-                    headline=headline, icon_key=icon_key)
+                    headline=headline, icon_key=icon_key,
+                    layout=dict(_LAYOUT), art_direction=art_direction)
                 images.append({"id": up["id"], "path": up["path"]})
                 media_refs.append({"id": up["id"], "path": up["path"]})
             intent.media = images

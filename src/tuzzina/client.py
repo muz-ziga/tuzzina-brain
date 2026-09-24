@@ -347,7 +347,9 @@ class TuzzinaClient:
     def generate_image(self, prompt: str,
                        key_hint: str | None = None,
                        headline: str | None = None,
-                       icon_key: str | None = None) -> dict:
+                       icon_key: str | None = None,
+                       layout: dict | None = None,
+                       art_direction: dict | None = None) -> dict:
         """Delegate image generation to Tuzzina's existing image tool.
 
         Speaks the already-exposed MCP endpoint (POST base + "/mcp",
@@ -383,6 +385,10 @@ class TuzzinaClient:
                 tool_args["headline"] = str(headline)[:200]
             if icon_key:
                 tool_args["iconKey"] = str(icon_key)[:150]
+            if layout:
+                tool_args["layout"] = layout
+            if art_direction:
+                tool_args["artDirection"] = art_direction
             result = client.call_tool("generateImageTool", tool_args)
         except McpError as e:
             msg = str(e)

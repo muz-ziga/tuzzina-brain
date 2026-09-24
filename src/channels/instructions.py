@@ -72,9 +72,12 @@ def build_visual(policy: dict | None,
                  video_rules: bool = True) -> str:
     """Render visual identity into a prompt block for image/video
     roles only ("" when empty). Colors/logo come from the merged
-    brand; rules come from the merged visual policy. Video rules
-    are included only when `video_rules` is true (video roles);
-    image roles call with video_rules=False."""
+    brand; the channel's Visual Brief (`visual.brief`: palette,
+    treatment, contrast, subject, character) is rendered field by
+    field and every field is optional, so a channel sets only what
+    it owns. Legacy `visual_rules` still render. Video rules are
+    included only when `video_rules` is true (video roles); image
+    roles call with video_rules=False."""
     p = policy or {}
     brand = p.get("brand") or {}
     visual = p.get("visual") or {}
@@ -86,6 +89,24 @@ def build_visual(policy: dict | None,
     logo = brand.get("logo_url") or ""
     if logo:
         lines.append(f"Brand logo: {logo}.")
+
+    brief = visual.get("brief") or {}
+    if isinstance(brief, dict):
+        palette = [str(c) for c in list(brief.get("palette") or []) if c]
+        if palette:
+            lines.append("Palette: " + ", ".join(palette) + ".")
+        treatment = [str(t) for t in list(brief.get("treatment") or []) if t]
+        if treatment:
+            lines.append("Treatment: " + "; ".join(treatment) + ".")
+        contrast = [str(c) for c in list(brief.get("contrast") or []) if c]
+        if contrast:
+            lines.append("Contrast: " + "; ".join(contrast) + ".")
+        subject = [str(s) for s in list(brief.get("subject") or []) if s]
+        if subject:
+            lines.append("Subject and composition: " + "; ".join(subject) + ".")
+        character = str(brief.get("character") or "").strip()
+        if character:
+            lines.append("Visual character: " + character + ".")
 
     visual_rules = list(visual.get("visual_rules") or [])
     if visual_rules:

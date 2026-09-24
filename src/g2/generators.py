@@ -144,10 +144,190 @@ class MockImageGenerator(ImageGenerator):
         return png, "mock-64x64.png"
 
 
+CONCEPT_FIELDS = ("meaning", "subject", "relationship")
+
+# Zone contract: the single owner of the composed-ad geometry. The
+# same numbers are rendered into the image prompt (so the model keeps
+# the reserved areas quiet) and shipped to Tuzzina (so the compositor
+# places headline, logo and icon inside exactly those areas). Nothing
+# downstream re-derives a coordinate.
+AD_LAYOUT = {
+    "width": 896,
+    "height": 1152,
+    "margin": 72,
+    "logo": {"x": 72, "y": 84, "maxWidth": 240, "maxHeight": 120},
+    "icon": {"x": 624, "y": 120, "maxWidth": 200, "maxHeight": 200},
+    "text": {"x": 72, "y": 520, "maxWidth": 752, "maxHeight": 300},
+    "subject": {"y": 0, "maxHeight": 507},
+    "scrim": {"fadeStart": 0.38, "solidStart": 0.44, "opacity": 0.97},
+    "contrast": {"minRatio": 2.2, "plateOpacity": 0.55},
+    "type": {"maxFont": 56, "minFont": 30, "lineGap": 1.22, "maxLines": 4},
+}
+
+# Icon slots are safety bounds, not placements: the decision of which
+# slot (or none at all) belongs to the visual concept.
+AD_ICON_SLOTS = {
+    "top-left": {"x": 72, "y": 84, "maxWidth": 200, "maxHeight": 200},
+    "top-right": {"x": 624, "y": 84, "maxWidth": 200, "maxHeight": 200},
+    "top-center": {"x": 348, "y": 84, "maxWidth": 200, "maxHeight": 200},
+}
+
+
+def ad_layout_block(layout: dict | None = None) -> str:
+    """Human-readable zone contract for the image model: the same
+    numbers the compositor will use, so the model treats the reserved
+    areas as reserved instead of guessing from prose."""
+    lay = layout if isinstance(layout, dict) else AD_LAYOUT
+    return (
+        "Reserved areas (these exact zones are overlaid afterwards; "
+        "keep every subject, face, object, symbol and high-contrast "
+        "detail out of them):\n"
+        "- subject zone: y 0 to %(subjectH)d (top of the frame)\n"
+        "- headline zone: x %(tx)d to %(tr)d, y %(ty)d to %(tbottom)d\n"
+        "- logo zone: top-left, x %(lx)d to %(lright)d, y %(ly)d to "
+        "%(lbottom)d\n"
+        "- icon zone: top-right, x %(ix)d to %(ir)d, y %(iy)d to "
+        "%%(ibottom)d\n"
+        "Nothing readable, no text, no logo, no symbol inside those "
+        "zones."
+        % {
+            "subjectH": int(lay["subject"]["maxHeight"]),
+            "tx": int(lay["text"]["x"]),
+            "tr": int(lay["text"]["x"] + lay["text"]["maxWidth"]),
+            "ty": int(lay["text"]["y"]),
+            "tbottom": int(lay["text"]["y"] + lay["text"]["maxHeight"]),
+            "lx": int(lay["logo"]["x"]),
+            "lright": int(lay["logo"]["x"] + lay["logo"]["maxWidth"]),
+            "ly": int(lay["logo"]["y"]),
+            "lbottom": int(lay["logo"]["y"] + lay["logo"]["maxHeight"]),
+            "ix": int(lay["icon"]["x"]),
+            "ir": int(lay["icon"]["x"] + lay["icon"]["maxWidth"]),
+            "iy": int(lay["icon"]["y"]),
+            "ibottom": int(lay["icon"]["y"] + lay["icon"]["maxHeight"]),
+        }
+    )
+
+# Minimal local normalization for the concept grounding gate: common
+# words carry no visual claim, so they never count as grounding.
+CONCEPT_STOPWORDS = frozenset({
+    "and", "are", "but", "can", "each", "for", "from", "has", "have",
+    "her", "him", "his", "into", "its", "let", "may", "more", "most",
+    "must", "not", "now", "one", "only", "other", "our", "out", "own",
+    "same", "she", "should", "some", "such", "than", "that", "the",
+    "their", "them", "then", "they", "this", "those", "through", "too",
+    "two", "very", "was", "were", "what", "when", "which", "while",
+    "will", "with", "would", "you", "your", "yours", "into", "just",
+    "also", "both", "each", "every", "more", "most", "much", "many",
+})
+
+
+def _stem(word: str) -> str:
+    """Small morphological normalization so compare/comparison/
+    compares/compared share one stem. Iterative suffix stripping,
+    longest suffix first; no external library or synonym table."""
+    w = word.lower()
+    if w.endswith("ies") and len(w) > 4:
+        return w[:-3] + "y"
+    # Strip one longer suffix per pass, then single-letter endings.
+    for suf in ("ation", "ison", "tion", "ing", "ed", "es"):
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            w = w[:-len(suf)]
+            break
+    if w.endswith("s") and len(w) > 3:
+        w = w[:-1]
+    if w.endswith("e") and len(w) > 3:
+        w = w[:-1]
+    return w
+
+
+def _content_tokens(text: str) -> set:
+    """Local normalization: lowercase, split on non-alphanumerics,
+    morphologically normalize, drop short and common words."""
+    import re as _re
+    words = _re.sub(r"[^a-z0-9]+", " ",
+                    str(text or "").lower()).split()
+    stems = set()
+    for w in words:
+        if w in CONCEPT_STOPWORDS or len(w) < 3:
+            continue
+        s = _stem(w)
+        if len(s) >= 3 and s not in CONCEPT_STOPWORDS:
+            stems.add(s)
+        elif len(s) >= 3:
+            stems.add(s)
+    return stems
+
+
+def _payload_vocab(post: dict | None) -> tuple[set, set]:
+    """(prioritized, full) content vocabulary of the semantic post
+    payload. Angle and facts carry the concrete claim, so they are the
+    prioritized set; topic/audience/media intent only widen the match
+    pool. An empty claim set falls back to the full pool."""
+    p = post if isinstance(post, dict) else {}
+    facts = " ".join(str(f or "") for f in list(p.get("facts") or []))
+    claim = _content_tokens("%s %s" % (p.get("angle") or "", facts))
+    full = _content_tokens(" ".join(
+        str(p.get(k) or "") for k in
+        ("topic", "angle", "audience", "media_intent")) + " " + facts)
+    if not claim:
+        claim = full
+    return claim, full
+
+
+
+def _post_block(post: dict | None) -> str:
+    """One semantic-post block shared by the concept decision and the
+    prompt writer, so both read the same meaning (topic label,
+    angle, audience, media intent, key facts) and neither can work
+    from the label alone."""
+    p = post if isinstance(post, dict) else {}
+    lines = []
+    for key, label in (("topic", "Topic"), ("angle", "Angle"),
+                       ("audience", "Audience"),
+                       ("media_intent", "Media intent")):
+        value = str(p.get(key) or "").strip()
+        if value:
+            lines.append(f"- {label}: {value[:300]}")
+    facts = [str(f).strip() for f in list(p.get("facts") or [])[:6]
+             if str(f).strip()]
+    if facts:
+        lines.append("- Key facts: " + "; ".join(f[:200] for f in facts))
+    return "\n".join(lines)
+
+
+def _concept_block(concept: dict) -> str:
+    lines = ["- What the viewer must understand: " +
+             str(concept.get("meaning") or "")[:400]]
+    lines.append("- Subject or scene: " +
+                 str(concept.get("subject") or "")[:400])
+    lines.append("- Relationship to the post: " +
+                 str(concept.get("relationship") or "")[:400])
+    constraints = [str(c).strip()[:200]
+                   for c in list(concept.get("brief_constraints") or [])
+                   if str(c).strip()][:8]
+    if constraints:
+        lines.append("- Brief constraints to respect: " +
+                     "; ".join(constraints))
+    return "Visual concept (already decided from the post meaning; " \
+        "render it, do not replace it):\n" + "\n".join(lines)
+
+
 class MockImagePromptGenerator:
     """Deterministic image prompt for tests: topic -> prompt."""
+    def generate_concept(self, post: dict | None,
+                         policy: dict | None = None) -> dict:
+        p = post if isinstance(post, dict) else {}
+        return {
+            "meaning": str(p.get("angle") or p.get("topic") or ""),
+            "subject": str(p.get("topic") or ""),
+            "relationship": "",
+            "brief_constraints": [],
+        }
+
     def generate_prompt(self, topic: str, brand: dict,
-                        policy: dict | None = None) -> str:
+                        policy: dict | None = None,
+                        post: dict | None = None,
+                        concept: dict | None = None) -> str:
         return f"{topic} — studio scene, clean background, soft light"
 
     def select_icon(self, topic: str, assets: dict | None) -> str | None:
@@ -174,11 +354,18 @@ class FixedPromptGenerator:
     prompt string produced by the Image Agent stage. Same
     deterministic role as FixedTextGenerator."""
 
-    def __init__(self, prompt: str):
+    def __init__(self, prompt: str, concept: dict | None = None):
         self._prompt = prompt or ""
+        self._concept = concept
+
+    def generate_concept(self, post: dict | None,
+                         policy: dict | None = None) -> dict:
+        return dict(self._concept or {})
 
     def generate_prompt(self, topic: str, brand: dict,
-                        policy: dict | None = None) -> str:
+                        policy: dict | None = None,
+                        post: dict | None = None,
+                        concept: dict | None = None) -> str:
         return self._prompt
 
 
@@ -199,8 +386,171 @@ class OpenAIImagePromptGenerator:
             adapter = OpenAIAdapter(api_key, model)
         self._adapter = adapter
 
+    def generate_concept(self, post: dict | None,
+                         policy: dict | None = None) -> dict:
+        """Explicit visual-concept decision, domain-neutral.
+
+        Input: the semantic post payload (topic, angle, facts,
+        audience, media intent) plus the channel's rendered Visual
+        Brief. Output: one small structure naming what the viewer
+        must understand, the subject/scene that carries it, the
+        relationship that ties subject to post meaning, and the brief
+        constraints the concept must respect. A concept missing any
+        required field never reaches prompt rendering.
+        """
+        from llm.adapters import (LLMError, complete_with_retry,
+                                  unwrap_model_json)
+        from channels.instructions import build_visual as _visual
+        import json as _json
+        visual = _visual(policy, video_rules=False)
+        payload = _post_block(post)
+        claim_vocab, full_vocab = _payload_vocab(post)
+
+        def parse(raw: str) -> dict:
+            try:
+                data = _json.loads(unwrap_model_json(raw))
+            except Exception:
+                # Diagnostic only: the rejection code head is
+                # unchanged; the suffix exposes what the model
+                # actually returned so the cause is inspectable.
+                raise LLMError("invalid-output:unparsed=%s" % (
+                    " ".join(str(raw or "").split())[:160],))
+            if not isinstance(data, dict):
+                raise LLMError("invalid-output:not-a-mapping")
+            out: dict = {}
+            for key in ("meaning", "subject", "relationship"):
+                value = str(data.get(key) or "").strip()
+                if not value:
+                    raise LLMError("invalid-output")
+                out[key] = value[:400]
+            raw_list = data.get("brief_constraints")
+            if raw_list is None:
+                raw_list = []
+            if not isinstance(raw_list, list):
+                raise LLMError("invalid-output")
+            out["brief_constraints"] = [
+                str(c).strip()[:200] for c in raw_list if str(c).strip()
+            ][:8]
+            art = data.get("art_direction")
+            if art is None:
+                # Art direction is optional. A concept that decides no
+                # icon is the conservative default, never a forced
+                # layer. Present-but-malformed still fails closed.
+                out["art_direction"] = {
+                    "icon": "none", "slot": "", "palette": [],
+                    "text_align": "left",
+                }
+            else:
+                if not isinstance(art, dict):
+                    raise LLMError("invalid-output")
+                icon = str(art.get("icon") or "").strip().lower()
+                if icon not in ("use", "none"):
+                    raise LLMError("invalid-output")
+                slot = str(art.get("slot") or "").strip().lower()
+                if icon == "use" and slot not in AD_ICON_SLOTS:
+                    raise LLMError("invalid-output")
+                if icon == "none":
+                    slot = ""
+                palette = art.get("palette")
+                if palette is None:
+                    palette = []
+                if not isinstance(palette, list):
+                    raise LLMError("invalid-output")
+                align = str(art.get("text_align") or "left").strip().lower()
+                if align not in ("left", "center"):
+                    raise LLMError("invalid-output")
+                out["art_direction"] = {
+                    "icon": icon,
+                    "slot": slot,
+                    "palette": [str(c).strip()[:60] for c in palette
+                                if str(c).strip()][:6],
+                    "text_align": align,
+                }
+            # Grounding gate: a structurally valid concept is still
+            # unusable if its meaning/subject share no vocabulary with
+            # the post it claims to illustrate. Structure alone once
+            # let a stock metaphor through and the prompt renderer
+            # faithfully drew it. Only meaningful content words count;
+            # at least one must come from the claim vocabulary
+            # (angle + facts), one more from the payload overall.
+            # No payload vocabulary means no claim to ground in, so
+            # the concept is refused: fail closed, never invent.
+            if not full_vocab:
+                raise LLMError("invalid-output")
+            used = _content_tokens(out["meaning"] + " " + out["subject"])
+            if not (used & claim_vocab) or not (used & full_vocab):
+                # Diagnostic only: the rejection code head stays
+                # "invalid-output" (unchanged classification and
+                # decision); the suffix only makes the missed words
+                # inspectable through the existing stage envelope.
+                raise LLMError(
+                    "invalid-output:grounding-miss used=%s meaning=%s "
+                    "subject=%s" % (
+                        ",".join(sorted(used))[:120],
+                        out["meaning"][:90], out["subject"][:90]))
+            return out
+
+        system = (
+            "You decide the visual concept for one social image, in "
+            "any domain. Work from the post meaning and the visual "
+            "brief below; the topic label alone is never enough and "
+            "must not become the picture.\n"
+            "Answer exactly four questions:\n"
+            "1. What must the viewer understand from this image? State "
+            "the post's own communication goal, using its own subject "
+            "matter.\n"
+            "2. What subject or scene communicates that "
+            "understanding? It must be a concrete visual representation "
+            "of what this post is about.\n"
+            "3. What relationship or metaphor ties the subject to the "
+            "post meaning? A metaphor is allowed, but it must preserve "
+            "the post's actual claim.\n"
+            "4. Which of the visual brief constraints must the concept "
+            "respect?\n"
+            "Rules for meaning and subject: use the words of the post "
+            "payload (its angle, facts, topic). meaning and subject "
+            "must reuse the same content words from angle + facts as "
+            "much as possible, while preserving natural meaning. Never "
+            "replace the post with a generic motivational, "
+            "inspirational, lifestyle, or stock metaphor such as "
+            "overcoming adversity, persistence, a journey, or nature "
+            "imagery, unless the post itself is about that. Do not "
+            "invent a product, brand, or detail the post does not "
+            "support.\n"
+            "Also decide the art direction for the layers added later: "
+            "whether an icon helps this post at all (\"none\" is a valid, "
+            "often correct answer), which icon slot it would use "
+            "(one of the listed slots), a color direction for the "
+            "background, and whether the headline reads left-aligned or "
+            "centered.\n"
+            "Return JSON ONLY: {\"meaning\": str, \"subject\": str, "
+            "\"relationship\": str, \"brief_constraints\": [str], "
+            "\"art_direction\": {\"icon\": \"use\"|\"none\", \"slot\": "
+            "\"top-left\"|\"top-right\"|\"top-center\", \"palette\": [str], "
+            "\"text_align\": \"left\"|\"center\"}}."
+        )
+        system += "\n\nIcon slots (keep the chosen one clear): " + \
+            ", ".join("%s x %d to %d, y %d to %d" % (
+                name, box["x"], box["x"] + box["maxWidth"],
+                box["y"], box["y"] + box["maxHeight"])
+                for name, box in AD_ICON_SLOTS.items())
+        if visual:
+            system += "\n\n" + visual
+        raw = complete_with_retry(
+            self._adapter, system,
+            "Post to illustrate:\n" + (payload or "(none provided)"),
+            # Room for the full concept JSON: a truncated answer is
+            # unparseable, not a grounding failure, and the concept
+            # is longer than a single sentence.
+            temperature=0.3, max_tokens=900, timeout=60,
+            validate=lambda r: parse(r), task="visual_concept",
+            max_attempts=2)
+        return parse(raw)
+
     def generate_prompt(self, topic: str, brand: dict,
-                        policy: dict | None = None) -> str:
+                        policy: dict | None = None,
+                        post: dict | None = None,
+                        concept: dict | None = None) -> str:
         from skills.loader import get_skill
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
@@ -211,10 +561,50 @@ class OpenAIImagePromptGenerator:
         visual = _visual(policy, video_rules=False)
         if visual:
             parts.append(visual)
+        parts.append(ad_layout_block())
+        # Visual concept: decided from the post meaning in its own
+        # step, now the authority for the visual idea. The prompt
+        # writer renders this; it never re-decides the subject.
+        if isinstance(concept, dict) and concept:
+            parts.append(_concept_block(concept))
+            art = concept.get("art_direction")
+            if isinstance(art, dict) and art:
+                bits = []
+                if art.get("palette"):
+                    bits.append("background palette: " +
+                                ", ".join(str(c) for c in art["palette"]))
+                if art.get("icon") == "use" and art.get("slot"):
+                    box = AD_ICON_SLOTS.get(str(art["slot"]))
+                    if box:
+                        bits.append(
+                            "keep the %s icon slot clear (x %d to %d, "
+                            "y %d to %d)" % (
+                                art["slot"], box["x"],
+                                box["x"] + box["maxWidth"], box["y"],
+                                box["y"] + box["maxHeight"]))
+                if bits:
+                    parts.append("Art direction for this image: " +
+                                 "; ".join(bits) + ".")
+        # Semantic post payload: what the post actually says, who it
+        # is for, and what the analysis asked for visually. The
+        # generator never sees a bare label when the workflow can
+        # supply this, so the concept cannot be invented from a single
+        # keyword.
+        p = post if isinstance(post, dict) else {}
+        payload = _post_block(p)
+        if payload:
+            parts.append("Post to illustrate:\n" + payload)
         # keep prompt request short; campaign context already in skill
         parts.append(
             f"Post topic: {topic[:200]}. Brand: {brand.get('name','')}. "
-            "Return one image prompt only, under 60 words, no explanation.")
+            + ("Render the visual concept above exactly: keep its "
+               "subject and relationship, obey the visual instructions, "
+               "and do not invent a different visual idea. "
+               if isinstance(concept, dict) and concept else
+               "Derive the visual from the post meaning and the visual "
+               "instructions above; never substitute a generic look from a "
+               "familiar keyword. ")
+            + "Return one image prompt only, 60-100 words, no explanation.")
         sys = "\n\n".join(parts)
         from llm.adapters import complete_with_retry
         # Same generic retry as every other role: a reasoning-only
@@ -225,17 +615,27 @@ class OpenAIImagePromptGenerator:
             temperature=0.7, max_tokens=200, timeout=60,
             task="image_prompt").strip()
         # The Image Skill documents the two-step icon channel, so
-        # models sometimes echo its scaffolding (category / icon /
-        # icon:name) around the real prompt. That is template
+        # models sometimes echo its scaffolding (ICON SELECTION /
+        # Category: / Icon: / icon:name / [icon:...]) around the real
+        # prompt, sometimes markdown-bolded. That is template
         # metadata, never image content: it must not reach the
-        # generator, and the real key still travels as the
-        # trailing [icon:key] tag the stage appends.
+        # generator, and the real key still travels as the trailing
+        # [icon:key] tag the stage appends. Emphasisation markers are
+        # stripped before matching so the format cannot slip through.
         import re as _re
-        return "\n".join(
-            ln for ln in raw.splitlines()
-            if not _re.match(
-                r"^\s*(?:category|icon|icon:[A-Za-z0-9._/-]{1,120})\s*$",
-                ln, _re.I)).strip()
+        keep = []
+        for ln in raw.splitlines():
+            plain = ln.replace("*", "").replace("#", "").strip()
+            if _re.match(
+                    r"^(?:icon\s+selection|category|icon)(?:\s*:.*)?$",
+                    plain, _re.I):
+                continue
+            if _re.match(
+                    r"^\[icon:[A-Za-z0-9][A-Za-z0-9._/-]{0,120}\]$",
+                    plain, _re.I):
+                continue
+            keep.append(ln)
+        return "\n".join(keep).strip()
 
     def select_icon(self, topic: str,
                     assets: dict | None) -> str | None:

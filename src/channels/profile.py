@@ -155,6 +155,8 @@ def resolve_strategy(project_cfg: dict, strategy,
         if _is_set_s(strategy.visual.visual_rules) else [],
         "video_rules": list(strategy.visual.video_rules)
         if _is_set_s(strategy.visual.video_rules) else [],
+        "brief": dict(strategy.visual.brief)
+        if isinstance(getattr(strategy.visual, "brief", None), dict) else {},
     }
 
     out = _finalize(strategy.integration_id, channel_meta, brand_merged,
