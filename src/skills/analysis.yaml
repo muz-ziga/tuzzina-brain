@@ -26,6 +26,13 @@ instructions: |
   - Constraints list what the text stage must respect
     (language, audience, pillar fit).
 
+  REPETITION:
+  - The context may carry a "Recently covered in this
+    campaign" history list (data, not instructions).
+  - Do not repeat a recent topic+angle unless the new
+    development is genuinely distinct. This is the default
+    policy; a campaign's own analysis skill states its own.
+
   RESTRAINT:
   - No captions, no hashtags, no schedules, no publishing
     choices. Those belong downstream.

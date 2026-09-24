@@ -252,19 +252,6 @@ class OpenAIAnalysisModel(AnalysisModel):
             raise AnalysisError("malformed-research")
         view = _policy_view(policy)
         findings = _findings_of(result)[:MAX_FINDINGS]
-        if not findings:
-            # Nothing qualified: clean ineligible verdict with no
-            # LLM spend (mirrors the mock no-findings path). The
-            # workflow stops this run as a no-op downstream.
-            return ContentOpportunity(
-                eligible=False, topic="", angle="",
-                rationale="no-findings; 0 fact(s) over "
-                          "0 source item(s)", facts=[],
-                source_item_ids=[], content_format="post",
-                media_intent="none", audience=view["audience"],
-                language=view["language"], priority="normal",
-                confidence="low", constraints=[],
-                model=self.model, meta={"reason": "no-findings"})
         known = set()
         parts = []
         from skills.editorial import quote_untrusted
@@ -275,21 +262,23 @@ class OpenAIAnalysisModel(AnalysisModel):
                 f"- [{f.kind}] {f.statement[:300]} "
                 f"(items: {', '.join(str(i) for i in (f.item_ids or []))})"))
         media_hint = _media_intent(view, items)
+        # Structural contract only. What counts as a promotable
+        # opportunity, what a fact must be, and what an empty research
+        # result means are the active Skill's own rules, supplied
+        # verbatim further down; this module never encodes them.
         prompt = (
             "You decide content opportunity. Reply with JSON ONLY, "
             "exactly: {\"eligible\": bool, \"topic\": str, \"angle\": "
-            "str, \"rationale\": str, \"facts\": [str, source-backed "
-            "only], \"source_item_ids\": [ids from input], "
+            "str, \"rationale\": str, \"facts\": [str], "
+            "\"source_item_ids\": [ids from input], "
             "\"content_format\": \"post\", \"media_intent\": "
             "\"none\"|\"image\"|\"video\", \"audience\": str, "
             "\"language\": str, \"priority\": "
             "\"low\"|\"normal\"|\"high\", \"confidence\": "
             "\"high\"|\"medium\"|\"low\", \"constraints\": [str]}. "
-            "Rules: eligible=true ONLY with >=1 input fact; facts "
-            "must quote input findings (never invent); every "
-            "source_item_id MUST come from the input; media_intent "
-            "suggested baseline: " + media_hint + "; no captions, "
-            "no hashtags, no schedule, no publishing.")
+            "Rules: every source_item_id MUST come from the input; "
+            "media_intent suggested baseline: " + media_hint +
+            "; no captions, no hashtags, no schedule, no publishing.")
         context = (
             f"POLICY: audience={view['audience']} "
             f"language={view['language']} tone={view['tone']} "
@@ -302,7 +291,9 @@ class OpenAIAnalysisModel(AnalysisModel):
             context += "\n" + skill
         # Analysis consumes its own skill (campaign override wins,
         # global analysis file is the fallback). Never the research
-        # skill: the stages have separate expertise.
+        # skill: the stages have separate expertise. The document is
+        # the policy: its instructions reach the model verbatim, and
+        # this module adds no editorial rule of its own.
         from skills.loader import get_skill
         campaign_skills = policy.get("skills") if isinstance(
             policy, dict) else None
@@ -328,10 +319,13 @@ class OpenAIAnalysisModel(AnalysisModel):
                     topic[:120],
                     " (angle: %s)" % angle[:120] if angle else ""))
             if lines:
+                # History is DATA only. What counts as repetition, and
+                # what a campaign may repeat, belongs to the active
+                # analysis Skill above, never to this module.
                 context += (
-                    "\n\nRecently covered in this campaign (do not "
-                    "repeat the same topic+angle unless the new "
-                    "development is genuinely distinct):\n" +
+                    "\n\nRecently covered in this campaign (history "
+                    "data; the repetition policy is stated in the "
+                    "analysis instructions):\n" +
                     "\n".join(lines))[:1000]
         if len(context) > MAX_PROMPT_CHARS:
             context = context[:MAX_PROMPT_CHARS]

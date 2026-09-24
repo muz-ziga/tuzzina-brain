@@ -224,6 +224,15 @@ def _stage_base(args, run_id: str) -> dict:
     else:
         store = TuzzinaStateStore(client) \
             if args.state_store == "tuzzina" else MemoryStateStore()
+    # Recent published history for the decision stages. Same ledger
+    # the full-cycle path already reads; the staged path was the one
+    # missing it, so the decision stage saw no history at all. Pure
+    # read, best-effort (never fails a run).
+    try:
+        from run_cycle import _recent_topics
+        cfg["recent_topics"] = _recent_topics(client)
+    except Exception:
+        cfg["recent_topics"] = []
     return {"campaign": campaign, "client": client, "store": store,
             "cfg": cfg, "run_id": run_id,
             "integration_id": args.strategy_by_integration}
@@ -466,9 +475,9 @@ def run_text_stage(ctx: dict) -> dict:
     """Text LLM via the exact shaping the pipeline uses
     (plan_generation -> shape_item_for_g2 -> generate). Pure
     read; carried claims released only on terminal failure."""
-    from research.generation import (plan_generation,
-                                     primary_item_for,
-                                     shape_item_for_g2)
+    from research.generation import (GenerationPlan, TextRequest,
+                                     editorial_item_for, plan_generation,
+                                     primary_item_for, shape_item_for_g2)
     client, run_id = ctx["client"], ctx["run_id"]
     claimed = ctx.get("claimed") or []
     cfg = ctx["cfg"]
@@ -477,7 +486,6 @@ def run_text_stage(ctx: dict) -> dict:
         if ctx.get("opportunity") is None:
             # Text-only path (analysis skipped): plan straight from
             # the item, mirroring the legacy cycle exactly.
-            from research.generation import GenerationPlan, TextRequest
             _one = primary_item_for(None, items)
             plan = GenerationPlan(
                 text=TextRequest(
@@ -493,7 +501,7 @@ def run_text_stage(ctx: dict) -> dict:
                 video_config=(cfg.get("media") or {}),
                 policy=cfg)
         one = primary_item_for(opportunity, items)
-        shaped = shape_item_for_g2(one, plan)
+        shaped = shape_item_for_g2(one or editorial_item_for(plan), plan)
         from g2.pipeline import normalize
         brand = cfg.get("brand") or {}
         text = ctx["text_gen"].generate(
@@ -554,11 +562,12 @@ def _parse_icon_tag(prompt: str) -> tuple[str, str | None]:
 def run_prompt_stage(ctx: dict) -> dict:
     """Image Agent: explicit visual-concept decision, then image-prompt
     rendering from that concept (prompt only, never bytes). Pure
-    read; carried claims released only on terminal failure. When
-    an identity manifest is synced, the agent also picks one
-    icon from it (two-step, fail-closed); the pick travels as a
-    trailing [icon:key] tag inside the prompt string because the
-    workflow forwards only that string downstream."""
+    read; carried claims released only on terminal failure. Icons are
+    never produced: the brand logo is the only added brand asset, so
+    no icon pick and no [icon:key] tag travel downstream. The concept
+    is normalized before rendering: no icon, and one strong primary
+    color for this slot of the current 24h color cycle (never the
+    model's free choice)."""
     client, run_id = ctx["client"], ctx["run_id"]
     claimed = ctx.get("claimed") or []
     cfg = ctx["cfg"]
@@ -570,7 +579,6 @@ def run_prompt_stage(ctx: dict) -> dict:
             post = {}
         post.setdefault("topic", topic)
         gen = ctx.get("prompt_gen")
-        manifest = _assets_manifest(client)
         icon_key = None
         prompt = None
         concept = None
@@ -581,14 +589,10 @@ def run_prompt_stage(ctx: dict) -> dict:
             # consumes that concept instead of deciding the visual idea
             # from the topic label.
             concept = gen.generate_concept(post, cfg)
-        art = (concept or {}).get("art_direction") or {}
-        wants_icon = str(art.get("icon") or "use") == "use"
-        if gen is not None and wants_icon and hasattr(gen, "select_icon"):
-            try:
-                icon_key = gen.select_icon(
-                    topic, manifest.get("assets", manifest))
-            except Exception:
-                icon_key = None
+        art = _normalized_art_direction(
+            (concept or {}).get("art_direction"), ctx.get("now"))
+        if isinstance(concept, dict) and concept:
+            concept["art_direction"] = art
         if gen is not None and hasattr(gen, "generate_prompt"):
             if concept is not None:
                 prompt = gen.generate_prompt(
@@ -597,14 +601,36 @@ def run_prompt_stage(ctx: dict) -> dict:
                 prompt = gen.generate_prompt(topic, brand, cfg, post)
         else:
             prompt = ""
-        if icon_key:
-            prompt = prompt.rstrip() + "\n[icon:%s]" % icon_key
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
     return {"prompt": prompt, "claimed": list(claimed),
             "icon_key": icon_key, "concept": concept,
             "art_direction": art, "outcome": "ready"}
+
+
+def _normalized_art_direction(art: dict | None,
+                              when: str | None = None) -> dict:
+    """The campaign image direction every post is rendered with: no
+    icon at all, and the strong primary color owned by this slot of
+    the current 24h cycle. The color is decided here, not by the
+    model; a color that fails the strength rule is refused before any
+    image is produced."""
+    from g2.generators import palette_for_slot, palette_is_strong
+    source = art if isinstance(art, dict) else {}
+    color = palette_for_slot(when)
+    if not palette_is_strong(color):
+        # Fail closed: a washed-out, gray or near-monochrome primary
+        # never reaches the image model.
+        raise RuntimeError("palette-not-strong:" + color)
+    return {
+        "icon": "none",
+        "slot": "",
+        "palette": [color],
+        "text_align": str(source.get("text_align") or "left")
+        if str(source.get("text_align") or "left") in ("left", "center")
+        else "left",
+    }
 
 
 def run_execute_stage(ctx: dict) -> dict:
@@ -626,8 +652,8 @@ def run_execute_stage(ctx: dict) -> dict:
     from research.formats import (allowed_from_distribution,
                                   gate_media_for_roles,
                                   select_format)
-    from research.generation import (image_gen_for, plan_generation,
-                                     primary_item_for,
+    from research.generation import (editorial_item_for, image_gen_for,
+                                     plan_generation, primary_item_for,
                                      shape_item_for_g2)
     from run_cycle import _post_ids, _record_published_topic
     client, run_id = ctx["client"], ctx["run_id"]
@@ -696,14 +722,26 @@ def run_execute_stage(ctx: dict) -> dict:
                                      "media reference")
                 result["video_media"] = [ref]
         gen_image = image_gen_for(gen_plan, TuzzinaImageGenerator())
-        _one = primary_item_for(opportunity, items)
+        # A decision may carry no source item (a campaign policy may
+        # route an empty research state into an editorial fallback);
+        # the generic editorial unit keeps the pipeline whole without
+        # ever looking like collected material.
+        _one = primary_item_for(opportunity, items) \
+            or editorial_item_for(gen_plan)
         packages = []
         if _one is not None:
             shaped = shape_item_for_g2(_one, gen_plan)
+            # Destination comes from the run's own integration
+            # context (channel_meta.identifier), never a central
+            # channel default; the item's own platform is the
+            # fallback when the integration exposes none.
+            platform = str(
+                ((fixed_policy.get("channel_meta") or {})
+                 .get("identifier") or "") or _one.platform or "")
             packages.append(build_package(
                 shaped, brand, language, hs_cfg, links_policy,
                 FixedTextGenerator(text), gen_image,
-                platform=_one.platform or "facebook", limits=None,
+                platform=platform, limits=None,
                 policy=fixed_policy))
         result["packages"] = len(packages)
         planned = plan(packages, schedule)
@@ -742,17 +780,18 @@ def run_execute_stage(ctx: dict) -> dict:
         from run import _resolve_media
         from g2.generators import AD_LAYOUT as _LAYOUT
         service = InjectionService(tracer=StderrTracer())
-        prompt, icon_key = _parse_icon_tag(prompt)
-        # Art direction for this ad: an icon is used only when a real
-        # manifest key was picked, and the concept's own decision is
-        # used when the caller carried it. Absent decision is the
-        # conservative default (no forced slot, left aligned text).
+        prompt, _ = _parse_icon_tag(prompt)
+        # Icons are disabled for this campaign: the brand logo is the
+        # only added brand asset, so an [icon:key] tag in the prompt
+        # string is stripped and never resolved. Art direction still
+        # carries the concept's own decision and its palette.
+        icon_key = None
         art = ctx.get("art_direction") or {}
         if not isinstance(art, dict):
             art = {}
         art_direction = {
-            "icon": "use" if icon_key else "none",
-            "slot": str(art.get("slot") or "") if icon_key else "",
+            "icon": "none",
+            "slot": "",
             "palette": list(art.get("palette") or [])[:6],
             "text_align": str(art.get("text_align") or "left"),
         }
@@ -1197,6 +1236,21 @@ def _research_agent_payload(ctx, out, roles, skills, store,
             "agent_trace": _agent_trace(loop)}
 
 
+def _empty_research() -> dict:
+    """A valid research result that carries no findings.
+
+    Shape-identical to every other research result the stage emits
+    (it is a ResearchResult, not a sentinel), so the next stage always
+    receives the same data type whatever the collectors found. The
+    stage reports success; what an empty result means for the run is
+    the next stage's Skill, never this module.
+    """
+    from research.models import ResearchResult
+    return _to_jsonable(ResearchResult(
+        summary="", findings=[], topics=[], entities=[], item_ids=[],
+        earliest_published="", latest_published="", model="", meta={}))
+
+
 def run_research_stage(ctx: dict) -> dict:
     """Collect + claim + research LLM. Commits collection state
     on success (mirrors the legacy cycle); on failure nothing is
@@ -1238,9 +1292,8 @@ def run_research_stage(ctx: dict) -> dict:
     if not out.items:
         for res in pending:
             res.commit(store)
-        # Starving cycle: reuse unpublished findings first
-        # instead of giving up (dry runs never touch the
-        # shared queue).
+        # Starving cycle: reuse unpublished findings first instead of
+        # dropping them (dry runs never touch the shared queue).
         if not dry_run:
             take = _queue_take(client)
             if take is not None:
@@ -1255,10 +1308,16 @@ def run_research_stage(ctx: dict) -> dict:
                         "roles_resolved": ctx.get("roles_resolved") or [],
                         "skills_used": skills, "queued": True,
                         # Legacy outcome map (V2 flow lookup): the
-                        # queue always carries usable findings, so a
-                        # take means proceed; empty still means stop.
+                        # queue carries usable findings, so a take
+                        # means proceed.
                         "outcome": "findings"}
-        return {"items": [], "research": None, "claimed": [],
+        # Nothing new was collected: the research stage still
+        # SUCCEEDED with a valid empty result. Whether that leaves the
+        # run with a post is the next stage's business, decided by its
+        # own Skill, so the stage reports the same success outcome it
+        # reports for any result it produced.
+        return {"items": [], "research": _empty_research(),
+                "claimed": [],
                 "committed": True,
                 "sources_checked": len(out.sources),
                 "items_new": 0,
@@ -1266,7 +1325,7 @@ def run_research_stage(ctx: dict) -> dict:
                 "roles": roles,
                 "roles_resolved": ctx.get("roles_resolved") or [],
                 "skills_used": skills, "queued": False,
-                "outcome": "no_material"}
+                "outcome": "findings"}
     if "research" not in roles:
         # Research role off: collection still ran (items needed
         # downstream), but no LLM call — mirrors the legacy

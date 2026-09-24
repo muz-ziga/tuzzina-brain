@@ -303,18 +303,28 @@ class OpenAIRoleCase(unittest.TestCase):
             real(_am.OpenAIAnalysisModel("k"), raw, {"g-1"}, False,
                  "legacy-v1")
 
-    def test_empty_research_ineligible_without_llm(self):
+    def test_empty_research_is_decided_by_the_skill_not_the_engine(self):
+        # The engine has no opinion about an empty research result: it
+        # asks the model, passes the Skill's instructions, and accepts
+        # the verdict it structurally validates. Whether an empty
+        # result is a decline or a fallback lives in the Skill.
         calls = []
+        declined = _openai_body(eligible=False, facts=[],
+                                source_item_ids=[],
+                                rationale="no source-backed fact",
+                                topic="", angle="")
 
         def _open(req, timeout=None):
             calls.append(req)
-            return FakeResp(_openai_body())
+            return FakeResp(declined)
 
         urllib.request.urlopen = _open
         o = OpenAIAnalysisModel("k").analyze(research([]), policy())
         self.assertFalse(o.eligible)
-        self.assertIn("no-findings", o.meta["reason"])
-        self.assertEqual(calls, [])
+        self.assertEqual(o.facts, [])
+        self.assertEqual(len(calls), 1)
+        sent = calls[0].data.decode()
+        self.assertIn("ELIGIBILITY DISCIPLINE", sent)
 
     def _user_text(self, pol):
         seen = {}
@@ -335,13 +345,16 @@ class OpenAIRoleCase(unittest.TestCase):
             "junk",
         ]
         user = self._user_text(pol)
-        self.assertIn("Recently covered", user)
+        self.assertIn("history data", user)
         self.assertIn("Loudness basics", user)
         self.assertIn("LUFS intro", user)
 
     def test_no_recent_topics_no_list(self):
+        # No history data means no history block. (The words "Recently
+        # covered" also appear inside the default Skill's repetition
+        # guidance, which is policy text, not injected data.)
         user = self._user_text(policy())
-        self.assertNotIn("Recently covered", user)
+        self.assertNotIn("history data;", user)
 
 
 class BoundaryCase(unittest.TestCase):

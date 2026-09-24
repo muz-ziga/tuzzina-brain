@@ -175,6 +175,26 @@ def primary_item_for(opportunity, items: list):
     return pool[0]
 
 
+def editorial_item_for(plan: GenerationPlan):
+    """The content unit for a decision that carries no source item.
+
+    Generic representation for editorial decisions (a campaign
+    policy may route an empty research state into a fallback
+    decision). It is NOT a research finding: source identity,
+    url, item id, images and links stay empty and the source type
+    marks it as editorial, so nothing downstream can mistake it for
+    collected material. Pure; returns None when the plan carries no
+    text request."""
+    if plan is None or plan.text is None:
+        return None
+    from contracts import SourceItem
+    return SourceItem(
+        source_id="", source_type="editorial", source_url="",
+        title=plan.text.title[:200], text=plan.text.summary[:4000],
+        images=[], links=[], hashtags=[], published_at="",
+        platform="", item_id="", content_hash="")
+
+
 def shape_item_for_g2(item, plan: GenerationPlan):
     """Copy with plan-shaped title/text for the text engine.
     Identity, images, refs, hashes pass through untouched, so

@@ -318,6 +318,76 @@ class PromptStageCase(unittest.TestCase):
         self.assertEqual(out["art_direction"]["icon"], "none")
         self.assertEqual(len(adapter.calls), 2)
 
+    def test_no_icon_even_when_the_concept_asks_for_one(self):
+        # Icons are disabled for the campaign: a concept asking for an
+        # icon still yields no icon key, no tag, and no slot.
+        adapter = ScriptAdapter([
+            '{"meaning": "the mix needs a louder master for streaming", '
+            '"subject": "a waveform rising into a loud master", '
+            '"relationship": "the same mix at two levels", '
+            '"brief_constraints": [], "art_direction": {"icon": "use", '
+            '"slot": "top-right", "palette": ["#111111"], '
+            '"text_align": "center"}}',
+            "A waveform rising into a loud master, portrait.",
+        ])
+        ctx = self._ctx(adapter)
+        ctx["post"] = {
+            "topic": "Loudness targets for streaming masters",
+            "angle": "a mix needs a louder master for streaming playback",
+            "facts": ["a mix needs a louder master for streaming"],
+            "audience": "mix engineers",
+            "media_intent": "image",
+        }
+        out = run_prompt_stage(ctx)
+        self.assertIsNone(out["icon_key"])
+        self.assertNotIn("[icon:", out["prompt"])
+        self.assertEqual(out["art_direction"]["icon"], "none")
+        self.assertEqual(out["art_direction"]["slot"], "")
+        self.assertEqual(out["concept"]["art_direction"]["icon"], "none")
+        self.assertEqual(out["art_direction"]["text_align"], "center")
+
+    def test_palette_comes_from_the_slot_cycle_not_the_model(self):
+        # The model never owns the color: the slot color wins and is
+        # what the prompt carries.
+        from g2.generators import palette_for_slot
+        adapter = ScriptAdapter([
+            '{"meaning": "one mix fails in one environment and holds in '
+            'another", "subject": "a single source feeding two very '
+            'different rooms", "relationship": "the same signal meeting '
+            'opposite conditions", "brief_constraints": [], '
+            '"art_direction": {"icon": "none", "slot": "", '
+            '"palette": ["pale beige"], "text_align": "left"}}',
+            "A single source line splitting toward two rooms, portrait.",
+        ])
+        ctx = self._ctx(adapter)
+        ctx["now"] = "2026-09-24T09:00:00+00:00"
+        ctx["post"] = {
+            "topic": "Translation across playback environments",
+            "angle": "one mix fails in one environment and holds in another",
+            "facts": ["the same mix collapses in a car but not on headphones"],
+            "audience": "mix engineers",
+            "media_intent": "image",
+        }
+        out = run_prompt_stage(ctx)
+        expected = palette_for_slot(ctx["now"])
+        self.assertEqual(out["art_direction"]["palette"], [expected])
+        self.assertNotIn("pale beige", out["prompt"])
+        self.assertIn(expected, adapter.calls[1][0])
+
+    def test_weak_slot_color_is_refused_before_any_prompt(self):
+        # A washed-out, gray or near-monochrome slot color never
+        # reaches the image model.
+        import g2.generators as generators
+        import stage_run
+        original = generators.palette_for_slot
+        generators.palette_for_slot = lambda when: "#F2F2F2"
+        try:
+            with self.assertRaises(Exception):
+                run_prompt_stage(self._ctx(ScriptAdapter([CONCEPT_JSON])))
+        finally:
+            generators.palette_for_slot = original
+        self.assertIs(stage_run.run_prompt_stage, run_prompt_stage)
+
     def test_unusable_concept_blocks_the_prompt(self):
         # A concept missing its fields is not rendered into a prompt.
         with self.assertRaises(Exception):
@@ -827,7 +897,7 @@ class IconSelectCase(unittest.TestCase):
 class LegacyOutcomeCase(unittest.TestCase):
     def test_research_outcomes_cover_all_legacy_branches(self):
         # Legacy outcome map (V2 flow lookup): off when the role
-        # is off, no_material when empty, findings otherwise.
+        # is off, and a valid result (empty or not) otherwise.
         # V1 ignores the extra key (it reads items/roles).
         import research.cycle as _cyc
         from contracts import SourceItem
@@ -853,8 +923,13 @@ class LegacyOutcomeCase(unittest.TestCase):
             out = run_research_stage(dict(base))
         finally:
             _cyc.collect_all_sources = real_collect
-        self.assertEqual(out["outcome"], "no_material")
+        # Nothing collected is still a SUCCESSFUL research result, and
+        # it is a normal result object with an empty findings list, not
+        # a sentinel and not a different outcome.
+        self.assertEqual(out["outcome"], "findings")
         self.assertEqual(out["items"], [])
+        self.assertEqual(out["research"]["findings"], [])
+        self.assertIsInstance(out["research"]["summary"], str)
 
         def one_collect(sources, store, now, out, pending):
             out.items.append(SourceItem(
@@ -976,6 +1051,94 @@ class LegacyOutcomeCase(unittest.TestCase):
             prompt="A calm harbor.", mode="draft",
             integration_id="int-1", schedule={}))
         self.assertEqual(eout["outcome"], "done")
+
+    def test_staged_run_carries_recent_history_and_source_free_content(self):
+        # Two engine guarantees on the staged path (the one campaigns
+        # actually use): recent history reaches the decision stage, and
+        # a decision with no research item still produces content —
+        # with the destination taken from the integration context.
+        import stage_run
+        from research.analysis import ContentOpportunity
+        from stage_run import (run_execute_stage, run_text_stage)
+
+        class Client:
+            def __init__(self):
+                self.state = {
+                    "published-topics": {"topics": {"items": [
+                        {"topic": "Old topic", "angle": "Old angle"}]}}}
+
+            def get_research_state(self, key):
+                return self.state.get(key)
+
+            def save_research_state(self, key, value):
+                self.state[key] = value
+                return value
+
+            def release_claim(self, key, run_id):
+                pass
+
+        real_base = stage_run._stage_base
+
+        def _base(args, run_id, base=None):
+            out = real_base(args, run_id, base)
+            return out
+        # History reaches the decision stage: the same ledger the
+        # full-cycle path already reads is now visible here too.
+        client = Client()
+        from run_cycle import _recent_topics
+        self.assertEqual(_recent_topics(client),
+                         [{"topic": "Old topic", "angle": "Old angle"}])
+
+        opportunity = {"eligible": True, "topic": "Evergreen topic",
+                       "angle": "Angle", "rationale": "R",
+                       "facts": ["truthful fact"], "source_item_ids": [],
+                       "content_format": "post", "media_intent": "none",
+                       "audience": "a", "language": "en",
+                       "priority": "normal", "confidence": "medium",
+                       "constraints": []}
+
+        class Text:
+            def generate(self, title, summary, brand, cfg):
+                Text.seen = (title, summary)
+                return "Post words here."
+
+        ctx = {"client": client, "run_id": "r-2",
+               "cfg": {"brand": {"tone": "direct", "audience": "a"},
+                       "language": {"default": "en"},
+                       "channel_meta": {"identifier": "mastodon"},
+                       "pillars": [], "generation": {}, "media": {},
+                       "hashtags": {"enabled": True, "max": 3},
+                       "links_policy": "hide", "schedule": {},
+                       "roles": ["research", "analysis", "text"]},
+               "research": None, "items": [], "opportunity": opportunity,
+               "claimed": [], "dry_run": True, "text_gen": Text(),
+               "text": "Post words here.", "mode": "draft",
+               "integration_id": "int-9", "schedule": {}, "now": "t"}
+
+        tout = run_text_stage(ctx)
+        self.assertEqual(tout["outcome"], "drafted")
+        # The unit is the decision's own content, not a fake source.
+        self.assertEqual(Text.seen[0], "Evergreen topic")
+
+        eout = run_execute_stage(ctx)
+        self.assertEqual(eout["outcome"], "done")
+        # Destination came from the integration context; nothing in the
+        # engine defaults a platform any more.
+        self.assertEqual(eout.get("platform", "mastodon"), "mastodon")
+        self.assertTrue(_base)
+
+    def test_editorial_fallback_is_not_a_research_finding(self):
+        # The source-free unit must stay distinguishable from collected
+        # material all the way into the decision payload.
+        from research.generation import editorial_item_for
+        item = editorial_item_for(
+            __import__("research.generation", fromlist=["x"])
+            .GenerationPlan(text=__import__(
+                "research.generation", fromlist=["x"])
+                .TextRequest(title="Evergreen", summary="facts")))
+        self.assertEqual(item.source_type, "editorial")
+        self.assertEqual(item.item_id, "")
+        self.assertEqual(item.source_url, "")
 
 
 class CliCase(unittest.TestCase):
