@@ -282,9 +282,7 @@ class OpenAIAnalysisModel(AnalysisModel):
         context = (
             f"POLICY: audience={view['audience']} "
             f"language={view['language']} tone={view['tone']} "
-            f"pillars={view['pillars']}\n"
-            f"{quote_untrusted('SUMMARY: ' + ((getattr(result, 'summary', '') or '')[:500]))}\n"
-            f"FINDINGS:\n" + "\n".join(parts))
+            f"pillars={view['pillars']}\n")
         from channels.instructions import build as _skill
         skill = _skill(policy)
         if skill:
@@ -301,6 +299,15 @@ class OpenAIAnalysisModel(AnalysisModel):
             "analysis",
             (campaign_skills or {}).get("analysis"))
         context += "\n\n" + skill_doc["instructions"]
+        # Everything below is VARIABLE research data (summary,
+        # findings, published history, parked material). It is
+        # appended AFTER the policy and the Skill on purpose: the
+        # prompt is capped at MAX_PROMPT_CHARS, so data is what may
+        # be truncated — the configured Skill, which is the authority
+        # for this stage, never is.
+        context += "\n" + (
+            f"{quote_untrusted('SUMMARY: ' + ((getattr(result, 'summary', '') or '')[:500]))}\n"
+            f"FINDINGS:\n" + "\n".join(parts))
         # Same split as research: structure always, semantic
         # floors only under "legacy-v1" (frozen, recorded).
         contract_id = skill_doc.get("contract_id", "legacy-v1")

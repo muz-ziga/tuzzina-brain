@@ -66,6 +66,28 @@ class PromptScaffoldingTest(unittest.TestCase):
             "A single translucent fader lever, centered left on a dark "
             "gradient, minimalist, portrait 4:5.")
 
+    def test_engine_states_no_word_count_rule(self):
+        # The prompt LENGTH is the Image Skill's rule (the active
+        # document says "under 60 words"). The generic engine asks for
+        # one prompt and no explanation, and imposes no limit of its
+        # own that could contradict the Skill.
+        captured = {}
+        import llm.adapters as _adapters
+        real = _adapters.complete_with_retry
+
+        def _capture(adapter, system, context, **kw):
+            captured["system"] = system
+            return real(adapter, system, context, **kw)
+        _adapters.complete_with_retry = _capture
+        try:
+            self._gen("A fader under one lamp, portrait 4:5.").generate_prompt(
+                "t", BRAND, {})
+        finally:
+            _adapters.complete_with_retry = real
+        self.assertNotIn("60-100 words", captured["system"])
+        self.assertIn("Return one image prompt only, no explanation.",
+                      captured["system"])
+
     def test_prompt_mentioning_icon_kept(self):
         out = self._gen(
             "A small icon of a play button floats beside a fader, "

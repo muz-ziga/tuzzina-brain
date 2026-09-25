@@ -86,7 +86,12 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
     text = clean_model_text(
         text, links_policy=links_policy,
         policy_urls=[item.source_url or "", *cta_urls],
-        policy_phrases=[cta_lead] if cta_lead.strip() else [])
+        policy_phrases=[cta_lead] if cta_lead.strip() else [],
+        # Hashtag ownership is the existing hashtags configuration:
+        # enabled means this pipeline appends the tags (so the
+        # model's own are dropped to avoid printing twice); disabled
+        # means the Text Skill's tags are the only ones.
+        strip_hashtags=bool(hs_cfg.get("enabled")))
     # Script gate: mixed-script output (demonstrated: Chinese
     # inside Arabic) fails loud here instead of publishing
     # corrupted text. Detection only; no silent rewriting.

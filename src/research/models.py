@@ -212,19 +212,20 @@ class OpenAIResearchModel(ResearchModel):
                 f"ID: {_trace_id(it)}\nTitle: {(it.title or '').strip()}\n"
                 f"Published: {it.published_at or 'unknown'}\n"
                 f"Text: {text}"))
+        # STRUCTURE ONLY. What counts as a finding, what makes one a
+        # fact or an inference, how confident it must be, and when an
+        # empty result is the right answer are the Research Skill's
+        # own rules (src/skills/research.yaml states them for the
+        # default skill). The engine states the result shape and the
+        # identity rule that validation enforces, and nothing else.
         prompt = (
             "You research collected source items. Reply with JSON ONLY, "
             "exactly: {\"summary\": str, \"findings\": [{\"statement\": "
             "str, \"kind\": \"fact\"|\"inference\", \"confidence\": "
             "\"high\"|\"medium\"|\"low\", \"item_ids\": [ids from the "
             "input], \"excerpt\": str}], \"topics\": [str], \"entities\": "
-            "[str]}. Rules: kind=fact ONLY for claims stated verbatim in "
-            "the item text (excerpt must quote it); kind=inference for "
-            "anything you conclude, with confidence low unless two or "
-            "more items support it. Every finding MUST list only input "
-            "IDs. \"findings\" may be [] when no input item meets the "
-            "skill rules (say why in summary). No other keys, no prose "
-            "outside the JSON.")
+            "[str]}. Every finding MUST list only input IDs. No other "
+            "keys, no prose outside the JSON.")
         from channels.instructions import build as _skill
         skill = _skill(policy)
         if skill:

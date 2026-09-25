@@ -190,6 +190,17 @@ class EditorialCase(unittest.TestCase):
         self.assertNotIn("#", out)
         self.assertIn("Great mix!", out)
 
+    def test_hashtags_survive_when_the_skill_owns_them(self):
+        # Hashtag ownership is the campaign's hashtags configuration.
+        # When the pipeline is not the assembler, the Text Skill's own
+        # tags are the only ones and must not be removed.
+        out = clean_model_text("Great mix! #mastering #Mix",
+                               links_policy="hide",
+                               strip_hashtags=False)
+        self.assertIn("#mastering", out)
+        self.assertIn("#Mix", out)
+        self.assertIn("Great mix!", out)
+
     def test_duplicate_lines_collapse(self):
         out = clean_model_text("Line one\nLine one\n\nLine two",
                                links_policy="hide")
@@ -384,9 +395,12 @@ class WiringCase(unittest.TestCase):
         # The publisher appends the CTA exactly once downstream;
         # the model's echoed copy is gone.
         self.assertEqual(pkg.content.count("juzzir.com"), 1)
-        self.assertNotIn("#taggo", pkg.content)
         self.assertEqual(pkg.content.count("dup.test/x"), 1)
         self.assertIn("Value here", pkg.content)
+        # Hashtags belong to whoever is configured to produce them.
+        # This campaign's hashtags are DISABLED, so the pipeline does
+        # not append any and the Text Skill's own tag stands.
+        self.assertIn("#taggo", pkg.content)
 
     def test_research_prompt_carries_skill(self):
         import json as _json
@@ -413,6 +427,63 @@ class WiringCase(unittest.TestCase):
         OpenAIResearchModel(adapter=Cap()).research([it])
         self.assertIn("thin pages", captured["sys"])
 
+    def test_research_prompt_states_structure_not_evidence_semantics(self):
+        # What counts as a fact, what confidence an inference needs and
+        # when an empty result is right are the Research Skill's rules.
+        # The generic engine states the result shape and the identity
+        # rule validation enforces, and nothing else. The Skill is
+        # given a known marker so the engine's own segment is provable.
+        import json as _json
+        import tempfile
+        import yaml as _yaml
+        from skills.loader import clear_cache
+
+        marker = "RESEARCH-SKILL-ONLY-MARKER"
+        old_env = os.environ.get("BRAIN_SKILLS_DIR")
+        tmp = tempfile.mkdtemp(prefix="tbra_research_prompt_")
+        os.environ["BRAIN_SKILLS_DIR"] = tmp
+        clear_cache()
+        with open(os.path.join(tmp, "research.yaml"), "w",
+                  encoding="utf-8") as handle:
+            _yaml.safe_dump({"id": "research-x", "name": "d", "type":
+                             "research", "version": 1, "enabled": True,
+                             "instructions": marker}, handle)
+        captured = {}
+
+        class Cap:
+            model = "m"
+
+            def complete(self, system, user, **kw):
+                captured["sys"] = system
+                return _json.dumps({
+                    "summary": "S", "topics": ["t"], "entities": [],
+                    "findings": []})
+
+        from research.models import OpenAIResearchModel
+        from contracts import SourceItem
+        it = SourceItem(source_id="g-1", source_type="rss",
+                        source_url="u", title="T", text="Body words.",
+                        item_id="g-1", content_hash="h")
+        try:
+            OpenAIResearchModel(adapter=Cap()).research([it])
+        finally:
+            clear_cache()
+            if old_env is None:
+                os.environ.pop("BRAIN_SKILLS_DIR", None)
+            else:
+                os.environ["BRAIN_SKILLS_DIR"] = old_env
+        engine_part, found, skill_part = captured["sys"].partition(marker)
+        self.assertTrue(found, "the Skill must still reach the prompt")
+        for editorial in ("kind=fact ONLY", "stated verbatim", "verbatim",
+                          "two or more items support it",
+                          "may be [] when no input item",
+                          "say why in summary"):
+            self.assertNotIn(editorial, engine_part)
+        for structural in ("\"findings\"", "\"item_ids\"",
+                           "Every finding MUST list only input IDs",
+                           "No other keys, no prose outside the JSON"):
+            self.assertIn(structural, engine_part)
+        self.assertNotIn(marker, engine_part)
 
 class AssignmentCase(unittest.TestCase):
     """One unified Skill system: stages resolve a named skill per

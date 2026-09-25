@@ -64,6 +64,26 @@ class G2Test(unittest.TestCase):
         self.assertTrue(pkg.media)
         self.assertTrue(pkg.hashtags)
 
+    def test_hashtag_ownership_follows_the_configuration(self):
+        # Hashtags belong to whoever is configured to produce them:
+        # enabled -> this pipeline appends the tags, so the Text
+        # Skill's own are dropped to avoid printing twice; disabled ->
+        # the Skill's tags are the only ones and must survive.
+        class Tagged:
+            def generate(self, title, summary, brand=None, policy=None):
+                return "A post #fromthetextskill"
+
+        def _build(hs):
+            return build_package(item(images=[]), BRAND, {}, hs, "hide",
+                                 Tagged(), G.MockImageGenerator())
+
+        off = _build({"enabled": False})
+        self.assertIn("#fromthetextskill", off.content)
+        on = _build({"enabled": True,
+                     "per_platform": {"facebook": {"max": 5}}})
+        self.assertNotIn("#fromthetextskill", on.content)
+        self.assertTrue(on.hashtags)
+
     def test_package_uses_extracted_image(self):
         pkg = build_package(item(), BRAND, {}, {"enabled": False},
                             "hide", G.MockTextGenerator(),

@@ -649,7 +649,7 @@ class OpenAIImagePromptGenerator:
                "Derive the visual from the post meaning and the visual "
                "instructions above; never substitute a generic look from a "
                "familiar keyword. ")
-            + "Return one image prompt only, 60-100 words, no explanation.")
+            + "Return one image prompt only, no explanation.")
         sys = "\n\n".join(parts)
         from llm.adapters import complete_with_retry
         # Same generic retry as every other role: a reasoning-only

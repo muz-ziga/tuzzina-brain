@@ -135,6 +135,21 @@ class SkillPolicyCase(unittest.TestCase):
         # The policy itself reached the model, verbatim.
         self.assertIn(self.STRICT, sent)
 
+    def test_the_configured_skill_survives_a_large_findings_block(self):
+        # Research data is variable and may be truncated; the
+        # configured Skill is this stage's authority and must never be
+        # what gets cut away.
+        marker = "ANALYSIS-SKILL-MARKER"
+        policy = self._skill("Decide the post. " + marker)
+        self._answer(_body(facts=["a fact"]))
+        many = [fact("F%02d %s" % (i, "w" * 300), ids=("g-%d" % i,))
+                for i in range(30)]
+        OpenAIAnalysisModel("k").analyze(research(many), policy)
+        sent = self.requests[0]
+        self.assertIn(marker, sent)
+        # The cap still holds: the findings tail is what got cut.
+        self.assertLess(len(sent), 12000)
+
     # --- history as data (engine-owned) -----------------------------
     def test_recent_history_reaches_the_decision_as_data(self):
         self._skill(self.EVERGREEN)

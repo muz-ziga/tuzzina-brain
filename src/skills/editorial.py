@@ -88,7 +88,8 @@ def append_once(content: str, addition: str) -> str:
 
 def clean_model_text(text: str, *, links_policy: str = "hide",
                      policy_urls: tuple = (),
-                     policy_phrases: tuple = ()) -> str:
+                     policy_phrases: tuple = (),
+                     strip_hashtags: bool = True) -> str:
     """Clean model output before pipeline assembly.
 
     links_policy/policy_urls mirror the adapter link handling:
@@ -136,9 +137,13 @@ def clean_model_text(text: str, *, links_policy: str = "hide",
     else:
         text = _BARE_URL.sub(_bare_repl, text)
 
-    # Hashtags are assembled downstream; model-side tags would
-    # print twice (once inline, once appended).
-    text = _HASHTAG.sub("", text)
+    # Hashtags: whoever owns them decides. When the campaign's
+    # hashtags configuration has them enabled, the pipeline appends
+    # them downstream, so a model-authored tag would print twice and
+    # is stripped. When that configuration does not enable them, the
+    # Text Skill is the only source of hashtags and its output stands.
+    if strip_hashtags:
+        text = _HASHTAG.sub("", text)
 
     # Collapse consecutive duplicate lines (the classic echoed
     # call-to-action) and normalize whitespace.
