@@ -16,6 +16,11 @@ identity or visual/video rules. `build_visual()` carries
 colors/logo/visual rules for image AND video roles, plus video
 rules for video roles only. Research/Analysis/Text prompts must
 not receive visual data.
+
+The campaign subject reaches the text-side roles only. The image
+and video path keeps its own `visual.brief.subject`, which is a
+different concept (what the image must show) and is never fed from
+the campaign subject.
 """
 
 
@@ -27,6 +32,14 @@ def build(policy: dict | None) -> str:
     generation = p.get("generation") or {}
     language = p.get("language") or {}
     lines: list[str] = []
+
+    # Campaign subject/domain: DATA for the Skill that owns the role.
+    # It is stated, never interpreted here — no research scope, no
+    # eligibility, no media or writing rule is derived from it, and
+    # the Skills decide what it means for their own stage.
+    subject = str(p.get("subject") or "").strip()
+    if subject:
+        lines.append(f"Campaign subject: {subject[:300]}.")
 
     tone = brand.get("tone") or ""
     audience = brand.get("audience") or ""

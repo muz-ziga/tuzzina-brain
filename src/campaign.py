@@ -74,6 +74,20 @@ def load_campaign(path: str) -> dict:
     hs = cfg.get("hashtags") or {}
     sched = cfg.get("schedule") or {}
     flow = cfg.get("flow") or {}
+    budgets = cfg.get("budgets") or {}
+    if not isinstance(budgets, dict):
+        raise _err("budgets", "must be a mapping")
+    capabilities = cfg.get("capabilities") or {}
+    if not isinstance(capabilities, dict):
+        raise _err("capabilities", "must be a mapping")
+    # The subject/domain this campaign is about. Campaign data, kept
+    # separate from brand identity (brand.name) and the brand's own
+    # description (brand.description): the same brand runs campaigns
+    # on different subjects. Carried verbatim; the engine never
+    # interprets it — each Skill decides what to do with it.
+    subject = cfg.get("subject") or ""
+    if not isinstance(subject, str):
+        raise _err("subject", "must be a string")
     return {
         "brand": {
             "name": str(brand["name"]).strip(),
@@ -100,6 +114,14 @@ def load_campaign(path: str) -> dict:
                      "times": list(sched.get("times") or [])},
         "skills": clean_skills,
         "roles": clean_roles,
+        "subject": subject.strip()[:300],
+        # Campaign-owned run controls, carried verbatim: the tool-call
+        # budget and the capability allowlist the research agent loop
+        # reads (research/agent_loop.campaign_tool_budget,
+        # research/tools.enabled_tools). Shape is checked here; the
+        # consumers own their own validation.
+        "budgets": dict(budgets),
+        "capabilities": dict(capabilities),
         # Flow identity passthrough (evidence only in Phase 1:
         # routing still follows the default map in code; the id
         # records which map version the trigger resolved).

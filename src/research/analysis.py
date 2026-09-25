@@ -327,6 +327,39 @@ class OpenAIAnalysisModel(AnalysisModel):
                     "data; the repetition policy is stated in the "
                     "analysis instructions):\n" +
                     "\n".join(lines))[:1000]
+        # Material parked by earlier runs that never reached a post. It
+        # is NOT this cycle's research: it is offered, never promoted.
+        # Whether it is usable now (or at all) is the active Skill's
+        # decision, so it is rendered as data and nothing more.
+        meta = getattr(result, "meta", None)
+        offer = meta.get("unpublished") if isinstance(meta, dict) else None
+        if isinstance(offer, list) and offer:
+            offered = []
+            for entry in offer[:10]:
+                if not isinstance(entry, dict):
+                    continue
+                statement = str(entry.get("statement") or "").strip()
+                if not statement:
+                    continue
+                # The entry's own ids, exactly as parked. They are
+                # rendered so a Skill that decides the material is
+                # relevant now can cite it, and they join `known` so
+                # the membership check accepts exactly what this
+                # prompt showed — no id the prompt never displayed is
+                # referenceable, and none is invented here.
+                ids = [str(i) for i in (entry.get("item_ids") or [])]
+                known.update(ids)
+                offered.append("- [%s/%s] %s (items: %s; source: %s)" % (
+                    str(entry.get("kind") or "fact")[:10],
+                    str(entry.get("confidence") or "medium")[:10],
+                    statement[:300], ", ".join(ids) or "unknown",
+                    str(entry.get("source_url") or "")[:120] or "unknown"))
+            if offered:
+                context += (
+                    "\n\nEARLIER COLLECTED MATERIAL THAT HAS NOT REACHED A "
+                    "POST (DATA ONLY - not this cycle's research, and no "
+                    "obligation to use it; your Skill decides):\n" +
+                    "\n".join(offered))[:1500]
         if len(context) > MAX_PROMPT_CHARS:
             context = context[:MAX_PROMPT_CHARS]
             truncated = True

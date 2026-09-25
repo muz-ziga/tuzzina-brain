@@ -172,6 +172,51 @@ AD_ICON_SLOTS = {
     "top-center": {"x": 348, "y": 84, "maxWidth": 200, "maxHeight": 200},
 }
 
+# No palette, no color list and no taste live here: the active IMAGE
+# SKILL owns the visual policy (which colors, whether icons are part of
+# the composition, what the image must contain). This module only owns
+# the mechanism that carries a declared list to the current slot, plus
+# the structural check that a declared color is a color.
+
+_HEX_RE = __import__("re").compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def is_color(value: object) -> bool:
+    """Structural check only: is this a #RRGGBB literal?"""
+    return bool(_HEX_RE.match(str(value or "").strip()))
+
+
+def slot_value(values, when: str | None, slots_per_day: int = 8) -> str:
+    """Pick this run's entry from a list the SKILL declared.
+
+    Pure and policy-free: the caller (an image Skill's config) owns the
+    list; this only derives WHICH entry belongs to the current slot, so
+    a declared rotation cannot repeat itself inside one cycle and
+    starts a new cycle the next day. Nothing here knows what the values
+    mean, and a value that is not a color literal is a structural
+    error, never a silent fallback.
+    """
+    items = [str(v).strip() for v in (values or []) if str(v).strip()]
+    if not items:
+        raise ValueError("slot-value: empty list")
+    for value in items:
+        if not is_color(value):
+            raise ValueError("slot-value: not-a-color:" + value)
+    import datetime as _dt
+    text = str(when or "").strip()
+    try:
+        moment = (_dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+                  if text else _dt.datetime.now(_dt.timezone.utc))
+    except ValueError:
+        moment = _dt.datetime.now(_dt.timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=_dt.timezone.utc)
+    slots = max(1, int(slots_per_day))
+    day = int(moment.timestamp() // 86400)
+    slot = (moment.hour * 60 + moment.minute) // (1440 // slots)
+    slot = max(0, min(slots - 1, slot))
+    return items[(day * 3 + slot) % len(items)]
+
 
 def ad_layout_block(layout: dict | None = None) -> str:
     """Human-readable zone contract for the image model: the same

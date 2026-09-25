@@ -195,6 +195,63 @@ class LivePromptTest(unittest.TestCase):
         tg.generate("T", "S", pol["brand"], pol)
         self.assertIn("mastering tips", tg._adapter.seen[0][0])
 
+    def test_campaign_subject_reaches_the_text_side_skills_only(self):
+        # Research, analysis and text receive the campaign subject as
+        # DATA. The image/video path never sees it: the visual subject
+        # is a different concept owned by the Image Skill.
+        from research.models import OpenAIResearchModel
+        from research.analysis import OpenAIAnalysisModel
+        from g2.generators import OpenAITextGenerator, TuzzinaImageGenerator
+        pol = _policy(subject="critical mastering of artist X releases")
+        rm = OpenAIResearchModel(adapter=FakeAdapter(_research_inner()))
+        res = rm.research([_item()], pol)
+        self.assertIn("critical mastering of artist X releases",
+                      rm._adapter.seen[0][0])
+        am = OpenAIAnalysisModel(adapter=FakeAdapter(_analysis_inner()))
+        am.analyze(res, pol, [_item()])
+        self.assertIn("critical mastering of artist X releases",
+                      am._adapter.seen[0][1])
+        tg = OpenAITextGenerator(adapter=FakeAdapter("hello post"))
+        tg.generate("T", "S", pol["brand"], pol)
+        self.assertIn("critical mastering of artist X releases",
+                      tg._adapter.seen[0][0])
+        from g2.generators import OpenAIImagePromptGenerator
+        ig = OpenAIImagePromptGenerator(adapter=FakeAdapter(
+            "a mastering console under one lamp"))
+        ig.generate_prompt("t", pol["brand"], pol)
+        visual = str(ig._adapter.seen)
+        self.assertNotIn("critical mastering of artist X releases", visual)
+        self.assertIn("Visual instructions:", visual)
+
+    def test_an_absent_subject_adds_nothing_to_any_prompt(self):
+        from research.models import OpenAIResearchModel
+        from g2.generators import OpenAITextGenerator
+        rm = OpenAIResearchModel(adapter=FakeAdapter(_research_inner()))
+        rm.research([_item()])
+        rm.research([_item()], {})
+        self.assertNotIn("Campaign subject", rm._adapter.seen[0][0])
+        self.assertEqual(rm._adapter.seen[0][0], rm._adapter.seen[1][0])
+        tg = OpenAITextGenerator(adapter=FakeAdapter("hi"))
+        tg.generate("T", "S", {}, None)
+        tg.generate("T", "S", {}, {})
+        self.assertEqual(tg._adapter.seen[0][0], tg._adapter.seen[1][0])
+
+    def test_the_subject_derives_no_editorial_behavior(self):
+        # The engine states the subject and nothing else: no research
+        # scope, no eligibility, no media intent, no prompt rewrite
+        # beyond that one line.
+        from research.models import OpenAIResearchModel
+        plain = OpenAIResearchModel(adapter=FakeAdapter(_research_inner()))
+        plain.research([_item()], _policy())
+        with_subject = OpenAIResearchModel(adapter=FakeAdapter(_research_inner()))
+        with_subject.research([_item()], _policy(subject="artist X releases"))
+        base = plain._adapter.seen[0][0]
+        got = with_subject._adapter.seen[0][0]
+        self.assertEqual(
+            got.replace("- Campaign subject: artist X releases.\n", ""), base)
+        self.assertIn("artist X releases", got)
+        self.assertNotIn("artist X releases", base)
+
     def test_i_absent_policy_keeps_legacy_prompts(self):
         from research.models import OpenAIResearchModel
         from g2.generators import OpenAITextGenerator

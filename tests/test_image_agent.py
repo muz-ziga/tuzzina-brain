@@ -406,6 +406,39 @@ class ConceptGroundingTest(unittest.TestCase):
         self.assertEqual(G.AD_LAYOUT["width"], 896)
         self.assertEqual(G.AD_LAYOUT["height"], 1152)
 
+    def test_slot_mechanism_has_no_colors_and_no_taste(self):
+        # The mechanism only derives WHICH declared entry belongs to this
+        # run. The list and every judgment about color live in the Image
+        # Skill, never in this module.
+        cycle = ["#111111", "#222222", "#333333", "#444444"]
+        picked = [G.slot_value(cycle, "2026-09-24T%02d:00:00+00:00" % hour, 8)
+                  for hour in range(0, 24, 3)]
+        self.assertEqual(len(set(picked)), len(cycle))
+        self.assertTrue(all(value in cycle for value in picked))
+        next_day = [G.slot_value(cycle, "2026-09-25T%02d:00:00+00:00" % hour, 8)
+                    for hour in range(0, 24, 3)]
+        self.assertNotEqual(picked, next_day)
+        # A declared value that is not a color literal is a structural
+        # error, and the engine never substitutes a color of its own.
+        with self.assertRaises(ValueError):
+            G.slot_value(["#123456", "not-a-color"], "2026-09-24T09:00:00+00:00")
+        with self.assertRaises(ValueError):
+            G.slot_value([], "2026-09-24T09:00:00+00:00")
+
+    def test_color_check_is_structural_only(self):
+        self.assertTrue(G.is_color("#0B4FD8"))
+        self.assertTrue(G.is_color("  #ffffff "))
+        for value in ("#FFF", "red", "", "#12345", "#1234567", None):
+            self.assertFalse(G.is_color(value), value)
+
+    def test_engine_module_declares_no_palette(self):
+        import pathlib
+        source = pathlib.Path(G.__file__).read_text(encoding="utf-8")
+        for banned in ("AD_PALETTE_CYCLE", "palette_is_strong",
+                       "palette_for_slot"):
+            self.assertNotIn(banned, source)
+
 
 if __name__ == "__main__":
     unittest.main()
+

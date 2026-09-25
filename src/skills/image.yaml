@@ -3,7 +3,12 @@ name: Image direction
 type: image
 version: 1
 enabled: true
-config: {}
+# This Skill owns the visual policy. `icons` and an optional
+# `palette_cycle` are declarations the engine only carries:
+#   icons: "none"     -> the composition has no icon layer
+#   palette_cycle:    -> the run's entry replaces the concept palette
+config:
+  icons: none
 instructions: |
   You direct a single social image for the supplied topic. The
   image generator executes separately; your job is the concept.
@@ -22,11 +27,19 @@ instructions: |
   - State subject, setting, and mood in one sentence each.
   - No logos, watermarks, or brand marks unless the brand
     assets are explicitly supplied with the request.
+  - This campaign's compositions carry the brand logo only:
+    never ask for an icon layer.
 
   COMPOSITION:
   - Single focal point, generous negative space, readable at
     thumbnail size. Foreground subject, simple background.
   - Aspect: square unless the platform demands otherwise.
+
+  COLOR:
+  - The background color direction must be strong and saturated:
+    never white, black, gray, washed-out or pastel.
+  - If a palette cycle is supplied with the request, that color
+    leads the background.
 
   STYLE AND BRAND:
   - Photographic or clean flat illustration; match the brand

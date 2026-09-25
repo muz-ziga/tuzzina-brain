@@ -23,13 +23,16 @@ from g2.generators import (FixedPromptGenerator, FixedTextGenerator,
                            MockImageGenerator, MockTextGenerator)
 from g2.pipeline import build_package
 from llm.adapters import LLMError
+from contracts import SourceItem
 from research.models import _trace_id
 from stage_run import (_as_opportunity, _as_research_result,
                        _as_source_item, _to_jsonable, main_stage,
                        run_analysis_stage, run_execute_stage,
                        run_prompt_stage, run_research_stage,
                        run_text_stage, STAGE_BASE_KEYS,
-                       QUEUE_SOURCE, _queue_consume, _queue_take)
+                        QUEUE_SOURCE, _queue_consume,
+                        _unpublished_offer)
+
 
 
 CONCEPT_JSON = (
@@ -318,9 +321,11 @@ class PromptStageCase(unittest.TestCase):
         self.assertEqual(out["art_direction"]["icon"], "none")
         self.assertEqual(len(adapter.calls), 2)
 
-    def test_no_icon_even_when_the_concept_asks_for_one(self):
-        # Icons are disabled for the campaign: a concept asking for an
-        # icon still yields no icon key, no tag, and no slot.
+    def test_default_image_skill_declares_no_icon_layer(self):
+        # The default Image Skill declares `icons: none`, so a concept
+        # asking for an icon is overridden BY THE SKILL, not by the
+        # engine: the same doc, read from the skills directory, is the
+        # single source of that policy.
         adapter = ScriptAdapter([
             '{"meaning": "the mix needs a louder master for streaming", '
             '"subject": "a waveform rising into a loud master", '
@@ -339,54 +344,146 @@ class PromptStageCase(unittest.TestCase):
             "media_intent": "image",
         }
         out = run_prompt_stage(ctx)
-        self.assertIsNone(out["icon_key"])
-        self.assertNotIn("[icon:", out["prompt"])
         self.assertEqual(out["art_direction"]["icon"], "none")
         self.assertEqual(out["art_direction"]["slot"], "")
+        self.assertIsNone(out["icon_key"])
+        self.assertNotIn("[icon:", out["prompt"])
+        # No palette cycle is declared by the default Skill, so the
+        # concept's own color stands.
+        self.assertEqual(out["art_direction"]["palette"], ["#111111"])
         self.assertEqual(out["concept"]["art_direction"]["icon"], "none")
         self.assertEqual(out["art_direction"]["text_align"], "center")
 
-    def test_palette_comes_from_the_slot_cycle_not_the_model(self):
-        # The model never owns the color: the slot color wins and is
-        # what the prompt carries.
-        from g2.generators import palette_for_slot
-        adapter = ScriptAdapter([
-            '{"meaning": "one mix fails in one environment and holds in '
-            'another", "subject": "a single source feeding two very '
-            'different rooms", "relationship": "the same signal meeting '
-            'opposite conditions", "brief_constraints": [], '
-            '"art_direction": {"icon": "none", "slot": "", '
-            '"palette": ["pale beige"], "text_align": "left"}}',
-            "A single source line splitting toward two rooms, portrait.",
-        ])
-        ctx = self._ctx(adapter)
-        ctx["now"] = "2026-09-24T09:00:00+00:00"
-        ctx["post"] = {
-            "topic": "Translation across playback environments",
-            "angle": "one mix fails in one environment and holds in another",
-            "facts": ["the same mix collapses in a car but not on headphones"],
-            "audience": "mix engineers",
-            "media_intent": "image",
-        }
-        out = run_prompt_stage(ctx)
-        expected = palette_for_slot(ctx["now"])
-        self.assertEqual(out["art_direction"]["palette"], [expected])
-        self.assertNotIn("pale beige", out["prompt"])
-        self.assertIn(expected, adapter.calls[1][0])
+    def test_image_skill_owns_icons_and_palette(self):
+        # Two Image Skill documents, two behaviors, same engine: the
+        # Skill that forbids icons and declares a palette cycle gets
+        # exactly that, and a concept's own colors are ignored.
+        import os
+        import tempfile
+        import yaml
+        from skills.loader import clear_cache
+        from stage_run import run_prompt_stage as stage
 
-    def test_weak_slot_color_is_refused_before_any_prompt(self):
-        # A washed-out, gray or near-monochrome slot color never
-        # reaches the image model.
-        import g2.generators as generators
-        import stage_run
-        original = generators.palette_for_slot
-        generators.palette_for_slot = lambda when: "#F2F2F2"
+        cycle = ["#0B4FD8", "#C2410C", "#6D28D9", "#047857",
+                 "#B91C1C", "#0E7490", "#A21CAF", "#B45309"]
+        old = os.environ.get("BRAIN_SKILLS_DIR")
+        tmp = tempfile.mkdtemp(prefix="tbra_visual_")
         try:
-            with self.assertRaises(Exception):
-                run_prompt_stage(self._ctx(ScriptAdapter([CONCEPT_JSON])))
+            os.environ["BRAIN_SKILLS_DIR"] = tmp
+            for name in ("research", "analysis", "text", "video"):
+                with open(os.path.join(tmp, name + ".yaml"), "w",
+                          encoding="utf-8") as handle:
+                    yaml.safe_dump(
+                        {"id": name + "-x", "name": name, "type": name,
+                         "version": 1, "instructions": "Do it."}, handle)
+            with open(os.path.join(tmp, "image.policy.yaml"), "w",
+                      encoding="utf-8") as handle:
+                yaml.safe_dump(
+                    {"id": "image-policy", "name": "policy",
+                     "type": "image", "version": 1,
+                     "instructions": "Strong, saturated color only.",
+                     "config": {"icons": "none",
+                                "palette_cycle": cycle,
+                                "palette_slots_per_day": 8}}, handle)
+            clear_cache()
+            adapter = ScriptAdapter([
+                '{"meaning": "one mix fails in one environment and holds '
+                'in another", "subject": "a single source feeding two very '
+                'different rooms", "relationship": "the same signal '
+                'meeting opposite conditions", "brief_constraints": [], '
+                '"art_direction": {"icon": "use", "slot": "top-left", '
+                '"palette": ["#010203"], "text_align": "left"}}',
+                "A single source line splitting toward two rooms, portrait.",
+            ])
+            cfg = dict(POLICY, skills={"image": "policy"})
+            ctx = self._ctx(adapter)
+            ctx["cfg"] = cfg
+            ctx["now"] = "2026-09-24T09:00:00+00:00"
+            ctx["post"] = {
+                "topic": "Translation across playback environments",
+                "angle": "one mix fails in one environment and holds in another",
+                "facts": ["the same mix collapses in a car but not on headphones"],
+                "audience": "mix engineers",
+                "media_intent": "image",
+            }
+            out = run_prompt_stage(ctx)
+            from g2.generators import slot_value
+            expected = slot_value(cycle, ctx["now"], 8)
+            self.assertEqual(out["art_direction"]["icon"], "none")
+            self.assertEqual(out["art_direction"]["slot"], "")
+            self.assertEqual(out["art_direction"]["palette"], [expected])
+            self.assertIsNone(out["icon_key"])
+            self.assertNotIn("[icon:", out["prompt"])
+            # The declared color reaches the image model through the
+            # prompt (the Skill's rotation, not an engine choice).
+            self.assertIn(expected, adapter.calls[1][0])
+            self.assertNotIn("#010203", adapter.calls[1][0])
         finally:
-            generators.palette_for_slot = original
-        self.assertIs(stage_run.run_prompt_stage, run_prompt_stage)
+            clear_cache()
+            if old is None:
+                os.environ.pop("BRAIN_SKILLS_DIR", None)
+            else:
+                os.environ["BRAIN_SKILLS_DIR"] = old
+        self.assertIs(stage, run_prompt_stage)
+
+    def test_concept_colors_pass_through_without_a_skill_declaration(self):
+        # No Image Skill policy: the concept's own palette stands, and a
+        # non-color value is dropped as a structural matter only.
+        import os
+        import tempfile
+        import yaml
+        from skills.loader import clear_cache
+
+        old = os.environ.get("BRAIN_SKILLS_DIR")
+        tmp = tempfile.mkdtemp(prefix="tbra_visual_none_")
+        try:
+            os.environ["BRAIN_SKILLS_DIR"] = tmp
+            for name in ("research", "analysis", "text", "video"):
+                with open(os.path.join(tmp, name + ".yaml"), "w",
+                          encoding="utf-8") as handle:
+                    yaml.safe_dump(
+                        {"id": name + "-x", "name": name, "type": name,
+                         "version": 1, "instructions": "Do it."}, handle)
+            with open(os.path.join(tmp, "image.plain.yaml"), "w",
+                      encoding="utf-8") as handle:
+                yaml.safe_dump(
+                    {"id": "image-plain", "name": "plain", "type": "image",
+                     "version": 1, "instructions": "Whatever looks right."},
+                    handle)
+            clear_cache()
+            adapter = ScriptAdapter([
+                '{"meaning": "one mix fails in one environment and holds '
+                'in another", "subject": "a single source feeding two very '
+                'different rooms", "relationship": "the same signal '
+                'meeting opposite conditions", "brief_constraints": [], '
+                '"art_direction": {"icon": "use", "slot": "top-left", '
+                '"palette": ["#123456", "pale beige"], '
+                '"text_align": "left"}}',
+                "A single source line splitting toward two rooms, portrait.",
+            ])
+            ctx = self._ctx(adapter)
+            ctx["cfg"] = dict(POLICY, skills={"image": "plain"})
+            ctx["post"] = {
+                "topic": "Translation across playback environments",
+                "angle": "one mix fails in one environment and holds in another",
+                "facts": ["the same mix collapses in a car but not on headphones"],
+                "audience": "mix engineers",
+                "media_intent": "image",
+            }
+            out = run_prompt_stage(ctx)
+            # Colors: the concept's own list, minus the value that is not
+            # a color literal (structural check, no taste involved).
+            self.assertEqual(out["art_direction"]["palette"], ["#123456"])
+            # Icon: this Skill declared nothing, so the concept's request
+            # stands and the engine resolves it from the manifest.
+            self.assertEqual(out["art_direction"]["icon"], "use")
+            self.assertEqual(out["art_direction"]["slot"], "top-left")
+        finally:
+            clear_cache()
+            if old is None:
+                os.environ.pop("BRAIN_SKILLS_DIR", None)
+            else:
+                os.environ["BRAIN_SKILLS_DIR"] = old
 
     def test_unusable_concept_blocks_the_prompt(self):
         # A concept missing its fields is not rendered into a prompt.
@@ -664,6 +761,34 @@ class AnalysisSeesResearchCase(unittest.TestCase):
         for key in ("topic", "post"):
             self.assertIn(key, STAGE_BASE_KEYS)
 
+    def test_base_keys_carry_the_art_direction(self):
+        # Regression: the prompt stage decided the image direction
+        # (icon, slot, palette, text alignment) and published it as
+        # "art_direction", but the execute stage did not receive it,
+        # so the concept's own decisions were dropped at the
+        # compositor and only the Skill defaults survived.
+        self.assertIn("art_direction", STAGE_BASE_KEYS)
+
+    def test_icon_key_is_not_a_second_channel(self):
+        # The icon reference travels inside the prompt as an
+        # [icon:key] tag, which execute parses (_parse_icon_tag).
+        # Carrying "icon_key" as well would be a second channel for
+        # the same decision, free to disagree with the prompt.
+        self.assertNotIn("icon_key", STAGE_BASE_KEYS)
+
+    def test_execute_honors_the_carried_art_direction(self):
+        # End of the transport: what the prompt stage decided must
+        # be what the compositor is asked for.
+        from stage_run import _skill_art_direction
+        carried = {"icon": "use", "slot": "top-left",
+                   "palette": ["#123456"], "text_align": "center"}
+        art = _skill_art_direction(carried, {}, None)
+        self.assertEqual(art["icon"], "use")
+        self.assertEqual(art["slot"], "top-left")
+        self.assertEqual(art["palette"], ["#123456"])
+        self.assertEqual(art["text_align"], "center")
+        self.assertTrue(art["icons_allowed"])
+
     def test_analysis_honors_carried_research(self):
         # The carried research findings must drive the verdict:
         # a FACT finding means eligible, not no-findings.
@@ -727,9 +852,11 @@ class QueueCase(unittest.TestCase):
             ("g-%d" % i if e["item_ids"] == ["g-1"] else "q:%d" % i): e
             for i, e in enumerate(entries)}}}
 
-    def test_starving_cycle_reuses_queue(self):
-        # No fresh items + parked findings = the run proceeds
-        # on queued material instead of stopping with nothing.
+    def test_starving_cycle_offers_queue_as_data_not_as_findings(self):
+        # No fresh items: the stage still succeeds with an EMPTY
+        # research result, and parked material is offered to the next
+        # stage as labelled data. It is never promoted to findings and
+        # never becomes "this run's items".
         import research.cycle as _cyc
         real_collect = _cyc.collect_all_sources
         fc = self.FakeClient(self.queued_state([self.entry()]))
@@ -741,17 +868,68 @@ class QueueCase(unittest.TestCase):
                  "dry_run": False})
         finally:
             _cyc.collect_all_sources = real_collect
+        self.assertEqual(payload["outcome"], "findings")
         self.assertTrue(payload["queued"])
-        self.assertEqual(len(payload["items"]), 1)
-        self.assertEqual(
-            payload["research"]["findings"][0]["statement"],
-            "Fact words")
+        self.assertEqual(payload["items"], [])
+        self.assertEqual(payload["research"]["findings"], [])
+        offered = payload["research"]["meta"]["unpublished"]
+        self.assertEqual(len(offered), 1)
+        self.assertEqual(offered[0]["statement"], "Fact words")
+        # Offering is an observation, not a use: the entry stays
+        # parked with its counter untouched, and the offer carries no
+        # write of its own.
         saved = fc.states[QUEUE_SOURCE]["candidates"]
-        self.assertEqual(list(saved.values())[0]["attempts"], 1)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(list(saved.values())[0]["attempts"], 0)
+        self.assertEqual(offered[0]["attempts"], 0)
+
+    def test_parked_material_is_offered_even_when_the_cycle_found_data(self):
+        # Brain no longer decides WHEN earlier material is shown: a
+        # cycle that produced findings carries the offer too, as
+        # optional DATA. Whether it is adopted is the next stage's
+        # Skill's call.
+        import research.cycle as _cyc
+        from research.models import Finding, ResearchResult
+
+        class Model:
+            def research(self, items, cfg):
+                return ResearchResult(
+                    summary="s",
+                    findings=[Finding(statement="A fact", kind="fact",
+                                      confidence="high",
+                                      item_ids=[items[0].item_id],
+                                      excerpt="A fact")],
+                    topics=["t"], entities=[], item_ids=[items[0].item_id],
+                    model="stub", meta={})
+
+        item = SourceItem(source_id="s-1", source_type="website",
+                          source_url="http://x.test/1", title="T",
+                          text="body", item_id="g-1")
+        fc = self.FakeClient(self.queued_state([self.entry()]))
+        real_collect = _cyc.collect_all_sources
+        _cyc.collect_all_sources = lambda sources, store, now, out, \
+            pending: out.items.append(item)
+        try:
+            payload = run_research_stage(
+                {"store": object(), "cfg": {}, "client": fc,
+                 "run_id": "r-1", "sources": [], "now": "t",
+                 "dry_run": False, "research_model": Model()})
+        finally:
+            _cyc.collect_all_sources = real_collect
+        self.assertEqual(payload["outcome"], "findings")
+        self.assertTrue(payload["research"]["findings"])
+        offer = payload["research"]["meta"]["unpublished"]
+        self.assertEqual(len(offer), 1)
+        self.assertEqual(offer[0]["statement"], "Fact words")
+        # Offered, not used: this cycle's own findings are untouched
+        # and the parked entry keeps its counter.
+        self.assertEqual([f["statement"] for f in
+                          payload["research"]["findings"]], ["A fact"])
+        self.assertEqual(list(
+            fc.states[QUEUE_SOURCE]["candidates"].values())[0]["attempts"],
+            0)
 
     def test_ineligible_parks_findings(self):
-        # Analysis says no: the findings park for the next
-        # cycle instead of dying with this run.
         from research.analysis import ContentOpportunity
 
         class Nope:
@@ -791,16 +969,66 @@ class QueueCase(unittest.TestCase):
         self.assertEqual(
             list(saved.values())[0]["statement"], "Two")
 
-    def test_stale_entries_drop(self):
+    def test_stale_entries_are_not_offered_again(self):
+        # An entry that spent its real attempts is stale: it is no
+        # longer offered, and offering never wrote it away — dropping
+        # happens where the attempts are recorded.
         fc = self.FakeClient(self.queued_state(
             [self.entry(attempts=3)]))
-        self.assertIsNone(_queue_take(fc))
+        from stage_run import _unpublished_offer
+        self.assertEqual(_unpublished_offer(fc), [])
+
+    def test_attempted_entries_drop_when_they_spend_their_attempts(self):
+        # Same staleness rule, now driven by use: each adoption
+        # records one attempt and the last one retires the entry.
+        from stage_run import _queue_attempt
+        fc = self.FakeClient(self.queued_state([self.entry()]))
+        for expected in (1, 2):
+            _queue_attempt(fc, ["g-1"])
+            saved = list(fc.states[QUEUE_SOURCE]["candidates"].values())
+            self.assertEqual(saved[0]["attempts"], expected)
+        _queue_attempt(fc, ["g-1"])
+        self.assertEqual(fc.states[QUEUE_SOURCE]["candidates"], {})
+
+    def test_parking_retires_entries_that_spent_their_attempts(self):
+        # An exhausted entry must not occupy capped queue space.
+        from research.analysis import ContentOpportunity
+        from stage_run import _queue_add
+
+        class Nope:
+            def analyze(self, result, policy, items=None):
+                return ContentOpportunity(eligible=False,
+                                          rationale="no-fit")
+
+        fc = self.FakeClient(self.queued_state(
+            [self.entry(attempts=3), self.entry("Fresh", "g-2")]))
+        _queue_add(fc, [Nope()], [], "t")
+        saved = list(fc.states[QUEUE_SOURCE]["candidates"].values())
+        self.assertEqual([e["statement"] for e in saved], ["Fresh"])
+
+    def test_dry_run_never_touches_the_queue(self):
+        import research.cycle as _cyc
+        from stage_run import _unpublished_offer
+        real_collect = _cyc.collect_all_sources
+        fc = self.FakeClient(self.queued_state([self.entry()]))
+        _cyc.collect_all_sources = lambda *a: None
+        try:
+            payload = run_research_stage(
+                {"store": object(), "cfg": {}, "client": fc,
+                 "run_id": "r-1", "sources": [], "now": "t",
+                 "dry_run": True})
+        finally:
+            _cyc.collect_all_sources = real_collect
+        self.assertEqual(payload["research"]["findings"], [])
+        self.assertNotIn("unpublished", payload["research"]["meta"])
         self.assertEqual(
-            fc.states[QUEUE_SOURCE]["candidates"], {})
+            list(fc.states[QUEUE_SOURCE]["candidates"].values())[0]["attempts"],
+            0)
 
     def test_broken_transport_never_clobbers(self):
         fc = self.FakeClient(broken=True)
-        self.assertIsNone(_queue_take(fc))
+        from stage_run import _unpublished_offer
+        self.assertEqual(_unpublished_offer(fc), [])
         from stage_run import _queue_add
         _queue_add(fc, [{"statement": "S", "kind": "fact",
                          "confidence": "high", "item_ids": ["g-9"],

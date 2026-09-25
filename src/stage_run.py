@@ -44,8 +44,16 @@ STAGE_ORDER = ("research", "analysis", "text", "prompt", "execute")
 # a downstream stage reads must appear here: analysis reads
 # "research" (its verdict needs the findings), so dropping it
 # silently starves analysis into a permanent no-findings no-op.
+# The same holds for "art_direction": execute reads it, so without
+# it the concept's own visual decisions (icon, slot, palette when
+# the Skill declares no rotation, text alignment) are dropped and
+# the composition silently falls back to the Skill defaults.
+# "icon_key" is NOT here on purpose: execute derives it from the
+# [icon:key] tag inside the carried "prompt" (_parse_icon_tag),
+# so a second channel would only be a second thing to keep in sync.
 STAGE_BASE_KEYS = ("opportunity", "research", "items", "text",
-                   "prompt", "claimed", "topic", "post")
+                   "prompt", "claimed", "topic", "post",
+                   "art_direction")
 
 SUCCESS = "SUCCESS"
 RETRYABLE = "RETRYABLE_STAGE_FAILURE"
@@ -455,10 +463,17 @@ def run_analysis_stage(ctx: dict) -> dict:
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
+    if not bool(ctx.get("dry_run")):
+        # The verdict is the only adoption record: an entry whose own
+        # ids the Skill cited in source_item_ids was used, and that IS
+        # the attempt. An offer the Skill ignored moves no counter and
+        # stays parked. Bookkeeping only — what the Skill decided is
+        # untouched, and no adoption happens here.
+        _queue_attempt(client, getattr(opportunity, "source_item_ids", None))
     if not opportunity.eligible and not bool(ctx.get("dry_run")):
         # Findings that did not reach a post park in the queue
-        # (deduped inside); the next starving cycle reuses them
-        # first instead of stopping with nothing.
+        # (deduped inside), where the next cycle's Skill is offered
+        # them as data.
         _queue_add(client, research.findings, items,
                    str(ctx.get("now") or ""))
     # Legacy outcome map (V2 flow lookup): the verdict IS the
@@ -559,15 +574,82 @@ def _parse_icon_tag(prompt: str) -> tuple[str, str | None]:
     return stripped.strip(), matches[-1].group(1)
 
 
+def image_skill_policy(cfg: dict) -> dict:
+    """The active IMAGE SKILL's own visual policy, as declared in its
+    own document.
+
+    Two optional declarations, both owned by the Skill:
+      icons          "none"     -> the composition has no icon layer
+                    "optional" -> an icon is allowed when the concept
+                                  asks for one (default when absent)
+      palette_cycle  [ "#RRGGBB", ... ] -> the concept's background
+                    palette is this run's entry of that list
+                    (default when absent: the concept decides)
+      palette_slots_per_day  how many entries a 24h cycle has
+
+    Brain adds no color, no taste and no opinion: it loads the
+    declaration, derives the slot entry, validates the SHAPE of a
+    color literal, and passes everything else through untouched.
+    """
+    from skills.loader import get_skill
+    campaign_skills = cfg.get("skills") if isinstance(cfg, dict) else None
+    doc = get_skill("image", (campaign_skills or {}).get("image"))
+    config = doc.get("config")
+    return config if isinstance(config, dict) else {}
+
+
+def _skill_art_direction(art: dict | None, policy: dict,
+                         when: str | None = None) -> dict:
+    """The image direction for this run, as the active Image Skill
+    declared it, with the concept's own decisions preserved.
+
+    - icons "none"          -> no icon layer (Skill policy).
+    - icons absent/optional -> the concept's decision stands, and an
+                               icon is resolved from the synced
+                               manifest when it asked for one.
+    - palette_cycle declared-> this run's entry replaces the concept's
+                               palette (Skill-declared rotation).
+    - no declaration        -> exactly what the concept decided.
+    Only structural rules apply here: a color must be a color literal,
+    and text alignment must be left|center.
+    """
+    from g2.generators import is_color, slot_value
+    source = art if isinstance(art, dict) else {}
+    icons = str(policy.get("icons") or "optional").strip().lower()
+    icon = str(source.get("icon") or "none").strip().lower()
+    slot = str(source.get("slot") or "").strip().lower()
+    if icons == "none":
+        icon, slot = "none", ""
+    elif icon == "none":
+        slot = ""
+    palette = [str(c).strip() for c in (source.get("palette") or [])
+               if is_color(c)][:6]
+    cycle = policy.get("palette_cycle")
+    if isinstance(cycle, list) and [c for c in cycle if str(c).strip()]:
+        slots = policy.get("palette_slots_per_day", 8)
+        try:
+            count = int(slots)
+        except (TypeError, ValueError):
+            count = 8
+        palette = [slot_value(cycle, when, count)]
+    align = str(source.get("text_align") or "left").strip().lower()
+    if align not in ("left", "center"):
+        align = "left"
+    return {"icon": icon, "slot": slot, "palette": palette,
+            "text_align": align, "icons_allowed": icons != "none"}
+
+
 def run_prompt_stage(ctx: dict) -> dict:
     """Image Agent: explicit visual-concept decision, then image-prompt
     rendering from that concept (prompt only, never bytes). Pure
-    read; carried claims released only on terminal failure. Icons are
-    never produced: the brand logo is the only added brand asset, so
-    no icon pick and no [icon:key] tag travel downstream. The concept
-    is normalized before rendering: no icon, and one strong primary
-    color for this slot of the current 24h color cycle (never the
-    model's free choice)."""
+    read; carried claims released only on terminal failure.
+
+    The visual POLICY is the active Image Skill's: it decides whether
+    an icon is part of the composition and which colors the background
+    may use. This stage only resolves the run's entry of a declared
+    rotation, picks an icon from the synced manifest when the Skill
+    allows one and the concept asked for it, and renders the prompt.
+    """
     client, run_id = ctx["client"], ctx["run_id"]
     claimed = ctx.get("claimed") or []
     cfg = ctx["cfg"]
@@ -589,8 +671,9 @@ def run_prompt_stage(ctx: dict) -> dict:
             # consumes that concept instead of deciding the visual idea
             # from the topic label.
             concept = gen.generate_concept(post, cfg)
-        art = _normalized_art_direction(
-            (concept or {}).get("art_direction"), ctx.get("now"))
+        policy = image_skill_policy(cfg)
+        art = _skill_art_direction(
+            (concept or {}).get("art_direction"), policy, ctx.get("now"))
         if isinstance(concept, dict) and concept:
             concept["art_direction"] = art
         if gen is not None and hasattr(gen, "generate_prompt"):
@@ -601,36 +684,25 @@ def run_prompt_stage(ctx: dict) -> dict:
                 prompt = gen.generate_prompt(topic, brand, cfg, post)
         else:
             prompt = ""
+        if art.get("icon") == "use" and art.get("slot") and \
+                gen is not None and hasattr(gen, "select_icon"):
+            # The Skill allows icons and the concept asked for one:
+            # resolve it from the synced identity manifest (existing
+            # generic mechanism, never an engine preference).
+            try:
+                manifest = _assets_manifest(client)
+                icon_key = gen.select_icon(
+                    topic, manifest.get("assets", manifest))
+            except Exception:
+                icon_key = None
+            if icon_key:
+                prompt = (prompt or "").rstrip() + "\n[icon:%s]" % icon_key
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
     return {"prompt": prompt, "claimed": list(claimed),
             "icon_key": icon_key, "concept": concept,
             "art_direction": art, "outcome": "ready"}
-
-
-def _normalized_art_direction(art: dict | None,
-                              when: str | None = None) -> dict:
-    """The campaign image direction every post is rendered with: no
-    icon at all, and the strong primary color owned by this slot of
-    the current 24h cycle. The color is decided here, not by the
-    model; a color that fails the strength rule is refused before any
-    image is produced."""
-    from g2.generators import palette_for_slot, palette_is_strong
-    source = art if isinstance(art, dict) else {}
-    color = palette_for_slot(when)
-    if not palette_is_strong(color):
-        # Fail closed: a washed-out, gray or near-monochrome primary
-        # never reaches the image model.
-        raise RuntimeError("palette-not-strong:" + color)
-    return {
-        "icon": "none",
-        "slot": "",
-        "palette": [color],
-        "text_align": str(source.get("text_align") or "left")
-        if str(source.get("text_align") or "left") in ("left", "center")
-        else "left",
-    }
 
 
 def run_execute_stage(ctx: dict) -> dict:
@@ -678,8 +750,13 @@ def run_execute_stage(ctx: dict) -> dict:
         fixed_policy = dict(cfg)
         fixed_policy["image_prompt_gen"] = FixedPromptGenerator(
             prompt or "")
-        # Media + format gates, exactly like the legacy cycle (no
-        # silent downgrades, same reasons).
+        # Media + format gates. The media intent itself comes from the
+        # analysis Skill (role gating is architectural). The format
+        # allowlist is a Tuzzina account constraint, so it stays — but
+        # a refusal is an OPERATIONAL failure, not a content decision:
+        # the run fails loudly with the reason instead of reporting a
+        # successful run that silently produced nothing. The facts are
+        # parked first so the material is not lost.
         eff_media, _media_reason = gate_media_for_roles(
             opportunity.media_intent, cfg.get("roles"))
         allowed = allowed_from_distribution(cfg.get("distribution"))
@@ -688,15 +765,10 @@ def run_execute_stage(ctx: dict) -> dict:
         if fmt is None:
             result["format_reason"] = freason
             if not dry_run:
-                # Format gate killed an eligible opportunity:
-                # park its facts instead of dropping them.
                 _queue_add(client,
                            _opp_pseudo_findings(opportunity, items),
                            items, str(ctx.get("now") or ""))
-            # Legacy outcome map: a gated execute still ends the
-            # chain (its terminal status is recorded, not routed).
-            result["outcome"] = "done"
-            return result
+            raise ValueError("format-not-allowed: " + str(freason))
         gen_plan = plan_generation(
             opportunity, items,
             video_config=(cfg.get("media") or {}), policy=cfg)
@@ -780,18 +852,18 @@ def run_execute_stage(ctx: dict) -> dict:
         from run import _resolve_media
         from g2.generators import AD_LAYOUT as _LAYOUT
         service = InjectionService(tracer=StderrTracer())
-        prompt, _ = _parse_icon_tag(prompt)
-        # Icons are disabled for this campaign: the brand logo is the
-        # only added brand asset, so an [icon:key] tag in the prompt
-        # string is stripped and never resolved. Art direction still
-        # carries the concept's own decision and its palette.
-        icon_key = None
-        art = ctx.get("art_direction") or {}
-        if not isinstance(art, dict):
-            art = {}
+        # The image direction is whatever the active Image Skill
+        # declared and the concept decided; the engine only resolves the
+        # transport (an [icon:key] tag becomes the compositor's icon
+        # reference) and keeps the structural fields.
+        policy = image_skill_policy(cfg)
+        art = _skill_art_direction(ctx.get("art_direction"), policy,
+                                   ctx.get("now"))
+        prompt, tag_icon = _parse_icon_tag(prompt)
+        icon_key = tag_icon if art.get("icon") == "use" else None
         art_direction = {
-            "icon": "none",
-            "slot": "",
+            "icon": "use" if icon_key else "none",
+            "slot": str(art.get("slot") or "") if icon_key else "",
             "palette": list(art.get("palette") or [])[:6],
             "text_align": str(art.get("text_align") or "left"),
         }
@@ -838,7 +910,7 @@ def run_execute_stage(ctx: dict) -> dict:
 
 QUEUE_SOURCE = "unpublished-queue"
 QUEUE_CAP = 10  # entries kept; small enough for one stage envelope
-QUEUE_MAX_ATTEMPTS = 3  # fallback reuses before a stale entry drops
+QUEUE_MAX_ATTEMPTS = 3  # real uses before a stale entry drops
 
 
 def _field(o, name: str, default=""):
@@ -920,8 +992,8 @@ def _items_by_id(items) -> dict:
 
 def _queue_add(client, findings, items, now: str) -> None:
     """Park findings that did not reach a post (dedupe by key,
-    attempts preserved, capped). The next starving cycle reuses
-    them before giving up."""
+    attempts preserved, capped). The next cycle's Skill is offered
+    them as data; using them is its decision, not this module's."""
     queued = _queue_load(client)
     if queued is None:
         return
@@ -937,56 +1009,80 @@ def _queue_add(client, findings, items, now: str) -> None:
         if key not in have:
             have.add(key)
             queued.append(e)
-    _queue_save(client, queued)
+    # Entries that spent their attempts are never offered again, so
+    # they leave here rather than occupying capped queue space.
+    _queue_save(client, [e for e in queued
+                         if int(e.get("attempts") or 0) < QUEUE_MAX_ATTEMPTS])
 
 
-def _queue_take(client):
-    """Oldest entries due for reuse (attempts bumped, stale
-    dropped). Returns (findings, items, rest) with rest already
-    persisted; use findings/items as this cycle's research."""
-    from contracts import SourceItem
-    from research.models import MAX_FINDINGS, Finding, ResearchResult
+def _unpublished_offer(client) -> list:
+    """Material parked earlier, offered to the next stage as DATA.
+
+    Read-only: offering is an observation, not an attempt to use the
+    material. The counter moves only where a Skill adopts an entry
+    (`_queue_attempt`), so material a campaign keeps declining stays
+    parked instead of ageing out, and the attempt cap still applies
+    to the entries that were actually used. Nothing here is converted
+    into this cycle's research: it is returned as an offer the next
+    stage's Skill may accept or ignore. Brain does not decide that
+    earlier material is what this run is about; the responsible Skill
+    does.
+    """
+    from research.models import MAX_FINDINGS
     queued = _queue_load(client)
     if not queued:
-        return None
-    use, rest = [], []
+        return []
+    use = []
     for e in queued:
-        attempts = int(e.get("attempts") or 0) + 1
-        # ponytail: 3 reuses then drop; raise QUEUE_MAX_ATTEMPTS
-        # if evergreen material should linger longer.
-        if attempts > QUEUE_MAX_ATTEMPTS:
+        if int(e.get("attempts") or 0) >= QUEUE_MAX_ATTEMPTS:
+            # The entry already used its real attempts: stale.
             continue
-        e = dict(e, attempts=attempts)
-        if len(use) < MAX_FINDINGS:
-            use.append(e)
-        else:
-            rest.append(e)
-    _queue_save(client, use + rest)
-    if not use:
-        return None
-    findings = [Finding(
-        statement=e["statement"], kind=e["kind"],
-        confidence=e["confidence"], item_ids=list(e["item_ids"]),
-        excerpt=e["excerpt"]) for e in use]
-    items = [SourceItem(
-        source_id=e["item_ids"][0] if e["item_ids"] else "queue",
-        source_type="queue",
-        source_url=e.get("source_url") or "",
-        title=e.get("title") or e["statement"][:200],
-        text=e.get("text") or e["statement"],
-        item_id=e["item_ids"][0] if e["item_ids"] else "") for e in use]
-    seen_topics = []
-    for e in use:
-        title = str(e.get("title") or "").strip()[:60]
-        if title and title not in seen_topics:
-            seen_topics.append(title)
-    result = ResearchResult(
-        summary="Reusing %d unpublished finding(s) from the queue." % len(use),
-        findings=findings,
-        topics=seen_topics or ["unpublished"],
-        entities=[], item_ids=sorted({i for e in use for i in e["item_ids"]}),
-        model="queue", meta={"from_queue": True})
-    return result, items
+        use.append({
+            "statement": str(e.get("statement") or "")[:500],
+            "kind": str(e.get("kind") or "fact"),
+            "confidence": str(e.get("confidence") or "medium"),
+            "item_ids": [str(i) for i in (e.get("item_ids") or [])],
+            "title": str(e.get("title") or "")[:200],
+            "source_url": str(e.get("source_url") or "")[:500],
+            "attempts": int(e.get("attempts") or 0),
+            "queued_at": str(e.get("queued_at") or ""),
+        })
+        if len(use) >= MAX_FINDINGS:
+            break
+    return use
+
+
+def _queue_attempt(client, source_item_ids) -> None:
+    """Record one real attempt per parked entry a Skill adopted.
+
+    The adoption record IS the verdict: the entry keeps its own
+    `item_ids`, so an id the verdict cites identifies the entry
+    without any parallel identity being invented. Counters are
+    preserved (never reset) and an entry that used its last attempt
+    drops here, the same staleness rule the offer reads. An offer the
+    Skill ignored moves nothing. Best-effort: never fails a run.
+    """
+    queued = _queue_load(client)
+    if not queued:
+        return
+    used = {str(i) for i in (source_item_ids or []) if str(i).strip()}
+    if not used:
+        return
+    out, moved = [], False
+    for e in queued:
+        if not ({str(i) for i in (e.get("item_ids") or [])} & used):
+            out.append(e)
+            continue
+        moved = True
+        attempts = int(e.get("attempts") or 0) + 1
+        if attempts >= QUEUE_MAX_ATTEMPTS:
+            # Last attempt spent: the entry is stale and never offered
+            # again, so it leaves the queue instead of occupying it.
+            continue
+        out.append(dict(e, attempts=attempts))
+    if moved:
+        _queue_save(client, out)
+
 
 
 def _queue_consume(client, source_item_ids) -> None:
@@ -1172,38 +1268,24 @@ def _research_agent_payload(ctx, out, roles, skills, store,
     artifacts = loop.get("artifacts") or {}
     findings = artifacts.get("findings")
     has_findings = isinstance(findings, list) and len(findings) > 0
-
-    if not has_findings and not dry_run:
-        # Nothing usable: same unpublished-queue fallback the
-        # legacy starving cycle uses, so material that failed to
-        # post earlier is retried instead of dropped.
-        take = _queue_take(ctx["client"])
-        if take is not None:
-            result, qitems = take
-            return {"items": _to_jsonable(qitems),
-                    "research": _to_jsonable(result),
-                    "claimed": list(out.claimed),
-                    "committed": True,
-                    "sources_checked": len(out.sources),
-                    "items_new": len(out.items),
-                    "discovery": _to_jsonable(out.sources),
-                    "roles": roles,
-                    "roles_resolved": ctx.get("roles_resolved") or [],
-                    "skills_used": skills, "queued": True,
-                    "outcome": loop.get("outcome"),
-                    "agent_usage": loop.get("usage") or {},
-                    "agent_trace": _agent_trace(loop)}
-
+    # Parked material is attached whenever the queue holds any, with
+    # no condition on what this cycle found: whether earlier material
+    # is relevant is the next stage's Skill's call, never this
+    # module's. It is offered as data and never promoted to findings.
+    offer = [] if dry_run else _unpublished_offer(ctx["client"])
     if not has_findings:
-        # Declared no-material outcome (or dry run): clean stop.
-        return {"items": [], "research": None,
+        research = None
+        if offer:
+            research = _empty_research()
+            research["meta"]["unpublished"] = offer
+        return {"items": [], "research": research,
                 "claimed": list(out.claimed), "committed": True,
                 "sources_checked": len(out.sources),
                 "items_new": len(out.items),
                 "discovery": _to_jsonable(out.sources),
                 "roles": roles,
                 "roles_resolved": ctx.get("roles_resolved") or [],
-                "skills_used": skills, "queued": False,
+                "skills_used": skills, "queued": bool(offer),
                 "outcome": loop.get("outcome"),
                 "agent_usage": loop.get("usage") or {},
                 "agent_trace": _agent_trace(loop)}
@@ -1222,6 +1304,8 @@ def _research_agent_payload(ctx, out, roles, skills, store,
         "meta": {"outcome": loop.get("outcome"),
                  "usage": loop.get("usage") or {}},
     }
+    if offer:
+        research["meta"]["unpublished"] = offer
     return {"items": all_items[:MAX_ITEMS * 2],
             "research": research,
             "claimed": list(out.claimed), "committed": True,
@@ -1292,31 +1376,15 @@ def run_research_stage(ctx: dict) -> dict:
     if not out.items:
         for res in pending:
             res.commit(store)
-        # Starving cycle: reuse unpublished findings first instead of
-        # dropping them (dry runs never touch the shared queue).
-        if not dry_run:
-            take = _queue_take(client)
-            if take is not None:
-                result, qitems = take
-                return {"items": _to_jsonable(qitems),
-                        "research": _to_jsonable(result),
-                        "claimed": [], "committed": True,
-                        "sources_checked": len(out.sources),
-                        "items_new": 0,
-                        "discovery": _to_jsonable(out.sources),
-                        "roles": roles,
-                        "roles_resolved": ctx.get("roles_resolved") or [],
-                        "skills_used": skills, "queued": True,
-                        # Legacy outcome map (V2 flow lookup): the
-                        # queue carries usable findings, so a take
-                        # means proceed.
-                        "outcome": "findings"}
-        # Nothing new was collected: the research stage still
-        # SUCCEEDED with a valid empty result. Whether that leaves the
-        # run with a post is the next stage's business, decided by its
-        # own Skill, so the stage reports the same success outcome it
-        # reports for any result it produced.
-        return {"items": [], "research": _empty_research(),
+        # Nothing was collected: this stage still SUCCEEDED with a
+        # valid EMPTY result (findings: []). Material parked earlier is
+        # offered to the next stage as data and nothing else; whether
+        # that material is usable now is the next stage's Skill's call.
+        offer = [] if dry_run else _unpublished_offer(client)
+        research = _empty_research()
+        if offer:
+            research["meta"]["unpublished"] = offer
+        return {"items": [], "research": research,
                 "claimed": [],
                 "committed": True,
                 "sources_checked": len(out.sources),
@@ -1324,7 +1392,7 @@ def run_research_stage(ctx: dict) -> dict:
                 "discovery": _to_jsonable(out.sources),
                 "roles": roles,
                 "roles_resolved": ctx.get("roles_resolved") or [],
-                "skills_used": skills, "queued": False,
+                "skills_used": skills, "queued": bool(offer),
                 "outcome": "findings"}
     if "research" not in roles:
         # Research role off: collection still ran (items needed
@@ -1358,25 +1426,14 @@ def run_research_stage(ctx: dict) -> dict:
         raise
     for res in pending:
         res.commit(store)
-    if not result.findings and not dry_run:
-        # Model found nothing usable: same fallback as the
-        # no-items branch above (queue first, clean stop last).
-        take = _queue_take(client)
-        if take is not None:
-            result, qitems = take
-            return {"items": _to_jsonable(qitems),
-                    "research": _to_jsonable(result),
-                    "claimed": list(out.claimed),
-                    "committed": True,
-                    "sources_checked": len(out.sources),
-                    "items_new": len(out.items),
-                    "discovery": _to_jsonable(out.sources),
-                    "roles": roles,
-                    "roles_resolved": ctx.get("roles_resolved") or [],
-                    "skills_used": skills, "queued": True,
-                    # Legacy outcome map: a queue take always
-                    # carries usable findings, so proceed.
-                    "outcome": "findings"}
+    if not dry_run:
+        # Parked material is attached whenever the queue holds any, with
+        # no condition on what this cycle found: the next stage's Skill
+        # decides whether earlier material is relevant. Data only, never
+        # promoted to findings here.
+        offer = _unpublished_offer(client)
+        if offer:
+            result.meta["unpublished"] = offer
     return {"items": _to_jsonable(out.items[:MAX_ITEMS]),
             "research": _to_jsonable(result),
             "claimed": list(out.claimed),
@@ -1387,6 +1444,6 @@ def run_research_stage(ctx: dict) -> dict:
             "roles": roles,
             "roles_resolved": ctx.get("roles_resolved") or [],
             "skills_used": skills, "queued": False,
-            # Legacy outcome map: non-empty collection reached the
-            # model, so downstream proceeds (analysis decides).
+            # Legacy outcome map: the model ran and returned a valid
+            # result, so downstream proceeds (analysis decides).
             "outcome": "findings"}

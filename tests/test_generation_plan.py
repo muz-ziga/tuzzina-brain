@@ -9,9 +9,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from contracts import SourceItem
 from research.analysis import ContentOpportunity
-from research.generation import (GenerationError, image_gen_for,
-                                 plan_generation, primary_item_for,
-                                 shape_item_for_g2)
+from research.generation import (GenerationError, editorial_item_for,
+                                 image_gen_for, plan_generation,
+                                 primary_item_for, shape_item_for_g2)
 
 
 def opp(media="none", topic="Harbor dawn",
@@ -275,12 +275,53 @@ class PrimaryItemCase(unittest.TestCase):
         o.source_item_ids = ["g-1"]
         self.assertIs(primary_item_for(o, [a, b]), b)
 
-    def test_falls_back_to_first(self):
+    def test_resolves_with_the_identity_the_findings_were_published_under(self):
+        # A finding published with source_id (the identity research
+        # uses when an item carries no item_id) must resolve to that
+        # item, not fall through to a positional guess.
+        a = item(title="A")
+        a.item_id = ""
+        a.source_id = "s-1"
+        b = item(title="B")
+        b.item_id = "g-2"
+        o = opp()
+        o.source_item_ids = ["s-1"]
+        self.assertIs(primary_item_for(o, [a, b]), a)
+
+    def test_falls_back_to_first_when_no_id_is_requested(self):
+        # No requested ids: one content unit per cycle, the first
+        # collected item. Unchanged behavior.
+        a = item(title="A")
+        o = opp()
+        o.source_item_ids = []
+        self.assertIs(primary_item_for(o, [a]), a)
+        self.assertIs(primary_item_for(None, [a]), a)
+
+    def test_a_requested_id_from_another_cycle_is_not_attributed(self):
+        # The decision rests on evidence that is not in this cycle's
+        # collection (parked material the Skill adopted). Attributing
+        # it to the first collected item would state a false source,
+        # so no collected item is returned: the caller keeps the
+        # existing editorial identity.
         a = item(title="A")
         o = opp()
         o.source_item_ids = ["missing"]
-        self.assertIs(primary_item_for(o, [a]), a)
-        self.assertIs(primary_item_for(None, [a]), a)
+        self.assertIsNone(primary_item_for(o, [a]))
+
+    def test_absence_of_a_source_item_keeps_the_editorial_identity(self):
+        # End of the chain: the unit that carries the post is the
+        # decision itself, with no collected-source identity, which is
+        # what the existing editorial unit is for.
+        a = item(title="A")
+        o = opp()
+        o.source_item_ids = ["missing"]
+        one = primary_item_for(o, [a])
+        plan = plan_generation(o, [a], policy={})
+        unit = one or editorial_item_for(plan)
+        self.assertIsNotNone(unit)
+        self.assertEqual(unit.source_type, "editorial")
+        self.assertEqual(unit.item_id, "")
+        self.assertEqual(unit.source_url, "")
 
     def test_empty_is_none(self):
         self.assertIsNone(primary_item_for(opp(), []))

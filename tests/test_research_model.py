@@ -173,6 +173,49 @@ class OpenAIRoleCase(unittest.TestCase):
         with self.assertRaises(ResearchError):
             OpenAIResearchModel("k").research([rss_item(1)])
 
+    def test_empty_findings_is_a_valid_result(self):
+        # "Nothing met the skill's rules" is an ANSWER, not a failure:
+        # it must reach the analysis stage instead of being retried
+        # into an error for lack of a summary.
+        body = json.dumps({"choices": [{"message": {"content": json.dumps({
+            "summary": "nothing new", "findings": [],
+            "topics": [], "entities": []})}}]})
+        self._fake(body)
+        r = OpenAIResearchModel("k").research([rss_item(1), rss_item(2)])
+        self.assertEqual(r.findings, [])
+        self.assertEqual(r.summary, "nothing new")
+
+    def test_empty_findings_survives_even_without_a_summary(self):
+        # The floor existed to DESCRIBE findings. With none, no prose
+        # is required at all.
+        body = json.dumps({"choices": [{"message": {"content": json.dumps({
+            "findings": [], "topics": [], "entities": []})}}]})
+        self._fake(body)
+        r = OpenAIResearchModel("k").research([rss_item(1)])
+        self.assertEqual(r.findings, [])
+
+    def test_non_empty_findings_still_need_a_summary(self):
+        # The fix is scoped to the empty case: with findings present,
+        # the existing floor is unchanged.
+        body = json.loads(_valid_openai_body())
+        content = json.loads(body["choices"][0]["message"]["content"])
+        content["summary"] = "   "
+        body["choices"][0]["message"]["content"] = json.dumps(content)
+        self._fake(json.dumps(body))
+        with self.assertRaises(ResearchError):
+            OpenAIResearchModel("k").research([rss_item(1)])
+
+    def test_non_empty_findings_keep_every_other_floor(self):
+        # Source/id/enum validation is untouched by the empty-result
+        # change: a ghost id is still refused with findings present.
+        body = json.loads(_valid_openai_body())
+        content = json.loads(body["choices"][0]["message"]["content"])
+        content["findings"][0]["item_ids"] = ["ghost-9"]
+        body["choices"][0]["message"]["content"] = json.dumps(content)
+        self._fake(json.dumps(body))
+        with self.assertRaises(ResearchError):
+            OpenAIResearchModel("k").research([rss_item(1)])
+
     def test_unknown_id_rejected(self):
         body = json.loads(_valid_openai_body())
         content = json.loads(body["choices"][0]["message"]["content"])

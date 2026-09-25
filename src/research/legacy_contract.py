@@ -38,20 +38,30 @@ def research_floors(data: dict, known: set, vocab) -> None:
                         for i in ids) or \
                 not isinstance(stmt, str) or not stmt.strip():
             raise error("invalid-output")
+    if not raw_findings:
+        # An EMPTY result is a valid research result: the research
+        # found nothing that met the skill's rules, and the analysis
+        # stage's Skill decides what that means. The summary floor
+        # below exists to describe findings, so requiring prose for
+        # zero findings only turned a correct answer into a retry.
+        return
     summary = data.get("summary", "")
     if not isinstance(summary, str) or not summary.strip():
         raise error("invalid-output")
 
 
 def analysis_floors(data: dict) -> None:
-    """Raise AnalysisError unless the legacy analysis floors
-    hold: facts are non-empty strings and an eligible verdict
-    carries at least one fact. Verbatim pre-split behavior
-    (message codes kept). Shape (types, id membership) is
-    checked by the caller first and is NOT repeated here."""
+    """Structural floor only: every fact the model returned must be a
+    non-empty string.
+
+    The former "an eligible verdict must carry at least one fact"
+    rule is REMOVED. Whether a decision needs evidence, how much, and
+    what counts as sufficient is the analysis SKILL's rule (the
+    default skill states it in its own instructions); a central floor
+    silently overrode every campaign's declared editorial policy.
+    Shape (types, id membership) is checked by the caller and is not
+    repeated here."""
     from research.analysis import AnalysisError
     facts = data.get("facts", [])
     if not all(isinstance(f, str) and f.strip() for f in facts):
-        raise AnalysisError("invalid-output")
-    if data.get("eligible") is True and not facts:
         raise AnalysisError("invalid-output")

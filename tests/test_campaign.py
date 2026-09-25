@@ -35,6 +35,59 @@ class CampaignTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_campaign(self._f("sources:\n - {type: website, url: x}\n"))
 
+    def test_campaign_run_controls_reach_the_engine_cfg(self):
+        # budgets/capabilities are the campaign's own tool-call budget
+        # and capability allowlist, read by the research agent loop.
+        # They are carried verbatim; nothing here reinterprets them.
+        cfg = load_campaign(self._f(
+            GOOD + "budgets:\n  max_tool_calls: 7\n"
+            "capabilities:\n  discovery:\n    search:\n      max_calls: 2\n"))
+        self.assertEqual(cfg["budgets"], {"max_tool_calls": 7})
+        self.assertEqual(cfg["capabilities"],
+                         {"discovery": {"search": {"max_calls": 2}}})
+
+    def test_run_controls_default_to_empty_and_are_consumable(self):
+        # Absent means no budget and no capabilities, exactly what the
+        # consumers already treat as zero/empty.
+        from research.agent_loop import campaign_tool_budget
+        from research.tools import enabled_tools
+        cfg = load_campaign(self._f(GOOD))
+        self.assertEqual(cfg["budgets"], {})
+        self.assertEqual(cfg["capabilities"], {})
+        self.assertEqual(campaign_tool_budget(cfg["budgets"]), 0)
+        self.assertEqual(enabled_tools(cfg["capabilities"]), {})
+
+    def test_run_controls_must_be_mappings(self):
+        for bad in ("budgets:\n  - 1\n", "capabilities: nope\n"):
+            with self.assertRaises(ValueError):
+                load_campaign(self._f(GOOD + bad))
+
+    def test_campaign_subject_is_carried(self):
+        cfg = load_campaign(self._f(
+            GOOD + "subject: mastering critique of artist X releases\n"))
+        self.assertEqual(cfg["subject"],
+                         "mastering critique of artist X releases")
+
+    def test_absent_subject_is_empty_not_invented(self):
+        cfg = load_campaign(self._f(GOOD))
+        self.assertEqual(cfg["subject"], "")
+
+    def test_subject_must_be_a_string(self):
+        with self.assertRaises(ValueError):
+            load_campaign(self._f(GOOD + "subject:\n  - a\n  - b\n"))
+
+    def test_subject_is_separate_from_brand_identity(self):
+        # brand.name is identity, brand.description describes the
+        # brand, subject is what THIS campaign is about. All three
+        # coexist without one standing in for another.
+        cfg = load_campaign(self._f(
+            GOOD + "subject: artist X\n"
+            "brand:\n  name: Label\n  description: an independent label\n"))
+        self.assertEqual(cfg["subject"], "artist X")
+        self.assertEqual(cfg["brand"]["name"], "Label")
+        self.assertEqual(cfg["brand"]["description"],
+                         "an independent label")
+
     def test_sources_optional_fallback(self):
         cfg = load_campaign(self._f("brand:\n  name: B\n"))
         self.assertEqual(cfg["sources"], [])

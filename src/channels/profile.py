@@ -46,6 +46,11 @@ def _finalize(integration_id, channel_meta, brand, hashtags, links_policy,
         "links_policy": links_policy,
         "schedule": project_cfg.get("schedule") or {},
         "sources": project_cfg.get("sources") or [],
+        # Campaign subject/domain, carried through the merge so the
+        # policy block can hand it to the text-side Skills as data.
+        # Purely campaign-owned: no channel leaf overrides it, and
+        # nothing here interprets it.
+        "subject": str(project_cfg.get("subject") or ""),
         "channel_meta": dict(channel_meta or {}),
         "extras": dict(extras),
     }

@@ -254,8 +254,17 @@ class OpenAIRoleCase(unittest.TestCase):
         with self.assertRaises(AnalysisError):
             OpenAIAnalysisModel("k").analyze(self._result(), policy())
 
-    def test_eligible_without_facts_rejected(self):
+    def test_eligible_without_facts_is_skill_owned(self):
+        # No central "facts are mandatory" rule: the verdict passes
+        # structural validation and the Skill's own instructions decide
+        # whether that is acceptable.
         self._fake(_openai_body(facts=[]))
+        o = OpenAIAnalysisModel("k").analyze(self._result(), policy())
+        self.assertTrue(o.eligible)
+        self.assertEqual(o.facts, [])
+
+    def test_malformed_fact_still_rejected(self):
+        self._fake(_openai_body(facts=["   "]))
         with self.assertRaises(AnalysisError):
             OpenAIAnalysisModel("k").analyze(self._result(), policy())
 
@@ -287,20 +296,31 @@ class OpenAIRoleCase(unittest.TestCase):
         with self.assertRaises(AnalysisError):
             OpenAIAnalysisModel("k").analyze(self._result(), policy())
 
-    def test_custom_contract_skips_floors(self):
-        # Custom contract: eligible=true with empty facts passes
-        # shape (bool + lists); legacy-v1 still rejects it.
+    def test_fact_requirements_are_skill_owned_not_central(self):
+        # The engine validates SHAPE only. Whether an eligible verdict
+        # needs facts is the analysis Skill's rule (stated in its
+        # instructions), so an eligible verdict with an empty fact
+        # list is accepted structurally under every contract.
         from research.analysis import AnalysisError
-        body = json.loads(json.loads(_openai_body())["choices"][0]["message"]["content"])
+        body = json.loads(
+            json.loads(_openai_body())["choices"][0]["message"]["content"])
         body["facts"] = []
-        raw = json.dumps({"choices": [{"message": {"content": json.dumps(body)}}]})
+        raw = json.dumps({"choices": [{"message": {
+            "content": json.dumps(body)}}]})
         import research.analysis as _am
         real = _am.OpenAIAnalysisModel._validate
-        out = real(
-            _am.OpenAIAnalysisModel("k"), raw, {"g-1"}, False, "custom")
-        self.assertTrue(out.eligible)
+        for contract in ("custom", "legacy-v1"):
+            out = real(
+                _am.OpenAIAnalysisModel("k"), raw, {"g-1"}, False, contract)
+            self.assertTrue(out.eligible)
+            self.assertEqual(out.facts, [])
+        # A fact that is not a non-empty string is still a structural
+        # violation, under any contract.
+        body["facts"] = ["  "]
+        bad = json.dumps({"choices": [{"message": {
+            "content": json.dumps(body)}}]})
         with self.assertRaises(AnalysisError):
-            real(_am.OpenAIAnalysisModel("k"), raw, {"g-1"}, False,
+            real(_am.OpenAIAnalysisModel("k"), bad, {"g-1"}, False,
                  "legacy-v1")
 
     def test_empty_research_is_decided_by_the_skill_not_the_engine(self):

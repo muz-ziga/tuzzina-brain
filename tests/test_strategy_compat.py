@@ -379,13 +379,86 @@ class SourcesTest(unittest.TestCase):
         cfg = {"brand": {}, "language": {}, "hashtags": {},
                "links_policy": "hide", "schedule": {},
                "sources": [{"type": "rss",
-                            "url": "https://t.test/feed", "n": 3}],
+                             "url": "https://t.test/feed", "n": 3}],
                "sources_from": "channel",
                "channel_meta": {"identifier": "facebook"},
                "media": {}}
         rc = run_mod._execute(cfg, "--mock", DeadClient(),
                               "integ-1", "draft", True)
         self.assertEqual(rc, 2)
+
+
+class CampaignSubjectTest(unittest.TestCase):
+    """The campaign subject is DATA handed to the text-side Skills.
+
+    It is stated, never interpreted: no research scope, no
+    eligibility, no media or writing rule comes from it, and the
+    image path keeps its own (different) visual subject."""
+
+    def test_subject_survives_the_merge_and_reaches_the_skill_block(self):
+        policy = resolve_strategy(
+            _project(subject="critical mastering of artist X releases"),
+            _strategy())
+        block = build(policy)
+        self.assertIn("Campaign subject:", block)
+        self.assertIn("critical mastering of artist X releases", block)
+
+    def test_absent_subject_leaves_the_block_exactly_as_before(self):
+        policy = resolve_strategy(_project(), _strategy())
+        self.assertEqual(policy["subject"], "")
+        block = build(policy)
+        self.assertNotIn("Campaign subject", block)
+        self.assertIn("Brand voice:", block)
+
+    def test_the_channel_cannot_override_the_campaign_subject(self):
+        # The subject is campaign-owned: one brand, many campaigns.
+        strategy = _strategy()
+        object.__setattr__(strategy, "extras",
+                            {"subject": "something else"})
+        policy = resolve_strategy(_project(subject="artist X"), strategy)
+        self.assertEqual(policy["subject"], "artist X")
+        self.assertIn("artist X", build(policy))
+        self.assertNotIn("something else", build(policy))
+
+    def test_the_subject_is_never_mapped_into_the_visual_subject(self):
+        # visual.brief.subject is a different concept (what the image
+        # must show) and stays owned by the Image Skill.
+        strategy = _strategy()
+        object.__setattr__(strategy, "visual", VisualPolicy(
+            brief={"subject": ["a studio desk"], "palette": ["#111111"]}))
+        policy = resolve_strategy(_project(subject="artist X"), strategy)
+        visual = build_visual(policy, video_rules=False)
+        self.assertIn("a studio desk", visual)
+        self.assertNotIn("artist X", visual)
+
+    def test_the_subject_adds_nothing_to_the_visual_block(self):
+        # The visual block renders the brand's OWN colors/logo exactly
+        # as before; the campaign subject contributes nothing to it.
+        policy = resolve_strategy(_project(subject="artist X"), _strategy())
+        visual = build_visual(policy, video_rules=False)
+        self.assertIn("Brand colors: #111111.", visual)
+        self.assertNotIn("artist X", visual)
+        self.assertNotIn("Campaign subject", visual)
+
+    def test_brand_description_is_not_the_campaign_subject(self):
+        # brand.name is identity, brand.description describes the
+        # brand, and the subject is what THIS campaign is about: the
+        # builder states the subject and stays silent about both
+        # brand fields it never rendered.
+        project = _project(subject="artist X releases")
+        project["brand"]["description"] = "an independent label"
+        policy = resolve_strategy(project, _strategy())
+        block = build(policy)
+        self.assertIn("artist X releases", block)
+        self.assertNotIn("an independent label", block)
+        self.assertNotIn("Label", block)
+
+    def test_the_subject_is_bounded(self):
+        policy = resolve_strategy(_project(subject="x" * 900), _strategy())
+        line = [ln for ln in build(policy).splitlines()
+                if ln.startswith("- Campaign subject:")][0]
+        self.assertEqual(len(line) - len("- Campaign subject: "), 301)
+        self.assertTrue(line.endswith("."))
 
 
 if __name__ == "__main__":

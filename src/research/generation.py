@@ -151,27 +151,39 @@ def plan_generation(opportunity, items=None,
 
 
 def primary_item_for(opportunity, items: list):
-    """One content unit per cycle: pick the single item the
-    opportunity was built from (its first source id), else the
-    first collected item. Pure; returns None when empty. All
-    collected items stay in the result for traceability — only
-    generation narrows to one, so a slot can never fan out
-    into near-duplicate intents."""
+    """One content unit per cycle: the item the opportunity was built
+    from (its first source id), else the first collected item when the
+    decision names no id at all.
+
+    When the decision DOES name ids and none of them belongs to this
+    cycle's collection, the content is not attributable to any
+    collected item — the evidence it rests on is not here. This returns
+    None so the caller keeps the existing editorial identity, instead
+    of silently attributing the content to an unrelated collected item.
+    Pure; returns None when empty. All collected items stay in the
+    result for traceability — only generation narrows to one, so a slot
+    can never fan out into near-duplicate intents."""
     pool = list(items or [])
     if not pool:
         return None
     try:
-        wanted = list(getattr(opportunity, "source_item_ids", None) or [])
+        wanted = [str(i) for i in
+                  (getattr(opportunity, "source_item_ids", None) or [])]
     except Exception:
         wanted = []
     if wanted:
-        first = str(wanted[0])
+        # Resolve with the SAME identity the research findings were
+        # published under (item_id, else source_id, else source_url):
+        # an id that identifies a collected item resolves to it, so
+        # attribution follows the evidence instead of position.
+        from research.models import _trace_id
         for it in pool:
             try:
-                if str(getattr(it, "item_id", "") or "") == first:
+                if _trace_id(it) in wanted:
                     return it
             except Exception:
                 continue
+        return None
     return pool[0]
 
 

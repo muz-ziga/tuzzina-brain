@@ -29,6 +29,7 @@ from research.generation import (GenerationPlan, TextRequest,
 
 from research.models import Finding, ResearchResult
 from skills.loader import clear_cache
+from stage_run import QUEUE_MAX_ATTEMPTS
 
 
 def research(findings=(), summary=""):
@@ -178,6 +179,45 @@ class SkillPolicyCase(unittest.TestCase):
         self.assertIn(self.STRICT, self.requests[0])
         self.assertIn(self.EVERGREEN, self.requests[1])
 
+    def test_parked_material_is_offered_as_data_and_the_skill_decides(self):
+        # The offer never becomes findings. It reaches the model as a
+        # labelled DATA block, and whether it is used is the Skill's
+        # call: one skill adopts it, the other keeps its evergreen rule.
+        def _open(req, timeout=None):
+            sent = req.data.decode("utf-8")
+            self.requests.append(sent)
+            marker = "ADOPT: when earlier collected material is offered"
+            adopted = marker in sent
+            return FakeResp(_body(
+                facts=["a fact from the offered material"] if adopted
+                else ["an evergreen truthful fact"]))
+        urllib.request.urlopen = _open
+
+        offered = research()
+        offered.meta = {"unpublished": [
+            {"statement": "Parked fact from an earlier run",
+             "kind": "fact", "confidence": "high",
+             "item_ids": ["g-old"], "source_url": "https://x/old",
+             "title": "T", "attempts": 1, "queued_at": "2026-01-01"}]}
+        adopt = self._skill(
+            "Decide the post. ADOPT: when earlier collected material is "
+            "offered and it still fits the pillars, base the post on it.",
+            name="adopter")
+        keep = self._skill(self.EVERGREEN, name="keeper")
+
+        adopted = OpenAIAnalysisModel("k").analyze(offered, adopt)
+        self.assertTrue(adopted.eligible)
+        self.assertEqual(adopted.source_item_ids, [])
+        sent = self.requests[0]
+        self.assertIn("not this cycle's research", sent)
+        self.assertIn("Parked fact from an earlier run", sent)
+        # The engine added no findings: the result of THIS cycle stays
+        # empty and the offer is only context.
+        self.assertEqual(len(offered.findings), 0)
+
+        self.assertTrue(
+            OpenAIAnalysisModel("k").analyze(research(), keep).eligible)
+
 
 class EditorialUnitCase(unittest.TestCase):
     """A decision with no source item still needs a content unit; it
@@ -254,9 +294,9 @@ class PipelineCase(unittest.TestCase):
                 return ResearchResult(
                     summary="s",
                     findings=[Finding(statement="A fact", kind="fact",
-                                     confidence="high",
-                                     item_ids=[items[0].item_id],
-                                     excerpt="A fact")],
+                                      confidence="high",
+                                      item_ids=[items[0].item_id],
+                                      excerpt="A fact")],
                     topics=["t"], entities=[], item_ids=[items[0].item_id],
                     model="stub", meta={})
 
@@ -332,6 +372,246 @@ class _NoQueueClient:
 
     def save_research_state(self, key, value):
         return value
+
+
+class _QueueClient:
+    """Client stub with a real research-state row, so the parked
+    queue persists exactly like production."""
+
+    def __init__(self):
+        self.state = {}
+        self.released = []
+
+    def release_claim(self, key, run_id):
+        self.released.append((key, run_id))
+
+    def get_research_state(self, key):
+        return self.state.get(key)
+
+    def save_research_state(self, key, value):
+        self.state[key] = value
+        return value
+
+
+class ParkedMaterialAdoptionCase(unittest.TestCase):
+    """Parked material is DATA a Skill may adopt. The engine never
+    adopts it, offers it without spending an attempt, and records an
+    attempt only for an adoption the Skill actually made.
+
+    Every case drives the production path: the analysis stage parks an
+    ineligible verdict itself, the offer comes from the offer helper,
+    and the adoption is the Skill citing the entry's own ids through
+    the real model + validation.
+    """
+
+    ITEM = {"source_id": "s-1", "source_type": "website",
+            "source_url": "https://x.test/old", "title": "Old title",
+            "text": "old body", "item_id": "g-old"}
+    RESEARCH = {"summary": "s", "topics": ["t"], "entities": [],
+                "findings": [{"statement": "Parked fact from a run that "
+                                            "never posted", "kind": "fact",
+                              "confidence": "high", "item_ids": ["g-old"],
+                              "excerpt": "Parked fact"}]}
+
+    def setUp(self):
+        self._orig_env = os.environ.get("BRAIN_SKILLS_DIR")
+        self._orig_open = urllib.request.urlopen
+        self.tmp = tempfile.mkdtemp(prefix="tbra_parked_")
+        os.environ["BRAIN_SKILLS_DIR"] = self.tmp
+        clear_cache()
+        self.requests = []
+        self.policy = self._skill("Neutral test Skill.")
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig_open
+        clear_cache()
+        if self._orig_env is None:
+            os.environ.pop("BRAIN_SKILLS_DIR", None)
+        else:
+            os.environ["BRAIN_SKILLS_DIR"] = self._orig_env
+
+    def _skill(self, instructions, name="a1"):
+        doc = {"id": "analysis-x1", "name": name, "type": "analysis",
+               "version": 1, "enabled": True, "instructions": instructions}
+        with open(os.path.join(self.tmp, "analysis.%s.yaml" % name), "w",
+                  encoding="utf-8") as handle:
+            yaml.safe_dump(doc, handle)
+        clear_cache()
+        return {"skills": {"analysis": name}}
+
+    def _answer(self, payload):
+        def _open(req, timeout=None):
+            self.requests.append(req.data.decode("utf-8"))
+            return FakeResp(payload)
+        urllib.request.urlopen = _open
+
+    def _ctx(self, client, research_raw, model, dry_run=False):
+        cfg = {"roles": ["research", "analysis", "text", "image"]}
+        cfg.update(self.policy)
+        return {"client": client, "run_id": "r-1", "claimed": [],
+                "cfg": cfg,
+                "research": research_raw, "items": [self.ITEM],
+                "analysis_model": model, "now": "2026-01-01",
+                "dry_run": dry_run}
+
+    def _parked_entry(self, client):
+        """One real cycle whose verdict did not post: the analysis
+        stage parks the material through the production path."""
+        from stage_run import run_analysis_stage
+
+        class Ineligible:
+            def analyze(self, result, policy, items=None):
+                return ContentOpportunity(
+                    eligible=False, topic="t", angle="", rationale="no",
+                    facts=[], source_item_ids=[], content_format="post",
+                    media_intent="none", audience="a", language="en",
+                    priority="normal", confidence="low", constraints=[],
+                    model="stub", meta={})
+
+        client = client or _QueueClient()
+        run_analysis_stage(self._ctx(client, self.RESEARCH, Ineligible()))
+        return client
+
+    def _entries(self, client):
+        from stage_run import QUEUE_SOURCE
+        row = client.get_research_state(QUEUE_SOURCE) or {}
+        return list((row.get("candidates") or {}).values())
+
+    def _offer_for_next_cycle(self, client, items=None):
+        """Exactly what the research stage attaches: the offer helper
+        plus the research payload field the analysis stage reads."""
+        import stage_run
+        offer = stage_run._unpublished_offer(client)
+        research = {"summary": "", "topics": [], "entities": [],
+                    "findings": []}
+        if offer:
+            research["meta"] = {"unpublished": offer}
+        return research, offer
+
+    def test_offering_does_not_spend_an_attempt(self):
+        from stage_run import _unpublished_offer
+        client = self._parked_entry(None)
+        for _ in range(QUEUE_MAX_ATTEMPTS + 2):
+            offer = _unpublished_offer(client)
+            self.assertEqual(len(offer), 1)
+            self.assertEqual(offer[0]["attempts"], 0)
+        # Never written back: observing the offer is not using it.
+        self.assertEqual(self._entries(client)[0]["attempts"], 0)
+
+    def test_ignoring_the_offer_leaves_it_parked(self):
+        from stage_run import run_analysis_stage
+        self.policy = self._skill(
+            "Use only this cycle's research. Never use earlier "
+            "collected material.")
+        self._answer(_body(facts=["a fact from this cycle"]))
+        client = self._parked_entry(None)
+        research, _offer = self._offer_for_next_cycle(client)
+        out = run_analysis_stage(self._ctx(
+            client, research, OpenAIAnalysisModel("k")))
+        self.assertEqual(out["outcome"], "eligible")
+        self.assertEqual(len(self._entries(client)), 1)
+        self.assertEqual(self._entries(client)[0]["attempts"], 0)
+
+    def test_skill_adoption_is_the_only_thing_that_spends_an_attempt(self):
+        # The Skill cites the parked entry's own ids: that citation IS
+        # the adoption, and it is what the counter records.
+        from stage_run import run_analysis_stage
+        self.policy = self._skill(
+            "Adopt earlier collected material when it fits.")
+        self._answer(_body(facts=["the parked fact is still true"],
+                           source_item_ids=["g-old"]))
+        client = self._parked_entry(None)
+        research, offer = self._offer_for_next_cycle(client)
+        # The ids are shown to the model, so it can cite them.
+        sent_before = len(self.requests)
+        run_analysis_stage(self._ctx(
+            client, research, OpenAIAnalysisModel("k")))
+        self.assertIn("g-old", self.requests[sent_before])
+        entry = self._entries(client)[0]
+        self.assertEqual(entry["attempts"], 1)
+        self.assertEqual(entry["item_ids"], ["g-old"])
+        self.assertEqual(entry["source_url"], "https://x.test/old")
+        self.assertEqual(entry["statement"],
+                         "Parked fact from a run that never posted")
+        self.assertEqual(offer[0]["item_ids"], ["g-old"])
+
+    def test_adopted_ids_survive_into_the_verdict_and_the_post_plan(self):
+        # Citation resolution: the verdict keeps the parked ids, and
+        # generation is built from that verdict (no second opinion).
+        from stage_run import run_analysis_stage
+        self.policy = self._skill(
+            "Adopt earlier collected material when it fits.")
+        self._answer(_body(facts=["the parked fact is still true"],
+                           source_item_ids=["g-old"], media_intent="none"))
+        client = self._parked_entry(None)
+        research, _offer = self._offer_for_next_cycle(client)
+        out = run_analysis_stage(self._ctx(
+            client, research, OpenAIAnalysisModel("k")))
+        opportunity = out["opportunity"]
+        self.assertEqual(opportunity["source_item_ids"], ["g-old"])
+        self.assertEqual(self._entries(client)[0]["attempts"], 1)
+        plan = plan_generation(_opp(opportunity), [], policy={})
+        self.assertTrue(plan.text.summary.strip())
+
+    def test_published_adoption_consumes_the_entry(self):
+        from stage_run import _queue_consume, run_analysis_stage
+        self.policy = self._skill(
+            "Adopt earlier collected material when it fits.")
+        self._answer(_body(facts=["the parked fact is still true"],
+                           source_item_ids=["g-old"]))
+        client = self._parked_entry(None)
+        research, _offer = self._offer_for_next_cycle(client)
+        out = run_analysis_stage(self._ctx(
+            client, research, OpenAIAnalysisModel("k")))
+        self.assertEqual(len(self._entries(client)), 1)
+        # Existing consume semantics: published ids mean gone.
+        _queue_consume(client, out["opportunity"]["source_item_ids"])
+        self.assertEqual(self._entries(client), [])
+
+    def test_an_id_the_prompt_never_showed_is_still_rejected(self):
+        # Adoption widens the referenceable set to what the prompt
+        # actually displayed; it does not open the membership check.
+        self.policy = self._skill(
+            "Adopt earlier collected material when it fits.")
+        self._answer(_body(facts=["f"], source_item_ids=["ghost-9"]))
+        client = self._parked_entry(None)
+        research, _offer = self._offer_for_next_cycle(client)
+        with self.assertRaises(Exception):
+            run_analysis_stage(self._ctx(
+                client, research, OpenAIAnalysisModel("k")))
+        self.assertEqual(self._entries(client)[0]["attempts"], 0)
+
+    def test_dry_run_neither_adopts_nor_spends(self):
+        from stage_run import run_analysis_stage
+        self.policy = self._skill(
+            "Adopt earlier collected material when it fits.")
+        self._answer(_body(facts=["the parked fact is still true"],
+                           source_item_ids=["g-old"]))
+        client = self._parked_entry(None)
+        research, _offer = self._offer_for_next_cycle(client)
+        out = run_analysis_stage(self._ctx(
+            client, research, OpenAIAnalysisModel("k"), dry_run=True))
+        self.assertEqual(out["opportunity"]["source_item_ids"], ["g-old"])
+        self.assertEqual(self._entries(client)[0]["attempts"], 0)
+
+    def test_an_exhausted_entry_is_no_longer_offered(self):
+        from stage_run import _unpublished_offer, run_analysis_stage
+        self.policy = self._skill(
+            "Adopt earlier collected material when it fits.")
+        client = self._parked_entry(None)
+        for _ in range(QUEUE_MAX_ATTEMPTS):
+            self._answer(_body(facts=["the parked fact is still true"],
+                               source_item_ids=["g-old"]))
+            research, _offer = self._offer_for_next_cycle(client)
+            run_analysis_stage(self._ctx(
+                client, research, OpenAIAnalysisModel("k")))
+        self.assertEqual(self._entries(client), [])
+        self.assertEqual(_unpublished_offer(client), [])
+
+
+def _opp(raw):
+    from research.analysis import ContentOpportunity
+    return ContentOpportunity(**raw)
 
 
 if __name__ == "__main__":
