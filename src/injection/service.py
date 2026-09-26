@@ -25,6 +25,20 @@ from injection.trace import (ADAPTER_SELECTED, ERROR, POST_REQUEST,
                              new_injection_id)
 
 
+def _brain_run_id(value_ids) -> str:
+    """The run that owns these deterministic Tuzzina row ids.
+
+    Staged runs mint `brainrun:<runId>:<i>:main|:comment`. That id is
+    the existing run -> campaign relationship; the slot path mints
+    `brainpub:<slotId>:...` and has no run to resolve, so it returns
+    "" and the duplicate guard does not apply to it."""
+    for raw in value_ids or []:
+        text = str(raw)
+        if text.startswith("brainrun:"):
+            return text[len("brainrun:"):].split(":", 1)[0]
+    return ""
+
+
 def _post_ids(response) -> list:
     """Extract post ids from a Tuzzina create_post response for the
     trace. Never raises; never logs bodies. Only id strings."""
@@ -187,6 +201,18 @@ class InjectionService:
             "value": items,
             "settings": settings,
         }]
+        # Exact-duplicate guard: one campaign never creates the same
+        # final content twice. Runs AFTER the adapter shaped the final
+        # text (so the comparison is against what would be stored) and
+        # BEFORE create_post, so a duplicate is never created, never
+        # scheduled and never regenerated. Exact equality only: what
+        # counts as a repeated IDEA stays with the Skill.
+        run_id = _brain_run_id(intent.value_ids)
+        if run_id and client.campaign_content_exists(
+                run_id, str(items[0].get("content") or "")):
+            raise ValueError(
+                "duplicate-content: this campaign already has a post "
+                "with exactly this content")
         response = client.create_post(posts, intent.publish_at,
                                       post_type=intent.mode)
         self._tracer.emit(

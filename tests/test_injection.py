@@ -27,6 +27,12 @@ class FakeClient:
     def __init__(self, records):
         self._records = {r["id"]: r for r in records}
         self.posts_calls = []
+        self.content_lookups = []
+        self.duplicate_content = False
+
+    def campaign_content_exists(self, run_id, content):
+        self.content_lookups.append({"run_id": run_id, "content": content})
+        return self.duplicate_content
 
     def get_integration(self, integration_id):
         try:
@@ -444,6 +450,84 @@ class CompanionTest(unittest.TestCase):
         req2 = [e for e in tracer2.events if e["event"] == POST_REQUEST]
         self.assertFalse(req2[0]["has_companion"])
         self.assertEqual(req2[0]["companion_chars"], 0)
+
+
+class DuplicateContentTest(unittest.TestCase):
+    """One campaign never creates the same final content twice. The
+    guard runs after the adapter shaped the final text and before
+    create_post, so a duplicate is never created or scheduled. Queued
+    and published posts both count: the server compares stored
+    content in any state. Different campaigns are independent."""
+
+    def _intent(self, run="run-1", content="Same words"):
+        intent = build_intent(
+            integration_id="int-fb-1", content=content,
+            publish_at="2026-09-08T09:00:00+00:00", mode="schedule")
+        # Same shape the staged execute path mints.
+        intent.value_ids = ["brainrun:%s:0:main" % run]
+        return intent
+
+    def test_same_campaign_same_content_is_rejected(self):
+        c = FakeClient([FB_RECORD])
+        c.duplicate_content = True
+        with self.assertRaises(ValueError) as ctx:
+            InjectionService().inject(self._intent(), c)
+        self.assertIn("duplicate-content", str(ctx.exception))
+
+    def test_rejection_happens_before_create_post(self):
+        c = FakeClient([FB_RECORD])
+        c.duplicate_content = True
+        with self.assertRaises(ValueError):
+            InjectionService().inject(self._intent(), c)
+        self.assertEqual(c.posts_calls, [])
+
+    def test_same_campaign_different_content_is_allowed(self):
+        c = FakeClient([FB_RECORD])
+        c.duplicate_content = False
+        InjectionService().inject(self._intent(content="Fresh words"), c)
+        self.assertEqual(len(c.posts_calls), 1)
+
+    def test_another_campaign_is_not_blocked_by_this_one(self):
+        # The lookup is per campaign, resolved from the run server
+        # side: campaign B's identical text is its own decision.
+        c = FakeClient([FB_RECORD])
+        c.duplicate_content = False
+        InjectionService().inject(self._intent(run="run-2"), c)
+        self.assertEqual([l["run_id"] for l in c.content_lookups], ["run-2"])
+
+    def test_guard_compares_the_final_shaped_text(self):
+        c = FakeClient([FB_RECORD])
+        intent = self._intent(content="Post body")
+        intent.hashtags = ["#mix"]
+        InjectionService().inject(intent, c)
+        self.assertIn("#mix", c.content_lookups[0]["content"])
+
+    def test_companion_only_repeats_are_not_compared(self):
+        c = FakeClient([FB_RECORD])
+        intent = self._intent(content="Post body")
+        intent.companion = "Same comment"
+        intent.value_ids = ["brainrun:run-1:0:main",
+                            "brainrun:run-1:0:comment"]
+        InjectionService().inject(intent, c)
+        self.assertNotIn("Same comment", c.content_lookups[0]["content"])
+
+    def test_slot_path_ids_are_not_guarded(self):
+        # The slot path mints brainpub:<slotId>:... and has no run to
+        # resolve a campaign from: unchanged, and never guessed.
+        c = FakeClient([FB_RECORD])
+        intent = build_intent(
+            integration_id="int-fb-1", content="Post",
+            publish_at="2026-09-08T09:00:00+00:00", mode="schedule")
+        intent.value_ids = ["brainpub:slot-7:0:main"]
+        InjectionService().inject(intent, c)
+        self.assertEqual(c.content_lookups, [])
+        self.assertEqual(len(c.posts_calls), 1)
+
+    def test_no_value_ids_means_no_lookup(self):
+        c = FakeClient([FB_RECORD])
+        InjectionService().inject(fb_intent(content="Post"), c)
+        self.assertEqual(c.content_lookups, [])
+        self.assertEqual(len(c.posts_calls), 1)
 
 
 if __name__ == "__main__":

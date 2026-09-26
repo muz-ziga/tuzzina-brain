@@ -296,6 +296,25 @@ class TuzzinaClient:
             return data
         return None
 
+    def campaign_content_exists(self, run_id: str, content: str) -> bool:
+        """Does this campaign already own a post with exactly this
+        final content? The campaign is resolved server-side from the
+        run (brainrun:<runId>... -> BrainRun -> campaignId), so no
+        campaign identity is invented here.
+
+        A transport or server failure RAISES on purpose: this guards
+        an invariant ("never create the same content twice"), so an
+        unanswered question must not be read as "no duplicate". A
+        read that cannot answer stops the run through the existing
+        failure path instead of publishing blind."""
+        if not run_id or not str(run_id).strip():
+            raise TuzzinaError("run_id is required")
+        if content is None or not str(content).strip():
+            return False
+        data = self._call("POST", "/public/v1/brain-content-exists",
+                          {"runId": str(run_id), "content": str(content)})
+        return bool(isinstance(data, dict) and data.get("exists"))
+
     def get_content_usage(self, integration_id: str, start_date: str):
         """Load published-format usage for one integration since a
         UTC day (YYYY-MM-DD). Returns {format: count} (possibly all
