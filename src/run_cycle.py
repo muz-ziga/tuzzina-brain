@@ -327,10 +327,11 @@ def _main(argv=None) -> int:
               file=sys.stderr)
         cfg["distribution"] = {}
 
-    # Capacity enforcement: remaining = target - used(today, UTC).
-    # Computed here so the cycle gate stays pure policy. A usage
-    # failure preserves Phase 8 behavior (targets as allowlist);
-    # only a clean read narrows the gate.
+    # The distribution config is a FORMAT ALLOWLIST, not a daily
+    # publishing budget: a configured number says the account uses that
+    # format and only 0 disables it, so it is never overwritten with a
+    # target-minus-used remainder. Today's usage is still read and
+    # reported as evidence of what the day already consumed.
     dist = cfg.get("distribution") or {}
     targets = dist.get("formats") if isinstance(dist, dict) else None
     if isinstance(targets, dict) and targets:
@@ -343,12 +344,10 @@ def _main(argv=None) -> int:
                     if isinstance(targets.get(f), int)}
             remaining = {f: max(0, int(targets[f]) - used.get(f, 0))
                          for f in used}
-            cfg["distribution"] = {"formats": remaining,
-                                   "enabled": dist.get("enabled", True)}
             result["usage"] = {"used": used, "remaining": remaining}
         except Exception as e:
             print(f"run_id={run_id} warning: usage unavailable "
-                  f"({type(e).__name__}); enforcing targets only",
+                  f"({type(e).__name__}); continuing without usage evidence",
                   file=sys.stderr)
 
     # Image prompt LLM (Brain) + image execution (Tuzzina).

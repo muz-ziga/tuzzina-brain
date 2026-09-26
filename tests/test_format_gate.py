@@ -115,5 +115,96 @@ class FormatGateCase(unittest.TestCase):
             self.assertEqual(out["intents"], expected, media)
 
 
+class FormatAllowlistCase(unittest.TestCase):
+    """The distribution number is a FORMAT ALLOWLIST, not a daily
+    publishing budget: a non-zero number means the account uses that
+    format, and only 0 disables it. Today's usage must never subtract
+    itself out of the configuration and fail a valid execute stage."""
+
+    def test_stage_base_keeps_the_configured_formats(self):
+        # The real production narrowing site: even when today's usage
+        # has reached (and exceeded) the configured number, the config
+        # the gate receives is still the configured one.
+        import run_cycle as rc
+        import stage_run
+        from channels.strategy import (Brand, ChannelStrategy,
+                                        ContentPolicy, GenerationPolicy,
+                                        HashtagPolicy, PlanningPolicy)
+        from channels.strategy_store import save
+        from types import SimpleNamespace
+        import tempfile
+
+        configured = {"text": 1, "text+image": 1, "text+video": 0,
+                      "link+text": 0}
+
+        class _C:
+            def get_integration(self, iid):
+                return {"id": iid, "name": "X", "identifier": "facebook",
+                        "picture": None}
+
+            def get_content_distribution(self, iid):
+                return {"integration_id": iid, "formats": dict(configured),
+                        "enabled": True}
+
+            def get_content_usage(self, iid, day):
+                # Today already consumed (and exceeded) the target.
+                return {"text": 9, "text+image": 9}
+
+        tmp = tempfile.mkdtemp(prefix="tbra_dist_")
+        camp = os.path.join(tmp, "camp.yaml")
+        with open(camp, "w", encoding="utf-8") as fh:
+            fh.write("brand:\n  name: X\nlanguage:\n  default: en\n"
+                     "links_policy: hide\n")
+        save(ChannelStrategy(
+            integration_id="int-1", brand=Brand(tone="loud"),
+            hashtags=HashtagPolicy(enabled=True, max=2),
+            links_policy="hide", content=ContentPolicy(),
+            generation=GenerationPolicy(), planning=PlanningPolicy()),
+            base_dir=tmp)
+        args = SimpleNamespace(
+            campaign=camp, strategy_by_integration="int-1",
+            strategy_base_dir=tmp, mode="--mock", post_mode="draft",
+            dry_run=True, run_id="r-dist", state_store="memory")
+        old_env = os.environ.get("TUZZINA_API_KEY")
+        os.environ["TUZZINA_API_KEY"] = "k"
+        real_client = rc._build_client
+        rc._build_client = lambda base, key: _C()
+        try:
+            ctx = stage_run._stage_base(args, "r-dist")
+        finally:
+            rc._build_client = real_client
+            if old_env is None:
+                os.environ.pop("TUZZINA_API_KEY", None)
+            else:
+                os.environ["TUZZINA_API_KEY"] = old_env
+        self.assertEqual(ctx["cfg"]["distribution"]["formats"], configured)
+
+        from research.formats import allowed_from_distribution, select_format
+        allowed = allowed_from_distribution(ctx["cfg"]["distribution"])
+        self.assertIn("text", allowed)
+        self.assertIn("text+image", allowed)
+        # A configured 0 is still a disabled format.
+        self.assertNotIn("text+video", allowed)
+        self.assertNotIn("link+text", allowed)
+        self.assertEqual(select_format("none", "hide", allowed),
+                         ("text", "allowed"))
+
+    def test_a_consumed_format_still_publishes(self):
+        # End of the chain: the account uses text (non-zero), so the
+        # execute stage produces the post instead of refusing it.
+        out = run_execute_stage(_ctx("none", {"text": 1, "text+image": 1,
+                                              "text+video": 0,
+                                              "link+text": 0}))
+        self.assertEqual(out["outcome"], "done")
+        self.assertEqual(out["intents"], 1)
+
+    def test_a_zero_format_is_still_refused(self):
+        with self.assertRaises(ValueError) as ctx:
+            run_execute_stage(_ctx("video", {"text": 1, "text+image": 1,
+                                             "text+video": 0,
+                                             "link+text": 0}))
+        self.assertIn("format-not-allowed", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

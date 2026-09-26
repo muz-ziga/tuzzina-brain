@@ -209,22 +209,13 @@ def _stage_base(args, run_id: str) -> dict:
             args.strategy_by_integration) or {}
     except Exception:
         cfg["distribution"] = {}
-    dist = cfg.get("distribution") or {}
-    targets = dist.get("formats") if isinstance(dist, dict) else None
-    if isinstance(targets, dict) and targets:
-        try:
-            from datetime import datetime, timezone
-            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            used = client.get_content_usage(
-                args.strategy_by_integration, day) or {}
-            used = {f: int(used.get(f, 0)) for f in targets
-                    if isinstance(targets.get(f), int)}
-            remaining = {f: max(0, int(targets[f]) - used.get(f, 0))
-                         for f in used}
-            cfg["distribution"] = {"formats": remaining,
-                                   "enabled": dist.get("enabled", True)}
-        except Exception:
-            pass
+    # The distribution config is a FORMAT ALLOWLIST, not a daily
+    # publishing budget: a configured number says the account uses that
+    # format, and only 0 disables it. Today's usage is never subtracted
+    # from it, so consuming the configured amount cannot silently make a
+    # format unavailable and fail an otherwise valid execute stage. The
+    # per-format usage counters stay where they belong: Tuzzina's own
+    # usage endpoint and the admin usage display.
     from research.monitor import MemoryStateStore
     from tuzzina.state_store import TuzzinaStateStore
     if args.dry_run:

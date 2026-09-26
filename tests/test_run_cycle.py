@@ -599,7 +599,10 @@ class UsageGateCase(unittest.TestCase):
         _write_strategy(tmp)
         return tmp, os.path.join(tmp, "camp.yaml")
 
-    def test_exhausted_format_blocks(self):
+    def test_exhausted_format_still_publishes(self):
+        # The distribution number is a format allowlist, not a daily
+        # budget: consuming it must not make the format unavailable.
+        # The day's usage is still reported as evidence.
         tmp, camp = self._case()
         calls: list = []
         rc, out, err = _run_cli(
@@ -611,10 +614,9 @@ class UsageGateCase(unittest.TestCase):
             usage={"text": 1})
         self.assertEqual(rc, 0, msg=err)
         res = _result(out)
-        self.assertEqual(res["status"], "no-op")
         self.assertEqual(res["usage"]["used"], {"text": 1})
         self.assertEqual(res["usage"]["remaining"], {"text": 0})
-        self.assertEqual(res["intents"], 0)
+        self.assertGreater(res["intents"], 0)
 
     def test_remaining_capacity_proceeds(self):
         tmp, camp = self._case()
