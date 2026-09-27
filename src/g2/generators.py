@@ -218,40 +218,6 @@ def slot_value(values, when: str | None, slots_per_day: int = 8) -> str:
     return items[(day * 3 + slot) % len(items)]
 
 
-def ad_layout_block(layout: dict | None = None) -> str:
-    """Human-readable zone contract for the image model: the same
-    numbers the compositor will use, so the model treats the reserved
-    areas as reserved instead of guessing from prose."""
-    lay = layout if isinstance(layout, dict) else AD_LAYOUT
-    return (
-        "Reserved areas (these exact zones are overlaid afterwards; "
-        "keep every subject, face, object, symbol and high-contrast "
-        "detail out of them):\n"
-        "- subject zone: y 0 to %(subjectH)d (top of the frame)\n"
-        "- headline zone: x %(tx)d to %(tr)d, y %(ty)d to %(tbottom)d\n"
-        "- logo zone: top-left, x %(lx)d to %(lright)d, y %(ly)d to "
-        "%(lbottom)d\n"
-        "- icon zone: top-right, x %(ix)d to %(ir)d, y %(iy)d to "
-        "%%(ibottom)d\n"
-        "Nothing readable, no text, no logo, no symbol inside those "
-        "zones."
-        % {
-            "subjectH": int(lay["subject"]["maxHeight"]),
-            "tx": int(lay["text"]["x"]),
-            "tr": int(lay["text"]["x"] + lay["text"]["maxWidth"]),
-            "ty": int(lay["text"]["y"]),
-            "tbottom": int(lay["text"]["y"] + lay["text"]["maxHeight"]),
-            "lx": int(lay["logo"]["x"]),
-            "lright": int(lay["logo"]["x"] + lay["logo"]["maxWidth"]),
-            "ly": int(lay["logo"]["y"]),
-            "lbottom": int(lay["logo"]["y"] + lay["logo"]["maxHeight"]),
-            "ix": int(lay["icon"]["x"]),
-            "ir": int(lay["icon"]["x"] + lay["icon"]["maxWidth"]),
-            "iy": int(lay["icon"]["y"]),
-            "ibottom": int(lay["icon"]["y"] + lay["icon"]["maxHeight"]),
-        }
-    )
-
 # Minimal local normalization for the concept grounding gate: common
 # words carry no visual claim, so they never count as grounding.
 CONCEPT_STOPWORDS = frozenset({
@@ -606,7 +572,6 @@ class OpenAIImagePromptGenerator:
         visual = _visual(policy, video_rules=False)
         if visual:
             parts.append(visual)
-        parts.append(ad_layout_block())
         # Visual concept: decided from the post meaning in its own
         # step, now the authority for the visual idea. The prompt
         # writer renders this; it never re-decides the subject.

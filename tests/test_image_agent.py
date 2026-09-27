@@ -404,9 +404,10 @@ class ConceptGroundingTest(unittest.TestCase):
         with self.assertRaises(Exception):
             gen.generate_concept(self.PAYLOAD, {})
 
-    def test_zone_contract_reaches_the_image_model(self):
-        # Single source of zones: the numbers rendered into the prompt
-        # are the numbers the compositor will place layers into.
+    def test_image_prompt_carries_no_production_zone_prescription(self):
+        # Production geometry (canvas, safe areas, typography) belongs to
+        # the compositor, so the prompt never tells the model to split the
+        # frame or to keep subjects out of overlay zones.
         class Spy:
             def __init__(self):
                 self.system = ""
@@ -419,12 +420,10 @@ class ConceptGroundingTest(unittest.TestCase):
         G.OpenAIImagePromptGenerator(adapter=adapter).generate_prompt(
             "Plain topic", BRAND, {})
         system = adapter.system
-        self.assertIn("Reserved areas", system)
-        self.assertIn("x 72 to 824", system)
-        self.assertIn("y 520 to 820", system)
-        self.assertIn("y 0 to 507", system)
-        self.assertIn("top-left", system)
-        self.assertIn("top-right", system)
+        self.assertNotIn("Reserved areas", system)
+        self.assertNotIn("headline zone", system)
+        self.assertNotIn("logo zone", system)
+        self.assertNotIn("icon zone", system)
         self.assertEqual(G.AD_LAYOUT["width"], 896)
         self.assertEqual(G.AD_LAYOUT["height"], 1152)
 
