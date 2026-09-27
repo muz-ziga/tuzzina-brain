@@ -404,6 +404,40 @@ class ConceptGroundingTest(unittest.TestCase):
         with self.assertRaises(Exception):
             gen.generate_concept(self.PAYLOAD, {})
 
+    def test_concept_step_receives_the_image_skill(self):
+        # The concept is what picks the subject, so the Image Skill's own
+        # text has to reach it. Brain routes the document; it never
+        # restates a rule of its own.
+        class Spy:
+            def __init__(self):
+                self.system = ""
+
+            def complete(self, system, user, **kw):
+                self.system = system
+                return json.dumps({
+                    "meaning": "the viewer hears the difference a master "
+                               "makes to the same track",
+                    "subject": "a mastering console with two meters",
+                    "relationship": "the meters show the change",
+                    "brief_constraints": [],
+                    "art_direction": {"icon": "none", "slot": "",
+                                      "palette": [], "text_align": "left"},
+                })
+
+        spy = Spy()
+        G.OpenAIImagePromptGenerator(adapter=spy).generate_concept(
+            self.PAYLOAD, {})
+        from skills.loader import get_skill
+        instructions = get_skill("image", None)["instructions"]
+        first_line = instructions.strip().splitlines()[0]
+        self.assertIn(first_line, spy.system)
+        self.assertIn("The concept must already comply", spy.system)
+        # The prompt writer still gets the full Skill on its own call.
+        prompt_spy = Spy()
+        gen = G.OpenAIImagePromptGenerator(adapter=prompt_spy)
+        gen.generate_prompt("topic", BRAND, {}, self.PAYLOAD)
+        self.assertIn(first_line, prompt_spy.system)
+
     def test_image_prompt_carries_no_production_zone_prescription(self):
         # Production geometry (canvas, safe areas, typography) belongs to
         # the compositor, so the prompt never tells the model to split the

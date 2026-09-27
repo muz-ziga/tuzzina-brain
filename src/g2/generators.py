@@ -547,6 +547,22 @@ class OpenAIImagePromptGenerator:
                 for name, box in AD_ICON_SLOTS.items())
         if visual:
             system += "\n\n" + visual
+        # The Image Skill is the authority on what the artwork looks
+        # like, and this step is what picks the subject: without its
+        # rules here the concept can choose a person and the prompt
+        # writer is then bound to keep that subject. The Skill's own
+        # text is routed, never restated, so the rules stay in one
+        # place.
+        from skills.loader import get_skill
+        concept_skills = policy.get("skills") if isinstance(
+            policy, dict) else None
+        style = get_skill(
+            "image", (concept_skills or {}).get("image"))
+        instructions = str(style.get("instructions") or "").strip()
+        if instructions:
+            system += ("\n\nThe Image Skill below decides the visual "
+                       "direction for this image. The concept must "
+                       "already comply with it:\n" + instructions)
         raw = complete_with_retry(
             self._adapter, system,
             "Post to illustrate:\n" + (payload or "(none provided)"),
