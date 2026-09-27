@@ -113,6 +113,10 @@ sources:
     n: 1
 schedule:
   timezone: Europe/Madrid
+roles:
+  - research
+  - analysis
+  - text
 """
 
 

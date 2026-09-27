@@ -739,8 +739,16 @@ def run_execute_stage(ctx: dict) -> dict:
         text = str(ctx.get("text") or "")
         prompt = ctx.get("prompt")
         fixed_policy = dict(cfg)
-        fixed_policy["image_prompt_gen"] = FixedPromptGenerator(
-            prompt or "")
+        # Replay the prompt the run validated when one was handed in.
+        # Otherwise use the campaign's configured Image Agent prompt
+        # generator, which _stage_ctx already installed. An image-role
+        # run must never ask Tuzzina to generate from an EMPTY prompt;
+        # when no Image Agent is configured either, build_package's
+        # deterministic branch (topic + visual block + Image Skill)
+        # produces the prompt instead.
+        fixed_policy["image_prompt_gen"] = (
+            FixedPromptGenerator(prompt) if (prompt or "").strip()
+            else cfg.get("image_prompt_gen"))
         # Media + format gates. The media intent itself comes from the
         # analysis Skill (role gating is architectural). The format
         # allowlist is a Tuzzina account constraint, so it stays — but
@@ -869,6 +877,12 @@ def run_execute_stage(ctx: dict) -> dict:
                 break
         post_ids: list = []
         media_refs: list = []
+        # The campaign's active roles are its stage requirement, so a
+        # package that carries no image can never be injected while the
+        # image role is active. This is the mechanical invariant at the
+        # point the result is finalized; WHAT the image shows stays
+        # with the Image Skill.
+        image_required = "image" in (cfg.get("roles") or [])
         for index, (intent, pkg) in enumerate(intents):
             images = []
             for m in pkg.media:
@@ -877,8 +891,16 @@ def run_execute_stage(ctx: dict) -> dict:
                     key_hint="ai/%s/%d" % (run_id, index),
                     headline=headline, icon_key=icon_key,
                     layout=dict(_LAYOUT), art_direction=art_direction)
+                if not isinstance(up, dict) or not up.get("id"):
+                    raise ValueError(
+                        "image-required: the image role is active but "
+                        "image generation produced no image")
                 images.append({"id": up["id"], "path": up["path"]})
                 media_refs.append({"id": up["id"], "path": up["path"]})
+            if image_required and not images:
+                raise ValueError(
+                    "image-required: the image role is active but the "
+                    "package carries no image")
             intent.media = images
             injected = service.inject(intent, client)
             post_ids.extend(_post_ids(injected.get("response")))

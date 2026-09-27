@@ -136,9 +136,8 @@ class SkillPolicyCase(unittest.TestCase):
         self.assertIn(self.STRICT, sent)
 
     def test_the_configured_skill_survives_a_large_findings_block(self):
-        # Research data is variable and may be truncated; the
-        # configured Skill is this stage's authority and must never be
-        # what gets cut away.
+        # The configured Skill is this stage's authority and must
+        # never be what gets cut away, whatever the findings weigh.
         marker = "ANALYSIS-SKILL-MARKER"
         policy = self._skill("Decide the post. " + marker)
         self._answer(_body(facts=["a fact"]))
@@ -147,8 +146,62 @@ class SkillPolicyCase(unittest.TestCase):
         OpenAIAnalysisModel("k").analyze(research(many), policy)
         sent = self.requests[0]
         self.assertIn(marker, sent)
-        # The cap still holds: the findings tail is what got cut.
-        self.assertLess(len(sent), 12000)
+        # The whole findings block is delivered too: nothing is cut
+        # from either side. The prompt is bounded by the data itself
+        # (30 findings x 300 chars, one statement cap each), not by a
+        # character budget that a large Skill could eat.
+        self.assertIn("(items: g-29)", sent)
+        self.assertGreater(len(sent), 6000)
+
+    def test_a_large_skill_never_costs_the_campaign_its_runtime_data(self):
+        # Production incident: the Analysis Skill was 5530 chars and
+        # the prompt was capped at 6000, so policy + channel + Skill
+        # consumed the whole budget and the summary, findings,
+        # published history and parked material were cut off the
+        # tail. The Skill's own repetition rule survived, so the
+        # model was told what to avoid and never told what had
+        # already been published: the same topic every hour. There is
+        # no Analysis-specific cap, so a large Skill can no longer
+        # decide whether the runtime data reaches the model.
+        marker = "END-OF-LARGE-SKILL"
+        big = ("Decide the post. " + ("Editorial guidance sentence. " * 320)
+               + marker)
+        policy = self._skill(big)
+        self._answer(_body())
+        result = research(
+            [fact("Finding number %d" % i, ids=("g-%d" % i,))
+             for i in range(6)],
+            summary="Runtime summary of this cycle's research.")
+        result.meta["unpublished"] = [
+            {"statement": "Parked material number %d" % i, "kind": "fact",
+             "confidence": "high", "item_ids": ["p-%d" % i],
+             "source_url": "https://example.com/%d" % i}
+            for i in range(6)]
+        opportunity = OpenAIAnalysisModel("k").analyze(
+            result,
+            dict(policy, recent_topics=[
+                {"topic": "Published topic %d" % i,
+                 "angle": "Published angle %d" % i} for i in range(6)]))
+        sent = self.requests[0]
+        # The complete Skill, not a cut prefix: both the opening and
+        # the very last characters are there.
+        self.assertIn(big, sent)
+        self.assertTrue(sent.startswith("{"))
+        self.assertIn(marker, sent)
+        # Every runtime section reached the model.
+        self.assertIn("Runtime summary of this cycle's research.", sent)
+        self.assertIn("Finding number 0", sent)
+        self.assertIn("Finding number 5", sent)
+        self.assertIn("Recently covered in this campaign", sent)
+        self.assertIn("- Published topic 5 (angle: Published angle 5)",
+                      sent)
+        self.assertIn("EARLIER COLLECTED MATERIAL", sent)
+        self.assertIn("Parked material number 0", sent)
+        self.assertIn("Parked material number 5", sent)
+        # The removed cap would have cut every section asserted above.
+        self.assertGreater(len(sent), 6000)
+        # And the evidence field never reports truncation here.
+        self.assertFalse(opportunity.meta["truncated"])
 
     # --- history as data (engine-owned) -----------------------------
     def test_recent_history_reaches_the_decision_as_data(self):

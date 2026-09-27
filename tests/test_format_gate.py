@@ -40,7 +40,7 @@ def _opportunity(media_intent, source_item_ids=()):
             "confidence": "medium", "constraints": []}
 
 
-def _ctx(media_intent, formats, **extra):
+def _ctx(media_intent, formats, roles=None, **extra):
     ctx = {
         "client": _Client(), "run_id": "r-fmt",
         "cfg": {"brand": {"tone": "direct", "audience": "a"},
@@ -49,7 +49,8 @@ def _ctx(media_intent, formats, **extra):
                 "pillars": [], "generation": {}, "media": {},
                 "hashtags": {"enabled": True, "max": 3},
                 "links_policy": "hide", "schedule": {},
-                "roles": ["research", "analysis", "text", "image", "video"],
+                "roles": list(roles) if roles is not None
+                else ["research", "analysis", "text", "image", "video"],
                 "distribution": {"formats": formats, "enabled": True}},
         "research": None, "items": [], "claimed": [],
         "dry_run": True, "mode": "draft",
@@ -61,12 +62,125 @@ def _ctx(media_intent, formats, **extra):
     return ctx
 
 
+NO_IMAGE_ROLE = ["research", "analysis", "text"]
+IMAGE_ROLE = ["research", "analysis", "text", "image"]
+
 ALL = {"text": 1, "text+image": 1, "text+video": 1, "link+text": 1}
+
+
+class _LiveClient:
+    """Records what the stage asked Tuzzina to do, so a test can
+    prove a text-only post was never created."""
+
+    def __init__(self, image_ref=None, image_error=None):
+        self.calls = []
+        self._image_ref = image_ref
+        self._image_error = image_error
+
+    def campaign_content_exists(self, run_id, content):
+        return False
+
+    def release_claim(self, key, run_id):
+        pass
+
+    def get_research_state(self, key):
+        return None
+
+    def save_research_state(self, key, value):
+        return value
+
+    def get_integration(self, iid):
+        return {"id": iid, "name": "X", "identifier": "facebook",
+                "picture": None}
+
+    def generate_image(self, prompt, **kw):
+        self.calls.append("generate_image")
+        if self._image_error is not None:
+            raise self._image_error
+        return self._image_ref
+
+    def create_post(self, posts, publish_at, post_type=None):
+        self.calls.append("create_post")
+        return [{"postId": "p-1", "status": "success"}]
+
+
+class ImageRoleInvariantCase(unittest.TestCase):
+    """The campaign's active roles are its stage requirement. With
+    the image role active a run may not complete as text only; with
+    it inactive nothing is forced. The Image Skill still owns what
+    the image shows: nothing here inspects prompt, style or palette."""
+
+    def test_a_no_image_role_keeps_text_only_possible(self):
+        out = run_execute_stage(_ctx("none", dict(ALL), roles=NO_IMAGE_ROLE))
+        self.assertEqual(out["outcome"], "done")
+        self.assertEqual(out["intents"], 1)
+        # No image request was even planned.
+        self.assertEqual(out["media_prompts"], [])
+
+    def test_b_image_role_forces_an_image_request(self):
+        # The Skill answered media_intent="none". With the image role
+        # active that cannot become a text-only package.
+        out = run_execute_stage(_ctx("none", dict(ALL), roles=IMAGE_ROLE))
+        self.assertEqual(out["intents"], 1)
+        self.assertEqual(len(out["media_prompts"]), 1)
+        self.assertTrue(out["media_prompts"][0].strip())
+
+    def test_c_image_role_with_a_generated_image_publishes_it(self):
+        client = _LiveClient(image_ref={"id": "img-1", "path": "ai/a.png"})
+        ctx = _ctx("none", dict(ALL), roles=IMAGE_ROLE,
+                   client=client, dry_run=False)
+        ctx["cfg"]["channel_meta"]["identifier"] = "facebook"
+        out = run_execute_stage(ctx)
+        self.assertEqual(out["outcome"], "done")
+        self.assertEqual(out["media"], [{"id": "img-1", "path": "ai/a.png"}])
+        self.assertEqual(out["post_ids"], ["p-1"])
+        self.assertEqual(client.calls, ["generate_image", "create_post"])
+
+    def test_d_image_role_without_a_generated_image_fails_loudly(self):
+        # Image role active, the generator produced nothing: the run
+        # fails and nothing is published.
+        client = _LiveClient(image_ref=None)
+        ctx = _ctx("none", dict(ALL), roles=IMAGE_ROLE,
+                   client=client, dry_run=False)
+        ctx["cfg"]["channel_meta"]["identifier"] = "facebook"
+        with self.assertRaises(ValueError) as cm:
+            run_execute_stage(ctx)
+        self.assertIn("image-required", str(cm.exception))
+        self.assertNotIn("create_post", client.calls)
+        self.assertEqual(client.calls, ["generate_image"])
+
+    def test_d_image_generation_error_keeps_existing_failure_semantics(self):
+        # A provider/transport failure stays the failure it already
+        # was; the invariant adds no new retry framework.
+        client = _LiveClient(image_error=RuntimeError("provider down"))
+        ctx = _ctx("none", dict(ALL), roles=IMAGE_ROLE,
+                   client=client, dry_run=False)
+        ctx["cfg"]["channel_meta"]["identifier"] = "facebook"
+        with self.assertRaises(RuntimeError):
+            run_execute_stage(ctx)
+        self.assertNotIn("create_post", client.calls)
+
+    def test_e_image_role_without_the_allowed_format_fails_not_downgrades(self):
+        # The account does not allow text+image. The role requirement
+        # must not be bypassed by falling back to text.
+        formats = {"text": 1, "text+image": 0, "text+video": 0,
+                   "link+text": 0}
+        with self.assertRaises(ValueError) as cm:
+            run_execute_stage(_ctx("none", formats, roles=IMAGE_ROLE))
+        self.assertIn("format-not-allowed:text+image", str(cm.exception))
+
+    def test_video_role_off_still_downgrades_to_text(self):
+        # Roles other than image keep their existing behavior.
+        out = run_execute_stage(_ctx("video", dict(ALL),
+                                     roles=NO_IMAGE_ROLE))
+        self.assertEqual(out["outcome"], "done")
+        self.assertEqual(out["media_prompts"], [])
 
 
 class FormatGateCase(unittest.TestCase):
     def test_text_only_result_is_produced_when_allowed(self):
-        out = run_execute_stage(_ctx("none", dict(ALL)))
+        out = run_execute_stage(_ctx("none", dict(ALL),
+                                     roles=NO_IMAGE_ROLE))
         self.assertEqual(out["outcome"], "done")
         self.assertEqual(out["intents"], 1)
         self.assertEqual(out["packages"], 1)
@@ -99,9 +213,11 @@ class FormatGateCase(unittest.TestCase):
         self.assertEqual(out["intents"], 1)
 
     def test_media_intent_comes_from_the_skill_not_the_engine(self):
-        # Identical quota, different Skill output: both shapes are
-        # executed exactly as the Skill asked, with no engine-side
-        # preference for one modality.
+        # The Skill still chooses. The engine has no modality
+        # preference of its own: with the image role INACTIVE its
+        # answer stands exactly as given. The one engine-side rule is
+        # mechanical, not editorial: an ACTIVE image role is a floor,
+        # so "none" cannot become a text-only package.
         from research.generation import GenerationPlan, TextRequest
         none_plan = GenerationPlan(text=TextRequest(title="T", summary="S"),
                                    media_intent="none")
@@ -111,8 +227,13 @@ class FormatGateCase(unittest.TestCase):
         self.assertIsNone(none_plan.image)
         self.assertIsNotNone(image_plan.image)
         for media, expected in (("none", 1), ("image", 1), ("video", 1)):
-            out = run_execute_stage(_ctx(media, dict(ALL)))
+            out = run_execute_stage(_ctx(media, dict(ALL),
+                                         roles=NO_IMAGE_ROLE))
             self.assertEqual(out["intents"], expected, media)
+            self.assertEqual(out["media_prompts"], [], media)
+        # Same Skill answer, image role active: the role decides.
+        forced = run_execute_stage(_ctx("none", dict(ALL), roles=IMAGE_ROLE))
+        self.assertEqual(len(forced["media_prompts"]), 1)
 
 
 class FormatAllowlistCase(unittest.TestCase):

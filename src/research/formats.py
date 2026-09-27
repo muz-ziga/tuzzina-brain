@@ -29,9 +29,20 @@ STAGES = ("research", "analysis", "text", "image", "video")
 
 def gate_media_for_roles(media_intent: str, roles) -> tuple[str, str]:
     """Effective media intent under campaign role selection.
-    Returns (media, reason): a media stage the campaign did not
-    select cannot execute, so the intent degrades to "none" with
-    an explicit reason — never silently, never invented upward.
+    Returns (media, reason). Two mechanical rules, both read from
+    the campaign's active roles and neither from taste:
+
+    - a media stage the campaign did not select cannot execute, so
+      the intent degrades to "none" with an explicit reason;
+    - a media stage the campaign DID select is required: with the
+      image role active a run may not complete as text only, so
+      "none" becomes "image".
+
+    The second rule is orchestration, not editorial: it decides
+    whether the image stage runs, never what the image shows. The
+    Image Skill still owns the prompt, direction and style. An
+    account that does not allow the resulting format still fails at
+    the allowlist below, never a silent downgrade to text.
     Unknown/absent roles default to all-on (pre-roles behavior)."""
     media = (media_intent or "none").strip().lower()
     if roles is None:
@@ -43,6 +54,10 @@ def gate_media_for_roles(media_intent: str, roles) -> tuple[str, str]:
         return "none", "image-role-off"
     if media == "video" and "video" not in active:
         return "none", "video-role-off"
+    if media == "none" and "image" in active:
+        # No reason: an upgrade is not a skipped stage, and callers
+        # record every reason as a skip.
+        return "image", ""
     return media, ""
 
 

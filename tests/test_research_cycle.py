@@ -505,9 +505,11 @@ class RoleGatingCase(CycleCase):
 
 
 class FormatGateCase(CycleCase):
-    def _pol(self, formats):
+    def _pol(self, formats, roles=None):
         pol = dict(POLICY)
         pol["distribution"] = {"formats": dict(formats)}
+        if roles is not None:
+            pol["roles"] = list(roles)
         return pol
 
     def test_gate_allows_matching_format(self):
@@ -537,12 +539,30 @@ class FormatGateCase(CycleCase):
         self.assertEqual(out.error, "")
 
     def test_gate_allows_text(self):
+        # A campaign that did not select the image role stays text
+        # only: nothing is forced, and text is allowed.
         out = self._run([self._rss()],
                         policy=self._pol({"text": 10,
-                                          "text+image": 0}))
+                                          "text+image": 0},
+                                         roles=["research", "analysis",
+                                                "text"]))
         self.assertEqual(out.error, "")
         self.assertEqual(out.format, "text")
         self.assertTrue(len(out.intents) > 0)
+
+    def test_image_role_turns_a_text_account_into_a_refusal(self):
+        # Same account (text allowed, text+image not), but the campaign
+        # selects the image role: the role is a requirement, so the run
+        # refuses instead of quietly publishing the text-only shape.
+        out = self._run([self._rss()],
+                        policy=self._pol({"text": 10,
+                                          "text+image": 0},
+                                         roles=["research", "analysis",
+                                                "text", "image"]))
+        self.assertEqual(out.format, "")
+        self.assertEqual(out.format_reason,
+                         "format-not-allowed:text+image")
+        self.assertEqual(out.intents, [])
 
 
 if __name__ == "__main__":

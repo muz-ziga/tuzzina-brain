@@ -38,7 +38,6 @@ PRIORITIES = ("low", "normal", "high")
 CONFIDENCES = ("high", "medium", "low")
 
 MAX_FINDINGS = 30
-MAX_PROMPT_CHARS = 6000
 
 
 class AnalysisError(Exception):
@@ -300,11 +299,22 @@ class OpenAIAnalysisModel(AnalysisModel):
             (campaign_skills or {}).get("analysis"))
         context += "\n\n" + skill_doc["instructions"]
         # Everything below is VARIABLE research data (summary,
-        # findings, published history, parked material). It is
-        # appended AFTER the policy and the Skill on purpose: the
-        # prompt is capped at MAX_PROMPT_CHARS, so data is what may
-        # be truncated — the configured Skill, which is the authority
-        # for this stage, never is.
+        # findings, published history, parked material), appended
+        # after the policy and the Skill.
+        #
+        # There is deliberately NO character cap on this prompt, the
+        # same as the research and text roles. A cap that cuts the
+        # tail silently removes the runtime editorial context (the
+        # summary, the findings, the published history, the parked
+        # material) while leaving the Skill's own repetition rule in
+        # place, so the model is told what to avoid and never told
+        # what to avoid. Every section below is already bounded at
+        # its own source: the summary at 500 chars, each finding
+        # statement at 300, the history block at 1000, the parked
+        # material block at 1500, and the item count at
+        # MAX_FINDINGS. Growth is therefore bounded by the data
+        # itself, and a large Skill can no longer decide whether the
+        # campaign's history reaches the model.
         context += "\n" + (
             f"{quote_untrusted('SUMMARY: ' + ((getattr(result, 'summary', '') or '')[:500]))}\n"
             f"FINDINGS:\n" + "\n".join(parts))
@@ -367,11 +377,11 @@ class OpenAIAnalysisModel(AnalysisModel):
                     "POST (DATA ONLY - not this cycle's research, and no "
                     "obligation to use it; your Skill decides):\n" +
                     "\n".join(offered))[:1500]
-        if len(context) > MAX_PROMPT_CHARS:
-            context = context[:MAX_PROMPT_CHARS]
-            truncated = True
-        else:
-            truncated = False
+        # No prompt truncation: the Skill and the runtime data it
+        # needs always reach the model together. `truncated` stays in
+        # the result evidence for the shape every role reports; this
+        # path never truncates, so it is always False.
+        truncated = False
         def _check(raw: str) -> None:
             # Same shared contract as research: invalid task
             # output retries the SAME analysis task.
