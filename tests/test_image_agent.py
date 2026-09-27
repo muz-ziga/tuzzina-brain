@@ -438,6 +438,52 @@ class ConceptGroundingTest(unittest.TestCase):
         gen.generate_prompt("topic", BRAND, {}, self.PAYLOAD)
         self.assertIn(first_line, prompt_spy.system)
 
+    def test_concept_step_receives_the_recent_topic_history(self):
+        # The novelty ledger already rides the run. The concept step is
+        # where a subject gets chosen, so the history has to reach it as
+        # DATA. What counts as repetition stays in the active Skills.
+        class Spy:
+            def __init__(self):
+                self.system = ""
+
+            def complete(self, system, user, **kw):
+                self.system = system
+                return json.dumps({
+                    "meaning": "the viewer hears the difference a master "
+                               "makes to the same track",
+                    "subject": "a mastering console with two meters",
+                    "relationship": "the meters show the change",
+                    "brief_constraints": [],
+                    "art_direction": {"icon": "none", "slot": "",
+                                      "palette": [], "text_align": "left"},
+                })
+
+        policy = {"recent_topics": [
+            {"topic": "Understanding Loudness Basics",
+             "angle": "Understand Loudness Basics"},
+            {"topic": "Juzzir's Mastering Personalities",
+             "angle": "Explore different mastering styles"},
+            {"topic": "   ", "angle": "ignored"},
+            "not a mapping",
+        ]}
+        spy = Spy()
+        G.OpenAIImagePromptGenerator(adapter=spy).generate_concept(
+            self.PAYLOAD, policy)
+        self.assertIn("Already covered in this campaign", spy.system)
+        self.assertIn("Understanding Loudness Basics", spy.system)
+        self.assertIn("Explore different mastering styles", spy.system)
+        # Blank and malformed entries never reach the model.
+        self.assertNotIn("ignored", spy.system)
+        # Transport only: no rule of Brain's own about repetition.
+        self.assertIn("the repetition policy is stated in the active "
+                      "Skills", spy.system)
+
+        # A run without history behaves exactly as before.
+        clean = Spy()
+        G.OpenAIImagePromptGenerator(adapter=clean).generate_concept(
+            self.PAYLOAD, {})
+        self.assertNotIn("Already covered in this campaign", clean.system)
+
     def test_image_prompt_carries_no_production_zone_prescription(self):
         # Production geometry (canvas, safe areas, typography) belongs to
         # the compositor, so the prompt never tells the model to split the

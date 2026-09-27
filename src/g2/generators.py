@@ -563,6 +563,30 @@ class OpenAIImagePromptGenerator:
             system += ("\n\nThe Image Skill below decides the visual "
                        "direction for this image. The concept must "
                        "already comply with it:\n" + instructions)
+        # Generic transport: the novelty history the run already carries
+        # (the same ledger the analysis step reads) reaches this step so
+        # the Skills can act on it. No rule lives here: what counts as
+        # repetition, and what a campaign may repeat, belongs to the
+        # active Skills, exactly like the visual direction above.
+        recent = policy.get("recent_topics") \
+            if isinstance(policy, dict) else None
+        if isinstance(recent, list) and recent:
+            rows = []
+            for entry in recent[:10]:
+                if not isinstance(entry, dict):
+                    continue
+                topic = str(entry.get("topic") or "").strip()
+                if not topic:
+                    continue
+                angle = str(entry.get("angle") or "").strip()
+                rows.append("- %s%s" % (
+                    topic[:120],
+                    " (angle: %s)" % angle[:120] if angle else ""))
+            if rows:
+                system += (
+                    "\n\nAlready covered in this campaign (history data; "
+                    "the repetition policy is stated in the active "
+                    "Skills):\n" + "\n".join(rows))
         raw = complete_with_retry(
             self._adapter, system,
             "Post to illustrate:\n" + (payload or "(none provided)"),
