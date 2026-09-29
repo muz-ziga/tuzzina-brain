@@ -484,6 +484,39 @@ class ConceptGroundingTest(unittest.TestCase):
             self.PAYLOAD, {})
         self.assertNotIn("Already covered in this campaign", clean.system)
 
+    def test_prompt_step_receives_the_recent_topic_history(self):
+        # The prompt writer is the last step that can still pick a
+        # visual treatment, so the same ledger reaches it as DATA.
+        class Spy:
+            def __init__(self):
+                self.system = ""
+
+            def complete(self, system, user, **kw):
+                self.system = system
+                return "a prompt"
+
+        policy = {"recent_topics": [
+            {"topic": "Understanding Loudness Basics",
+             "angle": "Understand Loudness Basics"},
+            {"topic": "   ", "angle": "ignored"},
+            "not a mapping",
+        ]}
+        spy = Spy()
+        G.OpenAIImagePromptGenerator(adapter=spy).generate_prompt(
+            "topic", BRAND, policy, self.PAYLOAD)
+        self.assertIn("Already covered in this campaign", spy.system)
+        self.assertIn("Understanding Loudness Basics", spy.system)
+        self.assertNotIn("ignored", spy.system)
+        # Transport only: no rule of Brain's own about repetition.
+        self.assertIn("the repetition policy is stated in the active "
+                      "Skills", spy.system)
+
+        # A run without history behaves exactly as before.
+        clean = Spy()
+        G.OpenAIImagePromptGenerator(adapter=clean).generate_prompt(
+            "topic", BRAND, {}, self.PAYLOAD)
+        self.assertNotIn("Already covered in this campaign", clean.system)
+
     def test_image_prompt_carries_no_production_zone_prescription(self):
         # Production geometry (canvas, safe areas, typography) belongs to
         # the compositor, so the prompt never tells the model to split the

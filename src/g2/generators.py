@@ -644,6 +644,29 @@ class OpenAIImagePromptGenerator:
         payload = _post_block(p)
         if payload:
             parts.append("Post to illustrate:\n" + payload)
+        # Generic transport: the same novelty ledger the concept step
+        # already reads, carried here as DATA so the Skills can act on
+        # it. What counts as repetition belongs to the active Skills,
+        # exactly like every other visual decision above.
+        recent = policy.get("recent_topics") \
+            if isinstance(policy, dict) else None
+        if isinstance(recent, list) and recent:
+            rows = []
+            for entry in recent[:10]:
+                if not isinstance(entry, dict):
+                    continue
+                topic_line = str(entry.get("topic") or "").strip()
+                if not topic_line:
+                    continue
+                angle = str(entry.get("angle") or "").strip()
+                rows.append("- %s%s" % (
+                    topic_line[:120],
+                    " (angle: %s)" % angle[:120] if angle else ""))
+            if rows:
+                parts.append(
+                    "Already covered in this campaign (history data; "
+                    "the repetition policy is stated in the active "
+                    "Skills):\n" + "\n".join(rows))
         # keep prompt request short; campaign context already in skill
         parts.append(
             f"Post topic: {topic[:200]}. Brand: {brand.get('name','')}. "
