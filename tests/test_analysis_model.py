@@ -434,5 +434,175 @@ class BoundaryCase(unittest.TestCase):
             (base / "analysis.py").read_text(encoding="utf-8"))
 
 
+class RepeatGate(unittest.TestCase):
+    """The deterministic repeat gate: a topic already present in the
+    run's published history is rejected, retried exactly once with the
+    same history, and never silently accepted."""
+
+    HISTORY = [
+        {"topic": "Understanding Loudness Basics",
+         "angle": "Understand Loudness Basics"},
+        {"topic": "Juzzir's Mastering Personalities",
+         "angle": "Explore different mastering styles"},
+    ]
+
+    def _pol(self, history=None):
+        p = policy()
+        p["recent_topics"] = self.HISTORY if history is None else history
+        return p
+
+    def _run(self, bodies):
+        """Feed a fixed sequence of model outputs; return (opp, calls)."""
+        calls = []
+
+        def _open(req, timeout=None):
+            body = json.loads(req.data.decode())
+            calls.append(body["messages"][1]["content"])
+            return FakeResp(bodies[min(len(calls) - 1, len(bodies) - 1)])
+        urllib.request.urlopen = _open
+        r = research([finding("Loudness is measured in LUFS")])
+        return OpenAIAnalysisModel("k").analyze(r, self._pol()), calls
+
+    def test_repeated_loudness_is_rejected(self):
+        # Observed in production: the model re-picks the loudness topic
+        # verbatim from the history.
+        opp, calls = self._run([
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+            _openai_body(topic="Studio Monitoring Setup",
+                         angle="Why your room changes the mix"),
+        ])
+        self.assertEqual(len(calls), 2, "one retry expected")
+        self.assertEqual(opp.topic, "Studio Monitoring Setup")
+        self.assertTrue(opp.eligible)
+
+    def test_consumed_personalities_is_rejected(self):
+        # The ledger entry carries Juzzir's prefix; the model drops it.
+        opp, calls = self._run([
+            _openai_body(topic="Mastering Personalities",
+                         angle="Explore different mastering styles"),
+            _openai_body(topic="File Formats For Mastering",
+                         angle="WAV, FLAC and MP3 limits"),
+        ])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(opp.topic, "File Formats For Mastering")
+        self.assertTrue(opp.eligible)
+
+    def test_fresh_topic_passes_without_retry(self):
+        opp, calls = self._run([
+            _openai_body(topic="Studio Monitoring Setup",
+                         angle="Why your room changes the mix"),
+        ])
+        self.assertEqual(len(calls), 1, "no retry for a fresh topic")
+        self.assertTrue(opp.eligible)
+        self.assertEqual(opp.topic, "Studio Monitoring Setup")
+
+    def test_retry_receives_same_history_and_the_rejection(self):
+        opp, calls = self._run([
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+            _openai_body(topic="Studio Monitoring Setup",
+                         angle="Why your room changes the mix"),
+        ])
+        self.assertEqual(len(calls), 2)
+        retry = calls[1]
+        # The history the first selection saw is still there.
+        for entry in self.HISTORY:
+            self.assertIn(entry["topic"], retry)
+        # The rejected topic is named back, so the retry can differ.
+        self.assertIn("REJECTED SELECTION", retry)
+        self.assertIn("Understanding Loudness Basics", retry.split(
+            "REJECTED SELECTION")[1])
+
+    def test_exactly_one_retry(self):
+        # Three repeats available; only one retry may be spent.
+        opp, calls = self._run([
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+        ])
+        self.assertEqual(len(calls), 2, "retry must happen exactly once")
+
+    def test_double_repeat_is_declined_not_accepted(self):
+        # Defined failure behaviour: no post this cycle, never a
+        # duplicate, and the reason is recorded.
+        opp, calls = self._run([
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+        ])
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(opp.eligible)
+        self.assertEqual(opp.facts, [])
+        self.assertEqual(opp.confidence, "low")
+        self.assertEqual(opp.priority, "low")
+        self.assertEqual(opp.meta.get("reason"), "repeated-topic")
+        self.assertEqual(opp.meta.get("rejected_topic"),
+                         "Understanding Loudness Basics")
+
+    def test_no_history_means_no_gate(self):
+        calls = []
+
+        def _open(req, timeout=None):
+            calls.append(json.loads(req.data.decode()))
+            return FakeResp(_openai_body(
+                topic="Understanding Loudness Basics",
+                angle="Understand Loudness Basics"))
+        urllib.request.urlopen = _open
+        r = research([finding("Loudness is measured in LUFS")])
+        opp = OpenAIAnalysisModel("k").analyze(r, policy())
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(opp.eligible)
+
+    def test_blank_history_entries_never_gate(self):
+        # Junk entries must not make every candidate a repeat.
+        opp, calls = self._run([
+            _openai_body(topic="Harbor festival",
+                         angle="Festival boats angle"),
+        ])
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(opp.eligible)
+
+    def test_ineligible_selection_is_not_retried(self):
+        opp, calls = self._run([
+            _openai_body(eligible=False, facts=[], source_item_ids=[],
+                         topic="", angle="", rationale="nothing usable"),
+        ])
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(opp.eligible)
+
+
+class RepeatMatcher(unittest.TestCase):
+    def test_word_overlap_decides(self):
+        from research.analysis import _repeats
+        spent = [("Understanding Loudness Basics",
+                  "Understand Loudness Basics")]
+        self.assertTrue(_repeats("Understanding Loudness Basics",
+                                 "Understand Loudness Basics", spent))
+        # Different subject matter, one shared generic word: not a repeat.
+        self.assertFalse(_repeats("Understanding Mastering Personalities",
+                                  "Understand personalities", spent))
+        self.assertFalse(_repeats("Studio Monitoring Setup",
+                                  "Why your room changes the mix", spent))
+        # A prefix is enough: the ledger entry is a superset.
+        self.assertTrue(_repeats("Loudness Basics", "", [
+            ("Understanding Loudness Basics", "Understand Loudness Basics")]))
+
+    def test_empty_candidate_never_repeats(self):
+        from research.analysis import _repeats
+        self.assertFalse(_repeats("", "", [("A Topic", "An Angle")]))
+
+    def test_history_pairs_shape_and_cap(self):
+        from research.analysis import _history_pairs
+        self.assertEqual(_history_pairs(None), [])
+        self.assertEqual(_history_pairs(["junk", {"angle": "no topic"}]), [])
+        many = [{"topic": "T%d" % i} for i in range(30)]
+        self.assertEqual(len(_history_pairs(many)), 10)
+
+
 if __name__ == "__main__":
     unittest.main()

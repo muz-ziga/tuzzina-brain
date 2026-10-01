@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import socket
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 ELIGIBLE_FORMATS = ("post",)
 MEDIA_INTENTS = ("none", "image", "video")
@@ -156,6 +156,61 @@ def _media_intent(view: dict, items) -> str:
     except Exception:
         pass
     return "none"
+
+
+def _history_pairs(recent) -> list:
+    """Published (topic, angle) pairs from the run's own history, in the
+    exact shape the prompt renders them. One source of truth so the
+    data the model reads and the data the repeat check reads can never
+    drift apart."""
+    out: list[tuple[str, str]] = []
+    if not isinstance(recent, list):
+        return out
+    for entry in recent[:10]:
+        if not isinstance(entry, dict):
+            continue
+        topic = str(entry.get("topic") or "").strip()
+        if not topic:
+            continue
+        out.append((topic[:120], str(entry.get("angle") or "").strip()[:120]))
+    return out
+
+
+def _overlaps(cand: set, hist: set) -> bool:
+    """One candidate/history comparison. Containment is a repeat; a
+    partial match needs TWO shared words as well as half the smaller
+    set, so a single shared function word ("understanding") can never
+    reject a genuinely different subject."""
+    if not cand or not hist:
+        return False
+    if cand <= hist or hist <= cand:
+        return True
+    shared = len(cand & hist)
+    return shared >= 2 and shared / min(len(cand), len(hist)) >= 0.5
+
+
+def _repeats(topic: str, angle: str, spent: list) -> bool:
+    """True when the candidate is already-consumed material.
+
+    Deterministic and domain-agnostic: no topic list is hardcoded
+    here, the published history itself decides. The candidate is
+    compared against each published topic and angle separately, so a
+    word the candidate merely restates in both fields is not counted
+    twice.
+
+    ponytail: word overlap, not semantics. A rephrasing that keeps only
+    one shared word beside a spent entry ("...and volume" next to
+    "Loudness Basics") passes this check. Upgrade path: have the model
+    adjudicate, one extra call per candidate.
+    """
+    cand = _tokens(topic) | _tokens(angle)
+    if not cand:
+        return False
+    for pub_topic, pub_angle in spent:
+        if _overlaps(cand, _tokens(pub_topic)) or \
+                _overlaps(cand, _tokens(pub_angle)):
+            return True
+    return False
 
 
 class MockAnalysisModel(AnalysisModel):
@@ -323,27 +378,18 @@ class OpenAIAnalysisModel(AnalysisModel):
         contract_id = skill_doc.get("contract_id", "legacy-v1")
         recent = policy.get("recent_topics") \
             if isinstance(policy, dict) else None
-        if isinstance(recent, list) and recent:
-            lines = []
-            for entry in recent[:10]:
-                if not isinstance(entry, dict):
-                    continue
-                topic = str(entry.get("topic") or "").strip()
-                if not topic:
-                    continue
-                angle = str(entry.get("angle") or "").strip()
-                lines.append("- %s%s" % (
-                    topic[:120],
-                    " (angle: %s)" % angle[:120] if angle else ""))
-            if lines:
-                # History is DATA only. What counts as repetition, and
-                # what a campaign may repeat, belongs to the active
-                # analysis Skill above, never to this module.
-                context += (
-                    "\n\nRecently covered in this campaign (history "
-                    "data; the repetition policy is stated in the "
-                    "analysis instructions):\n" +
-                    "\n".join(lines))[:1000]
+        spent = _history_pairs(recent)
+        if spent:
+            lines = ["- %s%s" % (t, " (angle: %s)" % a if a else "")
+                     for t, a in spent]
+            # History is DATA only. What counts as repetition, and
+            # what a campaign may repeat, belongs to the active
+            # analysis Skill above, never to this module.
+            context += (
+                "\n\nRecently covered in this campaign (history "
+                "data; the repetition policy is stated in the "
+                "analysis instructions):\n" +
+                "\n".join(lines))[:1000]
         # Material parked by earlier runs that never reached a post. It
         # is NOT this cycle's research: it is offered, never promoted.
         # Whether it is usable now (or at all) is the active Skill's
@@ -391,18 +437,44 @@ class OpenAIAnalysisModel(AnalysisModel):
                 from llm.adapters import LLMError
                 raise LLMError("invalid-output")
 
-        try:
-            from llm.adapters import LLMError, complete_with_retry
-            stats: dict = {}
-            raw = complete_with_retry(
-                self._adapter, prompt, context,
-                temperature=0.2, max_tokens=800, timeout=90,
-                validate=_check, task="analysis", stats=stats)
-        except (TimeoutError, socket.timeout):
-            raise AnalysisError("model-timeout")
-        except LLMError as e:
-            raise AnalysisError(f"model-error: {e}")
-        return self._validate(raw, known, truncated, contract_id)
+        def _select() -> ContentOpportunity:
+            try:
+                from llm.adapters import LLMError, complete_with_retry
+                stats: dict = {}
+                raw = complete_with_retry(
+                    self._adapter, prompt, context,
+                    temperature=0.2, max_tokens=800, timeout=90,
+                    validate=_check, task="analysis", stats=stats)
+            except (TimeoutError, socket.timeout):
+                raise AnalysisError("model-timeout")
+            except LLMError as e:
+                raise AnalysisError(f"model-error: {e}")
+            return self._validate(raw, known, truncated, contract_id)
+
+        opp = _select()
+        # Deterministic repeat gate. A Skill may state a repetition
+        # policy, but a policy the model can talk past is not a gate:
+        # the same history that reached the prompt is checked here, and
+        # a repeat gets exactly ONE more selection with the same
+        # history plus the rejected topic named back. Two repeats mean
+        # the cycle yields no post rather than a duplicate.
+        if not spent or not opp.eligible:
+            return opp
+        if not _repeats(opp.topic, opp.angle, spent):
+            return opp
+        context += (
+            "\n\nREJECTED SELECTION (a deterministic check compared it "
+            "with the published history above and found it already "
+            "consumed): topic=%r angle=%r. Choose a different topic that "
+            "no history entry covers." % (opp.topic[:120], opp.angle[:120]))
+        opp = _select()
+        if not opp.eligible or not _repeats(opp.topic, opp.angle, spent):
+            return opp
+        meta = dict(opp.meta)
+        meta["reason"] = "repeated-topic"
+        meta["rejected_topic"] = opp.topic[:200]
+        return replace(opp, eligible=False, facts=[], confidence="low",
+                       priority="low", meta=meta)
 
     def _validate(self, raw: str, known: set,
                   truncated: bool,
