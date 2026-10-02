@@ -15,6 +15,7 @@ deterministic contract). The temporary engine owns just the LLM
 call: no scheduling, media, OAuth, publishing, or provider truth.
 """
 from __future__ import annotations
+import re
 import struct
 import zlib
 from abc import ABC, abstractmethod
@@ -380,6 +381,56 @@ class FixedPromptGenerator:
         return self._prompt
 
 
+# Hex colors are digits on the wire but colors to the engine, never
+# rendered glyphs: they survive the payload-numeric-leak gate. Aspect
+# ratios ("portrait 4:5") are framing instructions the Skills use
+# everywhere, also not glyphs.
+_HEX_COLOR = re.compile(r"#(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\b")
+_ASPECT = re.compile(r"\b\d{1,2}\s*[:xX]\s*\d{1,2}\b")
+_NUMBER = re.compile(r"\d+")
+
+
+def _bare_numbers(text: str) -> list:
+    """Digit runs in a string, ignoring hex colors and aspect ratios."""
+    return _NUMBER.findall(
+        _HEX_COLOR.sub(" ", _ASPECT.sub(" ", str(text or ""))))
+
+
+def _payload_leak(prompt: str, payload_numbers: set) -> str:
+    """The first numeric value the prompt shares with the post payload.
+
+    Scoped on purpose. The gate exists for one measured path: a figure
+    the post itself supplies (its Key facts) travelling into the
+    artwork, where the engine renders it as pseudo-text. A number the
+    post never contained is a different question and is NOT this
+    gate's business, so a blind "no digits anywhere" rule is
+    deliberately not implemented.
+
+    Returns "" when nothing leaked.
+    """
+    bare = _HEX_COLOR.sub(" ", _ASPECT.sub(" ", str(prompt or "")))
+    for hit in _NUMBER.finditer(bare):
+        if hit.group(0) in payload_numbers:
+            start = max(0, hit.start() - 60)
+            end = min(len(bare), hit.end() + 60)
+            return " ".join(bare[start:end].split())
+    return ""
+
+
+def _post_fact_numbers(post: dict | None) -> set:
+    """Digit runs inside the post's Key facts only.
+
+    The payload-numeric-leak gate is scoped to a figure the post itself
+    asserts. A digit in the topic/angle/audience/media-intent is the
+    post's framing, not a measurement the artwork might render, so it is
+    out of scope: scoping to facts avoids refusing legitimate content
+    whose topic merely contains a number.
+    """
+    p = post if isinstance(post, dict) else {}
+    facts = " ".join(str(f or "") for f in list(p.get("facts") or []))
+    return set(_bare_numbers(facts))
+
+
 class OpenAIImagePromptGenerator:
     """Image Agent LLM — prompt only, no bytes.
 
@@ -587,15 +638,18 @@ class OpenAIImagePromptGenerator:
                     "\n\nAlready covered in this campaign (history data; "
                     "the repetition policy is stated in the active "
                     "Skills):\n" + "\n".join(rows))
-        raw = complete_with_retry(
-            self._adapter, system,
-            "Post to illustrate:\n" + (payload or "(none provided)"),
-            # Room for the full concept JSON: a truncated answer is
-            # unparseable, not a grounding failure, and the concept
-            # is longer than a single sentence.
-            temperature=0.3, max_tokens=900, timeout=60,
-            validate=lambda r: parse(r), task="visual_concept",
-            max_attempts=2)
+        def _concept_call(sys_text):
+            return complete_with_retry(
+                self._adapter, sys_text,
+                "Post to illustrate:\n" + (payload or "(none provided)"),
+                # Room for the full concept JSON: a truncated answer is
+                # unparseable, not a grounding failure, and the concept
+                # is longer than a single sentence.
+                temperature=0.3, max_tokens=900, timeout=60,
+                validate=lambda r: parse(r), task="visual_concept",
+                max_attempts=2)
+
+        raw = _concept_call(system)
         return parse(raw)
 
     def generate_prompt(self, topic: str, brand: dict,
@@ -680,13 +734,46 @@ class OpenAIImagePromptGenerator:
             + "Return one image prompt only, no explanation.")
         sys = "\n\n".join(parts)
         from llm.adapters import complete_with_retry
+
+        def _write(system_text):
+            raw = complete_with_retry(
+                self._adapter, system_text, f"Topic: {topic}",
+                temperature=0.3, max_tokens=600, timeout=60,
+                task="image_prompt").strip()
+            return self._strip_icon_scaffolding(raw)
+
         # Same generic retry as every other role: a reasoning-only
         # or empty prompt reply repeats the task; only a validated
         # prompt may reach the Tuzzina image execution path.
-        raw = complete_with_retry(
-            self._adapter, sys, f"Topic: {topic}",
-            temperature=0.7, max_tokens=200, timeout=60,
-            task="image_prompt").strip()
+        out = _write(sys)
+        # Payload leak gate, scoped to the numbers the post itself
+        # supplies. Measured cause: the post's Key facts carry
+        # "-14 to -11 LUFS", the writer moved that figure into the
+        # artwork in the same sentence as "no numbers", and the image
+        # engine returned it as pseudo-text. One corrected call is
+        # spent, through the existing stage failure path.
+        payload_numbers = _post_fact_numbers(post)
+        leaked = _payload_leak(out, payload_numbers)
+        if leaked:
+            sys += (
+                "\n\nYour previous prompt carried this numeric value from "
+                "the post into the artwork, which was refused: %r. Do not "
+                "move numeric values into the image. Express the quantity "
+                "as a non-numeric visual relationship instead: a region, a "
+                "proportion, a length, a distance, a brightness or a "
+                "contrast, and keep every digit out of the prompt." % (
+                    leaked[:160],))
+            out = _write(sys)
+            still = _payload_leak(out, payload_numbers)
+            if still:
+                from llm.adapters import LLMError
+                raise LLMError(
+                    "invalid-output:payload-numeric-leak %s"
+                    % (still[:160],))
+        return out
+
+    @staticmethod
+    def _strip_icon_scaffolding(raw: str) -> str:
         # The Image Skill documents the two-step icon channel, so
         # models sometimes echo its scaffolding (ICON SELECTION /
         # Category: / Icon: / icon:name / [icon:...]) around the real

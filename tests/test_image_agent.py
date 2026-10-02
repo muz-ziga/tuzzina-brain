@@ -438,6 +438,136 @@ class ConceptGroundingTest(unittest.TestCase):
         gen.generate_prompt("topic", BRAND, {}, self.PAYLOAD)
         self.assertIn(first_line, prompt_spy.system)
 
+    def test_prompt_gate_ignores_numbers_outside_key_facts(self):
+        # Step 3: the gate is scoped to the post's Key facts, so a digit
+        # in the topic/angle/audience/media-intent (framing, not a
+        # measurement the artwork could render) must NOT trip it, while a
+        # figure the post states in Key facts still does.
+        payload = {
+            "topic": "11 ways to master your track",
+            "angle": "hear 3 mixes before paying",
+            "facts": ["the preview compares original and mastered"],
+            "audience": "musicians", "media_intent": "image",
+        }
+        framing = ("MODERN DIGITAL GRAPHIC DESIGN. Show 11 framed cards "
+                   "from the post. No text, no letters, no numbers.")
+        clean = ("MODERN DIGITAL GRAPHIC DESIGN. A lighter band between two "
+                 "darker regions. No text, no letters, no numbers.")
+        # A topic/angle digit repeats in the prompt: no corrected call.
+        gen, spy = self._gen([framing, clean])
+        out = gen.generate_prompt("topic", BRAND, {}, payload, None)
+        self.assertEqual(len(spy.systems), 1)
+        self.assertEqual(out, framing.strip())
+        # A Key-fact digit repeats in the prompt: one corrected call.
+        payload["facts"] = ["streaming target around -14 LUFS"]
+        leaky14 = ("MODERN DIGITAL GRAPHIC DESIGN. A scale marked -14 LUFS. "
+                   "No text, no letters, no numbers.")
+        gen2, spy2 = self._gen([leaky14, clean])
+        out2 = gen2.generate_prompt("topic", BRAND, {}, payload, None)
+        self.assertEqual(len(spy2.systems), 2)
+        self.assertEqual(out2, clean.strip())
+
+    def test_payload_gate_only_catches_numbers_the_post_supplied(self):
+        # The gate is scoped on purpose: a blind "no digits anywhere"
+        # rule was rejected by the owner. Only a figure that traces
+        # back to the post payload is refused.
+        payload = dict(self.PAYLOAD)
+        payload["facts"] = ["Streaming targets sit roughly around "
+                            "-14 to -11 LUFS."]
+        numbers = set(G._bare_numbers(G._post_block(payload)))
+        self.assertIn("14", numbers)
+        self.assertIn("11", numbers)
+
+        # Leaks when the prompt repeats a payload number.
+        self.assertTrue(G._payload_leak(
+            "a scale with the range around -14 to -11 LUFS", numbers))
+        # Clean when it does not.
+        self.assertEqual(G._payload_leak(
+            "a scale where one band is wider and lighter", numbers), "")
+        # A number the post never contained is NOT this gate's job.
+        self.assertEqual(G._payload_leak(
+            "a stack of 9 blocks, 3 across", numbers), "")
+        # Hex colors and aspect ratios never count as payload figures.
+        self.assertEqual(G._payload_leak(
+            "gradient #FF5733, portrait 4:5", numbers), "")
+
+    def test_prompt_gate_catches_digits_from_the_key_facts(self):
+        # The concept gate cannot see this path: the post's own Key
+        # facts carry the figure, so a digit-free concept still
+        # produced "the streaming target range around -14 to -11 LUFS"
+        # in the same sentence as "no numbers".
+        leaky = ("MODERN DIGITAL GRAPHIC DESIGN. A vertical loudness "
+                 "scale with the target range around -14 to -11 LUFS "
+                 "highlighted. No text, no letters, no numbers.")
+        clean = ("MODERN DIGITAL GRAPHIC DESIGN. A vertical loudness "
+                 "scale where the safe band is a lighter, wider region "
+                 "between two darker regions. No text, no letters, no "
+                 "numbers, no logos.")
+        payload = dict(self.PAYLOAD)
+        payload["facts"] = ["Streaming targets sit roughly around "
+                            "-14 to -11 LUFS."]
+        concept = {"meaning": "loudness is felt", "subject": "a scale",
+                   "relationship": "a band stands out",
+                   "brief_constraints": [], "art_direction": {}}
+
+        class Spy:
+            def __init__(self):
+                self.systems = []
+
+            def complete(self, system, user, **kw):
+                self.systems.append(system)
+                return leaky if len(self.systems) == 1 else clean
+
+        spy = Spy()
+        out = G.OpenAIImagePromptGenerator(adapter=spy).generate_prompt(
+            "Understanding Loudness Basics", BRAND, {}, payload, concept)
+        # The corrected answer is what reached the caller.
+        self.assertNotIn("LUFS", out)
+        self.assertEqual(G._payload_leak(out, set(G._bare_numbers(
+            G._post_block(payload)))), "")
+        # Exactly one corrected call, and it names the offender without
+        # prescribing any channel-specific device vocabulary of its own.
+        self.assertEqual(len(spy.systems), 2)
+        self.assertIn("which was refused", spy.systems[1])
+        self.assertIn("Do not", spy.systems[1])
+        # Ownership lock: no Skill vocabulary (bars/meters/spectra/...)
+        # may leak into shared Brain code through the corrective message.
+        for banned in ("spectrograms", "bars, meters", "panels or grids",
+                       "stand a device in for the number"):
+            self.assertNotIn(banned, spy.systems[1])
+
+        # Hex colors are digits on the wire but colors to the engine.
+        hexed = "A gradient background #FF5733 to #33FF57, no text."
+        hx = Spy()
+        hx.systems = []
+        gen2 = G.OpenAIImagePromptGenerator(adapter=type(
+            "H", (), {"complete": lambda self, system, user, **kw: hexed})())
+        self.assertEqual(
+            gen2.generate_prompt("t", BRAND, {}, self.PAYLOAD), hexed)
+
+        # Both attempts dirty: fail closed, never publish a figure.
+        class AlwaysDirty:
+            def __init__(self):
+                self.systems = []
+
+            def complete(self, system, user, **kw):
+                self.systems.append(system)
+                return leaky
+        dirty = AlwaysDirty()
+        with self.assertRaises(Exception) as ctx:
+            G.OpenAIImagePromptGenerator(adapter=dirty).generate_prompt(
+                "Understanding Loudness Basics", BRAND, {}, payload, concept)
+        self.assertIn("payload-numeric-leak", str(ctx.exception))
+        self.assertEqual(len(dirty.systems), 2)
+
+    def test_numeric_fragment_ignores_hex_colors(self):
+        self.assertEqual(G._bare_numbers("portrait 4:5, centered"), [])
+        self.assertEqual(G._bare_numbers("#FF5733 #33FF57"), [])
+        self.assertEqual(sorted(G._bare_numbers("around -14 to -11")),
+                         ["11", "14"])
+        self.assertTrue(G._payload_leak(
+            "#FF5733 with -14 LUFS", {"14"}))
+
     def test_concept_step_receives_the_recent_topic_history(self):
         # The novelty ledger already rides the run. The concept step is
         # where a subject gets chosen, so the history has to reach it as
@@ -571,6 +701,191 @@ class ConceptGroundingTest(unittest.TestCase):
         for banned in ("AD_PALETTE_CYCLE", "palette_is_strong",
                        "palette_for_slot"):
             self.assertNotIn(banned, source)
+
+
+class BudgetParametersTest(unittest.TestCase):
+    """Step 1: pin A.
+
+    max_tokens=600 and temperature=0.3 are transport parameters that must
+    reach the real model adapter, and Brain must not truncate the prompt
+    on the application side. This does NOT assert every Skill constraint
+    survives the 600-token ceiling: that is an output-length measurement,
+    taken separately against the live Skill (it does not, fully).
+    """
+
+    def _use(self, tmp):
+        import skills.loader as _loader
+        old = os.environ.get("BRAIN_SKILLS_DIR")
+        os.environ["BRAIN_SKILLS_DIR"] = tmp
+        _loader.clear_cache()
+        return old
+
+    def _restore(self, old):
+        import skills.loader as _loader
+        if old is None:
+            os.environ.pop("BRAIN_SKILLS_DIR", None)
+        else:
+            os.environ["BRAIN_SKILLS_DIR"] = old
+        _loader.clear_cache()
+
+    def test_generate_prompt_passes_budget_and_does_not_truncate(self):
+        import tempfile
+        import yaml
+        import skills.loader as _loader
+        tmp = tempfile.mkdtemp(prefix="tbra_budget_")
+        old = self._use(tmp)
+        try:
+            with open(os.path.join(tmp, "image.yaml"), "w",
+                      encoding="utf-8") as f:
+                yaml.safe_dump({
+                    "id": "image-x1", "name": "X", "type": "image",
+                    "version": 1,
+                    "instructions": "PLAIN STYLE. No people. Flat color.",
+                }, f)
+            _loader.clear_cache()
+
+            class Spy:
+                def __init__(self, raw):
+                    self.raw = raw
+                    self.kw = None
+                    self.system = ""
+
+                def complete(self, system, user, **kw):
+                    self.system = system
+                    self.kw = dict(kw)
+                    return self.raw
+
+            raw = ("PLAIN STYLE. A single ceramic mug on a flat teal ground, "
+                   "centered, soft shadow, portrait 4:5.")
+            spy = Spy(raw)
+            out = G.OpenAIImagePromptGenerator(adapter=spy).generate_prompt(
+                "topic", BRAND, {}, {"facts": ["a 250 ml cup"]})
+            # A reached the adapter.
+            self.assertEqual(spy.kw.get("temperature"), 0.3)
+            self.assertEqual(spy.kw.get("max_tokens"), 600)
+            # Brain applied no application-side truncation: the returned
+            # prompt is the adapter output minus whitespace/scaffolding
+            # handling only.
+            self.assertEqual(out, raw.strip())
+            # The Skill reached the real assembly path.
+            self.assertIn("PLAIN STYLE", spy.system)
+        finally:
+            self._restore(old)
+
+
+class TwoChannelSkillIsolationTest(unittest.TestCase):
+    """Step 4: two distinct Image Skills must drive two different visual
+    directions through the SAME shared prompt assembly, in both the
+    concept and the final-prompt stages, with no cross-leak. The adapter
+    derives its answer from the Skill it received (not from hardcoded
+    output), which is what proves the Skill - not the test - drove the
+    result.
+    """
+
+    ALPHA = "CHANNEL-ALPHA-STYLE. Warm photographic look, real people, shallow depth of field."
+    BETA = "CHANNEL-BETA-STYLE. Flat vector look, no people ever, monochrome, hard edges."
+    NAME_A = "chan-alpha"
+    NAME_B = "chan-beta"
+
+    def _use(self, tmp):
+        import skills.loader as _loader
+        old = os.environ.get("BRAIN_SKILLS_DIR")
+        os.environ["BRAIN_SKILLS_DIR"] = tmp
+        _loader.clear_cache()
+        return old
+
+    def _restore(self, old):
+        import skills.loader as _loader
+        if old is None:
+            os.environ.pop("BRAIN_SKILLS_DIR", None)
+        else:
+            os.environ["BRAIN_SKILLS_DIR"] = old
+        _loader.clear_cache()
+
+    def _write(self, tmp, name, instructions):
+        import yaml
+        with open(os.path.join(tmp, "image.%s.yaml" % name), "w",
+                  encoding="utf-8") as f:
+            yaml.safe_dump({
+                "id": "image-%s" % name, "name": name, "type": "image",
+                "version": 1, "instructions": instructions,
+            }, f)
+
+    def test_channels_diverge_without_cross_leak(self):
+        import tempfile
+        import skills.loader as _loader
+        tmp = tempfile.mkdtemp(prefix="tbra_2chan_")
+        old = self._use(tmp)
+        try:
+            self._write(tmp, self.NAME_A, self.ALPHA)
+            self._write(tmp, self.NAME_B, self.BETA)
+            _loader.clear_cache()
+
+            payload = {
+                "topic": "Mastering preview",
+                "angle": "compare the mixes before paying",
+                "facts": ["the preview compares the original and mastered"],
+                "audience": "musicians", "media_intent": "image",
+            }
+
+            class SkillEchoAdapter:
+                def __init__(self):
+                    self.systems = []
+
+                def complete(self, system, user, **kw):
+                    self.systems.append(system)
+                    if self.ALPHA in system:
+                        style = self.ALPHA
+                    elif self.BETA in system:
+                        style = self.BETA
+                    else:
+                        style = "UNKNOWN-STYLE"
+                    if user.startswith("Post to illustrate"):
+                        return json.dumps({
+                            "meaning": "%s mastering visual concept" % style,
+                            "subject": "%s mastering scene" % style,
+                            "relationship": "the scene shows mastering",
+                            "brief_constraints": [],
+                            "art_direction": {"icon": "none", "slot": "",
+                                              "palette": [], "text_align": "left"},
+                        })
+                    return "%s prompt, single subject, portrait 4:5." % style
+
+            SkillEchoAdapter.ALPHA = self.ALPHA
+            SkillEchoAdapter.BETA = self.BETA
+
+            a = SkillEchoAdapter()
+            genA = G.OpenAIImagePromptGenerator(adapter=a)
+            conceptA = genA.generate_concept(
+                payload, {"skills": {"image": self.NAME_A}})
+            promptA = genA.generate_prompt(
+                "Mastering preview", BRAND,
+                {"skills": {"image": self.NAME_A}}, payload, conceptA)
+
+            b = SkillEchoAdapter()
+            genB = G.OpenAIImagePromptGenerator(adapter=b)
+            conceptB = genB.generate_concept(
+                payload, {"skills": {"image": self.NAME_B}})
+            promptB = genB.generate_prompt(
+                "Mastering preview", BRAND,
+                {"skills": {"image": self.NAME_B}}, payload, conceptB)
+
+            # Each channel's own style drove both stages.
+            self.assertIn(self.ALPHA, conceptA["meaning"])
+            self.assertIn(self.ALPHA, promptA)
+            self.assertIn(self.BETA, conceptB["meaning"])
+            self.assertIn(self.BETA, promptB)
+            # No cross-leak: A never carries B's style and vice versa.
+            self.assertNotIn(self.BETA, conceptA["meaning"])
+            self.assertNotIn(self.BETA, promptA)
+            self.assertNotIn(self.ALPHA, conceptB["meaning"])
+            self.assertNotIn(self.ALPHA, promptB)
+            # The Skill text actually reached the assembled system prompt,
+            # so the routing is real (not a fallback default).
+            self.assertIn(self.ALPHA, a.systems[0])
+            self.assertIn(self.BETA, b.systems[0])
+        finally:
+            self._restore(old)
 
 
 if __name__ == "__main__":
