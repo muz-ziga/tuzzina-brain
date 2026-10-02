@@ -888,6 +888,132 @@ class TwoChannelSkillIsolationTest(unittest.TestCase):
             self._restore(old)
 
 
+class StyleBlockAssemblyTest(unittest.TestCase):
+    """The Skill owns the style block; Brain carries it as data.
+
+    Measured cause: when the LLM wrote style AND scene together it
+    diluted the style wording and the engine drifted to semi-real
+    renders. With a fixed block appended literally, short scenes held
+    the flat band. So the assembly is deterministic: the model writes
+    the scene, and the Skill's block follows byte-for-byte.
+    """
+
+    BLOCK = ("professional editorial designer illustration, 2D flat vector "
+             "artwork, no photorealism, no 3D, no gradients")
+
+    def _use(self, tmp):
+        import skills.loader as _loader
+        old = os.environ.get("BRAIN_SKILLS_DIR")
+        os.environ["BRAIN_SKILLS_DIR"] = tmp
+        _loader.clear_cache()
+        return old
+
+    def _restore(self, old):
+        import skills.loader as _loader
+        if old is None:
+            os.environ.pop("BRAIN_SKILLS_DIR", None)
+        else:
+            os.environ["BRAIN_SKILLS_DIR"] = old
+        _loader.clear_cache()
+
+    def _skill_dir(self, tmp, *, block):
+        import yaml
+        doc = {"id": "image-x1", "name": "X", "type": "image",
+               "version": 1,
+               "instructions": "SCENE-ONLY SKILL. Write the scene only."}
+        if block is not None:
+            doc["config"] = {"style_block": block}
+        with open(os.path.join(tmp, "image.yaml"), "w",
+                  encoding="utf-8") as f:
+            yaml.safe_dump(doc, f, allow_unicode=True)
+
+    class _Adapter:
+        def __init__(self, raw):
+            self.raw = raw
+            self.system = ""
+
+        def complete(self, system, user, **kw):
+            self.system = system
+            return self.raw
+
+    def test_scene_plus_exact_block_in_that_order(self):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="tbra_block_")
+        old = self._use(tmp)
+        try:
+            self._skill_dir(tmp, block=self.BLOCK)
+            scene = ("an engineer separating two tangled signal paths into "
+                     "one clean path")
+            out = G.OpenAIImagePromptGenerator(
+                adapter=self._Adapter(scene)).generate_prompt(
+                    "loudness", BRAND, {}, {})
+            self.assertTrue(out.startswith(scene))
+            self.assertIn(self.BLOCK, out)
+            # Byte-identical, appended after the scene.
+            self.assertEqual(out, scene + "\n\n" + self.BLOCK)
+        finally:
+            self._restore(old)
+
+    def test_block_survives_a_model_that_echoes_style_wording(self):
+        # Even if the model tries to append its own style words, the
+        # block still arrives verbatim; Brain never rewrites it.
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="tbra_block_")
+        old = self._use(tmp)
+        try:
+            self._skill_dir(tmp, block=self.BLOCK)
+            scene = ("a wide flat studio scene with a character at a desk, "
+                     "flat vector illustration, 2d, no 3d")
+            out = G.OpenAIImagePromptGenerator(
+                adapter=self._Adapter(scene)).generate_prompt(
+                    "vinyl", BRAND, {}, {})
+            self.assertTrue(out.endswith(self.BLOCK))
+        finally:
+            self._restore(old)
+
+    def test_request_asks_for_the_scene_only(self):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="tbra_block_")
+        old = self._use(tmp)
+        try:
+            self._skill_dir(tmp, block=self.BLOCK)
+            spy = self._Adapter("a scene")
+            G.OpenAIImagePromptGenerator(adapter=spy).generate_prompt(
+                "loudness", BRAND, {}, {})
+            self.assertIn("ONLY the visual scene", spy.system)
+            self.assertIn("Return the scene only", spy.system)
+        finally:
+            self._restore(old)
+
+    def test_no_block_keeps_the_previous_prompt_contract(self):
+        # A Skill that declares no block keeps the old behaviour: the
+        # model returns the whole prompt and nothing is appended.
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="tbra_block_")
+        old = self._use(tmp)
+        try:
+            self._skill_dir(tmp, block=None)
+            raw = "PLAIN STYLE. A mug on a teal ground."
+            out = G.OpenAIImagePromptGenerator(
+                adapter=self._Adapter(raw)).generate_prompt(
+                    "topic", BRAND, {}, {})
+            self.assertEqual(out, raw.strip())
+        finally:
+            self._restore(old)
+
+    def test_brain_hardcodes_no_visual_style_words(self):
+        # Ownership guard: the block must be Skill data, never a Brain
+        # default. Brain may name the concept of a block, but must not
+        # ship a Juzzir visual vocabulary of its own.
+        import inspect
+        src = inspect.getsource(G)
+        for banned in ("professional editorial designer illustration",
+                       "editorial stock illustration",
+                       "no volumetric lighting",
+                       "balanced asymmetrical composition"):
+            self.assertNotIn(banned, src)
+
+
 if __name__ == "__main__":
     unittest.main()
 

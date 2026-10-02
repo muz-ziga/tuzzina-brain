@@ -417,6 +417,31 @@ def _payload_leak(prompt: str, payload_numbers: set) -> str:
     return ""
 
 
+_STYLE_BLOCK_KEYS = ("style_block", "prompt_style_block")
+
+
+def _skill_style_block(skill: dict) -> str:
+    """The Skill's fixed prompt style block, carried as DATA.
+
+    The Image Skill owns every visual decision about the artwork,
+    including the exact words that reach the image engine. It declares
+    that block in its ``config``; this module only carries it, so the
+    final prompt is ``<scene> + <style block>`` with the block
+    byte-identical to what the Skill wrote.
+
+    No default lives here on purpose: a block invented by Brain would
+    make Brain a co-owner of the channel's visual language.
+    """
+    config = skill.get("config") if isinstance(skill, dict) else None
+    if not isinstance(config, dict):
+        return ""
+    for key in _STYLE_BLOCK_KEYS:
+        value = config.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _post_fact_numbers(post: dict | None) -> set:
     """Digit runs inside the post's Key facts only.
 
@@ -721,17 +746,39 @@ class OpenAIImagePromptGenerator:
                     "Already covered in this campaign (history data; "
                     "the repetition policy is stated in the active "
                     "Skills):\n" + "\n".join(rows))
-        # keep prompt request short; campaign context already in skill
-        parts.append(
-            f"Post topic: {topic[:200]}. Brand: {brand.get('name','')}. "
-            + ("Render the visual concept above exactly: keep its "
-               "subject and relationship, obey the visual instructions, "
-               "and do not invent a different visual idea. "
-               if isinstance(concept, dict) and concept else
-               "Derive the visual from the post meaning and the visual "
-               "instructions above; never substitute a generic look from a "
-               "familiar keyword. ")
-            + "Return one image prompt only, no explanation.")
+        # The Skill may declare a fixed style block in its config. When
+        # it does, the writer's whole job is the SCENE: the block is
+        # appended literally below, so the model never has to reproduce
+        # (or dilute) style wording. The request therefore narrows to
+        # the scene and nothing else.
+        style_block = _skill_style_block(skill)
+        if style_block:
+            parts.append(
+                f"Post topic: {topic[:200]}. Brand: {brand.get('name','')}. "
+                + ("Describe ONLY the visual scene of this post: a short, "
+                   "specific, drawable scene that explains the idea, using "
+                   "the concept above. "
+                   if isinstance(concept, dict) and concept else
+                   "Describe ONLY the visual scene of this post: a short, "
+                   "specific, drawable scene that explains the idea. ")
+                + "Output rules: about 15-25 words, one sentence, no style "
+                  "wording, no flat/vector/2D/rendering vocabulary, no "
+                  "negations, no negative prompt clauses, no numbers or "
+                  "units, no colour names, no lighting or camera or material "
+                  "instructions, no text or lettering, no explanation, no "
+                  "JSON, and do not repeat or paraphrase the style "
+                  "instructions above. Return the scene only.")
+        else:
+            parts.append(
+                f"Post topic: {topic[:200]}. Brand: {brand.get('name','')}. "
+                + ("Render the visual concept above exactly: keep its "
+                   "subject and relationship, obey the visual instructions, "
+                   "and do not invent a different visual idea. "
+                   if isinstance(concept, dict) and concept else
+                   "Derive the visual from the post meaning and the visual "
+                   "instructions above; never substitute a generic look from a "
+                   "familiar keyword. ")
+                + "Return one image prompt only, no explanation.")
         sys = "\n\n".join(parts)
         from llm.adapters import complete_with_retry
 
@@ -770,6 +817,13 @@ class OpenAIImagePromptGenerator:
                 raise LLMError(
                     "invalid-output:payload-numeric-leak %s"
                     % (still[:160],))
+        # Deterministic assembly: the Skill's block is appended
+        # verbatim after the model-written scene, so the engine
+        # receives "<scene> + <style block>" with the block
+        # byte-identical to what the Skill authored. This module adds
+        # no style words of its own.
+        if style_block:
+            out = "%s\n\n%s" % (out.strip(), style_block)
         return out
 
     @staticmethod
