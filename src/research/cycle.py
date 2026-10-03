@@ -15,8 +15,10 @@ here, so nothing can publish. Media resolution + injection stay
 in the execution phase (run.py path, unchanged).
 
 STATE (commit rule): per-source monitor results commit ONLY on
-clean cycle end — full path success OR clean ineligible stop OR
-no-NEW stop. ANY downstream raise (research/analysis/G2/G3/
+clean cycle end — full path success OR clean ineligible stop
+(including empty collection, which analysis adjudicates as
+ineligible per its Skill). ANY downstream raise
+(research/analysis/G2/G3/
 intent) commits NOTHING, so the next cycle redelivers the same
 NEW items (at-least-once). Collector errors record per-source
 {ok, error}; a failed source never blocks healthy ones, and its
@@ -365,12 +367,6 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
             roles = list(SKILL_TYPES)
         out.roles = roles
 
-        if not out.items:
-            for res in pending:
-                res.commit(store)
-            out.committed = len(pending) > 0
-            return out
-
         out.research = None
         out.opportunity = None
         # Analysis consumes research findings, so research-off
@@ -378,14 +374,22 @@ def run_cycle(sources: list, *, store=None, policy: dict | None = None,
         # a choice. Text without analysis runs per-item text-only
         # (no invented opportunity: an explicit ineligible verdict
         # still stops).
+        # Empty collection is not a core stop. With no NEW items the
+        # model is not called (there is nothing to research) and the
+        # Research Skill's own empty result is carried forward, so
+        # analysis still adjudicates and decides whether anything is
+        # publishable.
         research_active = "research" in roles
         analysis_active = "analysis" in roles
         text_active = "text" in roles
         if research_active:
             from stages import run_stage
+            from research.models import ResearchResult
             out.research = run_stage(
                 "research",
-                lambda: research_model.research(out.items, policy))
+                lambda: (research_model.research(out.items, policy)
+                         if out.items else ResearchResult(
+                             summary="no NEW items: no findings")))
         if not research_active:
             analysis_active = False
             out.skipped.append("analysis:research-off")

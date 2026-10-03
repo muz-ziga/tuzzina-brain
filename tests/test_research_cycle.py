@@ -188,7 +188,11 @@ class CycleCase(unittest.TestCase):
         self.assertEqual(len(store.load("http://feed.test/rss").seen), 2)
         self.assertIn("(direct)", out.packages[0].content)
 
-    def test_unchanged_stops_before_research(self):
+    def test_empty_collection_is_not_a_core_stop(self):
+        # Regression: no NEW items must not terminate the cycle by
+        # core default. Research yields its empty result without a
+        # model call and analysis still adjudicates, so the stop is
+        # the Analysis Skill's verdict, not a core early return.
         store = MemoryStateStore()
         rm, am = CountingResearch(), CountingAnalysis()
         self._run([self._rss()], store=store, research_model=rm,
@@ -197,10 +201,12 @@ class CycleCase(unittest.TestCase):
         rm2, am2 = CountingResearch(), CountingAnalysis()
         out = self._run([self._rss()], store=store, research_model=rm2,
                         analysis_model=am2)
-        self.assertEqual((rm2.calls, am2.calls), (0, 0))
+        self.assertEqual((rm2.calls, am2.calls), (0, 1))
         self.assertEqual(out.items, [])
-        self.assertIsNone(out.research)
-        self.assertIsNone(out.opportunity)
+        self.assertIsNotNone(out.research)
+        self.assertEqual(out.research.findings, [])
+        self.assertIsNotNone(out.opportunity)
+        self.assertFalse(out.opportunity.eligible)
         self.assertEqual(out.packages, [])
         self.assertEqual(out.intents, [])
         self.assertEqual(out.roles,
