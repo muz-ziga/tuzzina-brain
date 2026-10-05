@@ -80,6 +80,11 @@ def _tokens(s: str) -> set[str]:
             for t in (s or "").split() if len(t.strip(".,!?:;()\"'")) > 3}
 
 
+# Brand words open nearly every topic AND angle of a branded campaign,
+# so they are never evidence of a repeat on their own.
+_STATIC_TOKENS = frozenset({"juzzir", "juzzir's"})
+
+
 def _policy_view(policy) -> dict:
     # Reads policy["media"]: the merged key channels.profile
     # emits (strategy.media.prefer/min_items). Any other key
@@ -176,39 +181,51 @@ def _history_pairs(recent) -> list:
     return out
 
 
-def _overlaps(cand: set, hist: set) -> bool:
-    """One candidate/history comparison. Containment is a repeat; a
-    partial match needs TWO shared words as well as half the smaller
-    set, so a single shared function word ("understanding") can never
-    reject a genuinely different subject."""
+def _overlaps(cand: set, hist: set, min_shared: int = 2) -> bool:
+    """One candidate/history comparison. A match needs `min_shared`
+    shared words as well as, for a partial match, half the smaller
+    set. The shared-word bar applies to containment too, so a two-word
+    fragment ("preview experience") can never reject on its own, and a
+    single shared function word ("understanding") never rejects."""
     if not cand or not hist:
+        return False
+    shared = len(cand & hist)
+    if shared < min_shared:
         return False
     if cand <= hist or hist <= cand:
         return True
-    shared = len(cand & hist)
-    return shared >= 2 and shared / min(len(cand), len(hist)) >= 0.5
+    return shared / min(len(cand), len(hist)) >= 0.5
 
 
 def _repeats(topic: str, angle: str, spent: list) -> bool:
     """True when the candidate is already-consumed material.
 
     Deterministic and domain-agnostic: no topic list is hardcoded
-    here, the published history itself decides. The candidate is
-    compared against each published topic and angle separately, so a
-    word the candidate merely restates in both fields is not counted
-    twice.
+    here, the published history itself decides. Each field is compared
+    on its own so one spent subject cannot be counted twice, and the
+    brand word is dropped first:
+
+    - the candidate TOPIC must match a published topic or angle at the
+      normal strength (verbatim subject, or two shared subject words);
+    - wording alone in the ANGLE only rejects against another ANGLE at
+      three shared words, so two generic words ("preview experience",
+      "your master") can never reject a fresh subject.
 
     ponytail: word overlap, not semantics. A rephrasing that keeps only
     one shared word beside a spent entry ("...and volume" next to
     "Loudness Basics") passes this check. Upgrade path: have the model
     adjudicate, one extra call per candidate.
     """
-    cand = _tokens(topic) | _tokens(angle)
-    if not cand:
+    subj = _tokens(topic) - _STATIC_TOKENS
+    bend = _tokens(angle) - _STATIC_TOKENS
+    if not (subj or bend):
         return False
     for pub_topic, pub_angle in spent:
-        if _overlaps(cand, _tokens(pub_topic)) or \
-                _overlaps(cand, _tokens(pub_angle)):
+        htopic = _tokens(pub_topic) - _STATIC_TOKENS
+        hangle = _tokens(pub_angle) - _STATIC_TOKENS
+        if _overlaps(subj, htopic) or _overlaps(subj, hangle):
+            return True
+        if _overlaps(bend, hangle, 3) or _overlaps(bend, htopic, 3):
             return True
     return False
 

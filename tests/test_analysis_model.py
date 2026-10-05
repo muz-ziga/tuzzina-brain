@@ -596,6 +596,51 @@ class RepeatMatcher(unittest.TestCase):
         from research.analysis import _repeats
         self.assertFalse(_repeats("", "", [("A Topic", "An Angle")]))
 
+    def test_production_campaign_cases(self):
+        # Real Juzzir campaign: the published ledger (newest distinct
+        # entries) and the candidates the model actually picked.
+        from research.analysis import _repeats
+        spent = [
+            ("Juzzir's Retention Period",
+             "Understand the importance of downloading your mastered "
+             "track before the retention period ends"),
+            ("Juzzir's Delivery Options",
+             "Explore Juzzir's delivery options and what they mean "
+             "for your mastered tracks"),
+            ("Juzzir's Preview Experience",
+             "Understand how Juzzir's preview feature helps you make "
+             "an informed decision before committing to a master."),
+            ("Juzzir's Upload Process",
+             "Understand the Juzzir upload process"),
+            ("Understanding Loudness Basics",
+             "Understand Loudness Basics"),
+            ("Juzzir's Mastering Personalities",
+             "Explore different mastering styles"),
+        ]
+        # Published subjects, verbatim or reworded: still rejected.
+        self.assertTrue(_repeats(
+            "Juzzir's Delivery Options",
+            "Explore Juzzir's delivery options and what they mean "
+            "for your mastered tracks", spent))
+        self.assertTrue(_repeats(
+            "Juzzir's Mastering Personalities",
+            "Explore different mastering styles", spent))
+        self.assertTrue(_repeats(
+            "Juzzir's Free Preview Feature",
+            "Discover how Juzzir's free preview feature lets you "
+            "hear different mastering styles before committing to a "
+            "master.", spent))
+        # Fresh subject whose angle closes on two shared generic
+        # words: not a repeat, the run stays eligible.
+        self.assertFalse(_repeats(
+            "Juzzir's Monitoring Advice",
+            "Understand the importance of using studio headphones or "
+            "monitors for the best Juzzir preview experience", spent))
+        # A genuinely new topic shares nothing with the ledger.
+        self.assertFalse(_repeats(
+            "File Formats For Mastering",
+            "WAV, FLAC and MP3 limits", spent))
+
     def test_history_pairs_shape_and_cap(self):
         from research.analysis import _history_pairs
         self.assertEqual(_history_pairs(None), [])
