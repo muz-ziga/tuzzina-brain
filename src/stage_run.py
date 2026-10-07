@@ -193,7 +193,11 @@ def _stage_base(args, run_id: str) -> dict:
     base = os.environ.get("TUZZINA_API_URL", "http://127.0.0.1:4107/api")
     if not key:
         raise ValueError("missing-api-key")
+    # Every research-state row this run touches belongs to its
+    # campaign; the builder keeps its 2-arg seam, so the run id
+    # rides on the client instead of its signature.
     client = rc._build_client(base, key)
+    client.run_id = run_id
     strategy = rc.load_strategy(args.strategy_by_integration,
                                 base_dir=args.strategy_base_dir)
     integ = client.get_integration(args.strategy_by_integration)

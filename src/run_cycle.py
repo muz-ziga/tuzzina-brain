@@ -300,7 +300,11 @@ def _main(argv=None) -> int:
         result["error"] = "missing-api-key"
         _emit_result(result)
         return 2
+    # Every research-state row this run touches belongs to its
+    # campaign; the builder keeps its 2-arg seam, so the run id
+    # rides on the client instead of its signature.
     client = _build_client(base, key)
+    client.run_id = run_id
 
     strategy = load_strategy(args.strategy_by_integration,
                              base_dir=args.strategy_base_dir)

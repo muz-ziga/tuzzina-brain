@@ -24,6 +24,12 @@ class TuzzinaClient:
         self.key = api_key
         self.timeout = timeout
         self.retries = retries
+        # Run whose campaign owns the research-state rows this client
+        # reads/writes. "" keeps the organization scope (identity
+        # assets, legacy rows); the run path assigns its own run id
+        # after building the client, so the builder stays the test
+        # seam it is.
+        self.run_id = ""
 
     def _call(self, method: str, path: str, body=None,
               files: dict | None = None, url: str | None = None,
@@ -116,11 +122,14 @@ class TuzzinaClient:
         stored state dict, or None when no row exists (HTTP 404).
         Any other failure raises TuzzinaError. The id travels in
         the query string: source ids are URLs, and proxies
-        normalize encoded slashes out of path segments."""
+        normalize encoded slashes out of path segments. With a run
+        id set the server scopes the row to that run's campaign."""
         if not source_id or not str(source_id).strip():
             raise TuzzinaError("source_id is required")
-        path = "/public/v1/research-state?" + urllib.parse.urlencode(
-            {"sourceId": str(source_id)})
+        params = {"sourceId": str(source_id)}
+        if self.run_id:
+            params["runId"] = str(self.run_id)
+        path = "/public/v1/research-state?" + urllib.parse.urlencode(params)
         try:
             data = self._call("GET", path)
         except TuzzinaError as e:
@@ -136,12 +145,18 @@ class TuzzinaClient:
         """Persist monitoring state (upsert). Raises TuzzinaError
         on failure; PUT is idempotent so a retry cannot corrupt.
         The id travels in the body for the same slash-safety
-        reason as the read path."""
+        reason as the read path; the run id rides in the query
+        string so the server scopes the row to that run's
+        campaign."""
         if not source_id or not str(source_id).strip():
             raise TuzzinaError("source_id is required")
         if not isinstance(state, dict):
             raise TuzzinaError("state must be a mapping")
-        data = self._call("PUT", "/public/v1/research-state",
+        path = "/public/v1/research-state"
+        if self.run_id:
+            path += "?" + urllib.parse.urlencode(
+                {"runId": str(self.run_id)})
+        data = self._call("PUT", path,
                           {"sourceId": str(source_id), "state": state})
         return data if isinstance(data, dict) else {}
 
