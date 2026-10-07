@@ -460,7 +460,7 @@ class OpenAIAnalysisModel(AnalysisModel):
                 stats: dict = {}
                 raw = complete_with_retry(
                     self._adapter, prompt, context,
-                    temperature=0.2, max_tokens=800, timeout=90,
+                    temperature=0.2, max_tokens=1500, timeout=90,
                     validate=_check, task="analysis", stats=stats)
             except (TimeoutError, socket.timeout):
                 raise AnalysisError("model-timeout")

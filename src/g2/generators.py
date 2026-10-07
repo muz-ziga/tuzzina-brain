@@ -124,7 +124,7 @@ class OpenAITextGenerator(TextGenerator):
         from llm.adapters import complete_with_retry
         return complete_with_retry(
             self._adapter, sys, f"Title: {title}\nSummary: {summary}",
-            temperature=0.7, max_tokens=400, timeout=60,
+            temperature=0.7, max_tokens=1500, timeout=90,
             task="text").strip()
 
 
@@ -670,7 +670,7 @@ class OpenAIImagePromptGenerator:
                 # Room for the full concept JSON: a truncated answer is
                 # unparseable, not a grounding failure, and the concept
                 # is longer than a single sentence.
-                temperature=0.3, max_tokens=900, timeout=60,
+                temperature=0.3, max_tokens=1500, timeout=90,
                 validate=lambda r: parse(r), task="visual_concept",
                 max_attempts=2)
 
@@ -785,7 +785,7 @@ class OpenAIImagePromptGenerator:
         def _write(system_text):
             raw = complete_with_retry(
                 self._adapter, system_text, f"Topic: {topic}",
-                temperature=0.3, max_tokens=600, timeout=60,
+                temperature=0.3, max_tokens=1500, timeout=90,
                 task="image_prompt").strip()
             return self._strip_icon_scaffolding(raw)
 
