@@ -158,9 +158,9 @@ AD_LAYOUT = {
     "margin": 72,
     "logo": {"x": 72, "y": 84, "maxWidth": 240, "maxHeight": 120},
     "icon": {"x": 624, "y": 120, "maxWidth": 200, "maxHeight": 200},
-    "text": {"x": 72, "y": 520, "maxWidth": 752, "maxHeight": 300},
+    "text": {"x": 72, "y": 816, "maxWidth": 752, "maxHeight": 336},
     "subject": {"y": 0, "maxHeight": 507},
-    "scrim": {"fadeStart": 0.38, "solidStart": 0.44, "opacity": 0.97},
+    "scrim": {"fadeStart": 0, "solidStart": 1, "opacity": 1},
     "contrast": {"minRatio": 2.2, "plateOpacity": 0.55},
     "type": {"maxFont": 56, "minFont": 30, "lineGap": 1.22, "maxLines": 4},
 }
