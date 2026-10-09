@@ -51,6 +51,11 @@ def _finalize(integration_id, channel_meta, brand, hashtags, links_policy,
         # Purely campaign-owned: no channel leaf overrides it, and
         # nothing here interprets it.
         "subject": str(project_cfg.get("subject") or ""),
+        # The campaign's composed-ad overlay, carried through the
+        # merge for the same reason as subject: purely campaign-owned,
+        # no channel leaf overrides it, and the engine only translates
+        # it into the compositor's layout.
+        "ad": dict(project_cfg.get("ad") or {}),
         "channel_meta": dict(channel_meta or {}),
         "extras": dict(extras),
     }

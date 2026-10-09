@@ -88,6 +88,13 @@ def load_campaign(path: str) -> dict:
     subject = cfg.get("subject") or ""
     if not isinstance(subject, str):
         raise _err("subject", "must be a string")
+    # The composed-ad overlay this campaign owns: the layer drawn on top
+    # of its generated backgrounds (logo asset, scrim color, headline
+    # zone, logo backing). Shape is checked here; the translation to the
+    # compositor's layout lives in g2.generators.campaign_ad_overlay.
+    ad = cfg.get("ad") or {}
+    if not isinstance(ad, dict):
+        raise _err("ad", "must be a mapping")
     return {
         "brand": {
             "name": str(brand["name"]).strip(),
@@ -122,6 +129,7 @@ def load_campaign(path: str) -> dict:
         # consumers own their own validation.
         "budgets": dict(budgets),
         "capabilities": dict(capabilities),
+        "ad": dict(ad),
         # Flow identity passthrough (evidence only in Phase 1:
         # routing still follows the default map in code; the id
         # records which map version the trigger resolved).

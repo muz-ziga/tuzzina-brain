@@ -569,6 +569,23 @@ def _parse_icon_tag(prompt: str) -> tuple[str, str | None]:
     return stripped.strip(), matches[-1].group(1)
 
 
+def _merge_layout(base: dict, override: dict) -> dict:
+    """Overlay section on the zone contract.
+
+    Zones are nested dicts (text, scrim, logo...), so a shallow merge
+    would drop every sibling of an overridden zone — an ad that sets only
+    a scrim color would lose its text box. One level deep is the whole
+    contract; nothing is nested deeper.
+    """
+    merged = dict(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
 def image_skill_policy(cfg: dict) -> dict:
     """The active IMAGE SKILL's own visual policy, as declared in its
     own document.
@@ -854,6 +871,7 @@ def run_execute_stage(ctx: dict) -> dict:
             return result
         from run import _resolve_media
         from g2.generators import AD_LAYOUT as _LAYOUT
+        from g2.generators import campaign_ad_overlay
         service = InjectionService(tracer=StderrTracer())
         # The image direction is whatever the active Image Skill
         # declared and the concept decided; the engine only resolves the
@@ -864,12 +882,24 @@ def run_execute_stage(ctx: dict) -> dict:
                                    ctx.get("now"))
         prompt, tag_icon = _parse_icon_tag(prompt)
         icon_key = tag_icon if art.get("icon") == "use" else None
+        # The campaign owns the layer that goes ON TOP of its own
+        # backgrounds (its logo, its scrim color, where its headline
+        # sits). Resolved from the campaign document and merged over the
+        # zone contract, so a campaign that configures nothing ships
+        # exactly the default layout.
+        overlay = campaign_ad_overlay((cfg or {}).get("ad"))
+        campaign_layout = dict(_LAYOUT)
+        if overlay.get("layout"):
+            campaign_layout = _merge_layout(campaign_layout,
+                                            overlay["layout"])
         art_direction = {
             "icon": "use" if icon_key else "none",
             "slot": str(art.get("slot") or "") if icon_key else "",
             "palette": list(art.get("palette") or [])[:6],
             "text_align": str(art.get("text_align") or "left"),
         }
+        if overlay.get("logo"):
+            art_direction["logo"] = overlay["logo"]
         # Composed ads: the headline is the main post's first line,
         # best-effort, and independent of the icon channel — a
         # failed icon pick must never drop the text layer.
@@ -894,7 +924,7 @@ def run_execute_stage(ctx: dict) -> dict:
                     client, m,
                     key_hint="ai/%s/%d" % (run_id, index),
                     headline=headline, icon_key=icon_key,
-                    layout=dict(_LAYOUT), art_direction=art_direction)
+                    layout=dict(campaign_layout), art_direction=art_direction)
                 if not isinstance(up, dict) or not up.get("id"):
                     raise ValueError(
                         "image-required: the image role is active but "

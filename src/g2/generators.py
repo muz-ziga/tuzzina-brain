@@ -160,10 +160,93 @@ AD_LAYOUT = {
     "icon": {"x": 624, "y": 120, "maxWidth": 200, "maxHeight": 200},
     "text": {"x": 72, "y": 816, "maxWidth": 752, "maxHeight": 336},
     "subject": {"y": 0, "maxHeight": 507},
-    "scrim": {"fadeStart": 0, "solidStart": 1, "opacity": 1},
+    "scrim": {"fadeStart": 0, "solidStart": 1, "opacity": 1,
+              "color": "#6366f1"},
     "contrast": {"minRatio": 2.2, "plateOpacity": 0.55},
     "type": {"maxFont": 56, "minFont": 30, "lineGap": 1.22, "maxLines": 4},
 }
+
+# Named text-zone presets. The dashboard offers these instead of raw
+# coordinates; each is a whole text box, so a preset can never leave the
+# headline half-configured. "default" is the geometry above.
+AD_TEXT_ZONES = {
+    "default": {"x": 72, "y": 816, "maxWidth": 752, "maxHeight": 336},
+    "top": {"x": 72, "y": 300, "maxWidth": 752, "maxHeight": 336},
+    "center": {"x": 72, "y": 552, "maxWidth": 752, "maxHeight": 336},
+    "bottom": {"x": 72, "y": 816, "maxWidth": 752, "maxHeight": 336},
+}
+
+# Named overlay templates: a text zone plus the logo backing it draws.
+# The dashboard picks a template; an explicit textZone on the campaign
+# still wins, so a saved manual choice is never overwritten.
+AD_TEMPLATES = {
+    "default": {"textZone": "default", "logoBacking": "circle-fade"},
+    "clean": {"textZone": "default", "logoBacking": "plate"},
+    "bare": {"textZone": "default", "logoBacking": "none"},
+}
+
+# The backings the compositor documents (AD_LOGO_BACKINGS on the
+# Tuzzina side). Mirrored here because this module owns the vocabulary
+# the dashboard writes into a campaign document.
+AD_LOGO_BACKINGS = ("circle-fade", "plate", "none")
+
+
+def campaign_ad_overlay(ad) -> dict:
+    """Translate a campaign's `ad` section into the compositor's own
+    layout shape, layered over AD_LAYOUT.
+
+    The campaign owns the layer that goes ON TOP of its generated
+    backgrounds: its logo asset, its scrim color, where its headline
+    sits. Only the keys the campaign actually set are emitted, so every
+    other zone keeps AD_LAYOUT's value and a campaign that sets nothing
+    resolves to exactly AD_LAYOUT (unchanged behavior).
+
+    `logo` is not a layout zone: it is an art-direction decision (which
+    asset is pasted), so it is returned separately.
+    """
+    if not isinstance(ad, dict):
+        return {"layout": {}, "logo": ""}
+    layout: dict = {}
+    # Returned verbatim, including the literal "none": the compositor
+    # distinguishes a missing logo (absent -> organization default) from
+    # an explicit opt-out ("none" -> paste nothing). Blanking it here
+    # would turn "no logo" back into the default logo.
+    logo = str(ad.get("logo") or "").strip()
+    scrim_color = str(ad.get("scrimColor") or "").strip()
+    if scrim_color:
+        # Normalized so "#FF0000" and "#ff0000" are the same value and
+        # a stored document compares equal to itself.
+        layout["scrim"] = {"color": scrim_color.lower()}
+    zone_name = None
+    backing = None
+    template = str(ad.get("template") or "").strip()
+    spec = None
+    if template:
+        spec = AD_TEMPLATES.get(template)
+        if spec is None:
+            raise ValueError("ad.template: unknown template '%s'" % template)
+        zone_name = spec["textZone"]
+        backing = spec["logoBacking"]
+    # An explicit choice outranks the preset it was picked from: the
+    # dashboard lets a user override one field of a template, and that
+    # must survive the merge.
+    text_zone = ad.get("textZone")
+    if isinstance(text_zone, dict):
+        pos = str(text_zone.get("position") or "").strip()
+        if pos:
+            if pos not in AD_TEXT_ZONES:
+                raise ValueError("ad.textZone.position: unknown '%s'" % pos)
+            zone_name = pos
+    if zone_name:
+        layout["text"] = dict(AD_TEXT_ZONES[zone_name])
+    own_backing = str(ad.get("logoBacking") or "").strip()
+    if own_backing:
+        if own_backing not in AD_LOGO_BACKINGS:
+            raise ValueError("ad.logoBacking: unknown '%s'" % own_backing)
+        backing = own_backing
+    if backing:
+        layout["logoBacking"] = backing
+    return {"layout": layout, "logo": logo}
 
 # Icon slots are safety bounds, not placements: the decision of which
 # slot (or none at all) belongs to the visual concept.
