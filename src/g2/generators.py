@@ -185,6 +185,18 @@ AD_TEMPLATES = {
     "bare": {"textZone": "default", "logoBacking": "none"},
 }
 
+# The generated-image sizes the campaign vocabulary offers. Each aspect
+# maps to the exact pixel pair the Tuzzina edge worker accepts (the
+# compositor resolves each zone on any canvas), so a value that
+# validates here is a value the pipeline can fulfill. "4:5" is the
+# default AD_LAYOUT canvas and what the worker always generated.
+AD_IMAGE_SIZES = {
+    "1:1": (1024, 1024),
+    "4:5": (896, 1152),
+    "9:16": (768, 1344),
+    "16:9": (1344, 768),
+}
+
 # The backings the compositor documents (AD_LOGO_BACKINGS on the
 # Tuzzina side). Mirrored here because this module owns the vocabulary
 # the dashboard writes into a campaign document.

@@ -892,6 +892,26 @@ def run_execute_stage(ctx: dict) -> dict:
         if overlay.get("layout"):
             campaign_layout = _merge_layout(campaign_layout,
                                             overlay["layout"])
+        # The campaign's requested generated-image size: its image.aspect
+        # maps to the exact pixel pair the worker accepts, merged into
+        # the layout so the compositor scales every zone to the canvas
+        # the model was told about. Unknown aspect fails closed BEFORE
+        # any image is attempted; absent keeps the default canvas.
+        image_section = (cfg or {}).get("image") or {}
+        if isinstance(image_section, dict):
+            from g2.generators import AD_IMAGE_SIZES
+            aspect = str(image_section.get("aspect") or "").strip()
+            if aspect:
+                dim = AD_IMAGE_SIZES.get(aspect)
+                if dim is None:
+                    raise ValueError(
+                        "image.aspect: unsupported '%s' "
+                        "(must be one of %s)" % (
+                            aspect, ", ".join(sorted(AD_IMAGE_SIZES))))
+                campaign_layout = _merge_layout(
+                    campaign_layout,
+                    {"width": dim[0], "height": dim[1]})
+        overlay_layer_id = str(cfg.get("overlay_layer") or "").strip() or None
         art_direction = {
             "icon": "use" if icon_key else "none",
             "slot": str(art.get("slot") or "") if icon_key else "",
@@ -924,7 +944,8 @@ def run_execute_stage(ctx: dict) -> dict:
                     client, m,
                     key_hint="ai/%s/%d" % (run_id, index),
                     headline=headline, icon_key=icon_key,
-                    layout=dict(campaign_layout), art_direction=art_direction)
+                    layout=dict(campaign_layout), art_direction=art_direction,
+                    overlay_layer_id=overlay_layer_id)
                 if not isinstance(up, dict) or not up.get("id"):
                     raise ValueError(
                         "image-required: the image role is active but "

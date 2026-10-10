@@ -291,13 +291,15 @@ class ResolveMediaTest(unittest.TestCase):
             return {"id": "b1", "path": "x"}
 
         def delegated(prompt, key_hint=None, headline=None,
-                        icon_key=None, layout=None, art_direction=None):
+                        icon_key=None, layout=None, art_direction=None,
+                        overlay_layer_id=None):
             seen["delegated"] = prompt
             seen["key_hint"] = key_hint
             seen["headline"] = headline
             seen["icon_key"] = icon_key
             seen["layout"] = layout
             seen["art_direction"] = art_direction
+            seen["overlay_layer_id"] = overlay_layer_id
             return {"id": "m9", "path": "https://pub.r2.dev/ai.png"}
 
         c.upload_from_url = from_url
@@ -352,6 +354,8 @@ class ResolveMediaTest(unittest.TestCase):
         self.assertEqual(c.calls.get("delegated"), "a calm sea")
         # Legacy callers omit the hint: byte-identical behavior.
         self.assertIsNone(c.calls.get("key_hint"))
+        # Legacy callers omit the overlay: no layer, no change.
+        self.assertIsNone(c.calls.get("overlay_layer_id"))
 
     def test_delegated_kind_forwards_key_hint(self):
         import run as run_mod
@@ -381,6 +385,19 @@ class ResolveMediaTest(unittest.TestCase):
         self.assertEqual(c.calls.get("headline"), "Calm seas.")
         self.assertEqual(c.calls.get("icon_key"),
                          "identity/icons/wave.svg")
+
+    def test_delegated_kind_forwards_overlay_layer_id(self):
+        import run as run_mod
+        from g2 import generators as G
+        c = self._client()
+        up = run_mod._resolve_media(
+            c, {"kind": "generator",
+                "generator": G.TuzzinaImageGenerator(),
+                "prompt": "a calm sea"},
+            overlay_layer_id="layer-9")
+        self.assertEqual(up, {"id": "m9",
+                              "path": "https://pub.r2.dev/ai.png"})
+        self.assertEqual(c.calls.get("overlay_layer_id"), "layer-9")
 
     def test_mock_kind_keeps_bytes_path(self):
         import run as run_mod

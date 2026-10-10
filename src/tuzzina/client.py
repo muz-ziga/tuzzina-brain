@@ -383,7 +383,8 @@ class TuzzinaClient:
                        headline: str | None = None,
                        icon_key: str | None = None,
                        layout: dict | None = None,
-                       art_direction: dict | None = None) -> dict:
+                       art_direction: dict | None = None,
+                       overlay_layer_id: str | None = None) -> dict:
         """Delegate image generation to Tuzzina's existing image tool.
 
         Speaks the already-exposed MCP endpoint (POST base + "/mcp",
@@ -400,6 +401,9 @@ class TuzzinaClient:
         omitted means server-assigned (legacy behavior). headline
         and icon_key are optional composer inputs (composed ad
         path); omitted preserves the raw image path exactly.
+        overlay_layer_id is the org's exported overlay layer
+        (Layers library): forwarded to the tool, which resolves
+        and pastes it; omitted means no overlay.
         """
         if not prompt or not str(prompt).strip():
             raise TuzzinaError("prompt is required")
@@ -423,6 +427,8 @@ class TuzzinaClient:
                 tool_args["layout"] = layout
             if art_direction:
                 tool_args["artDirection"] = art_direction
+            if overlay_layer_id:
+                tool_args["overlayLayerId"] = str(overlay_layer_id)[:64]
             result = client.call_tool("generateImageTool", tool_args)
         except McpError as e:
             msg = str(e)

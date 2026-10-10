@@ -148,6 +148,50 @@ class CampaignTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=skills[:20]):
                 load_campaign(self._f(GOOD + skills))
 
+    def test_image_aspect_absent_defaults_empty(self):
+        cfg = load_campaign(self._f(GOOD))
+        self.assertEqual(cfg["image"], {})
+
+    def test_image_aspect_is_carried(self):
+        # PyYAML parses a bare `9:16` as a sexagesimal int, so the
+        # document must quote aspect strings; quoted values carry.
+        cfg = load_campaign(self._f(
+            GOOD + "image:\n  aspect: '9:16'\n"))
+        self.assertEqual(cfg["image"], {"aspect": "9:16"})
+
+    def test_image_rejects_unknown_aspect(self):
+        with self.assertRaises(ValueError) as ctx:
+            load_campaign(self._f(GOOD + "image:\n  aspect: 3:2\n"))
+        self.assertIn("must be one of", str(ctx.exception))
+
+    def test_image_rejects_unquoted_colon_aspect(self):
+        # `9:16` unscaled is a sexagesimal int in YAML 1.1, so it is
+        # not a string and must be rejected (fail-closed, never an
+        # int mis-shipped as a size).
+        with self.assertRaises(ValueError):
+            load_campaign(self._f(GOOD + "image:\n  aspect: 9:16\n"))
+
+    def test_image_must_be_a_mapping(self):
+        with self.assertRaises(ValueError):
+            load_campaign(self._f(GOOD + "image: nope\n"))
+
+    def test_image_aspect_must_be_a_string(self):
+        with self.assertRaises(ValueError):
+            load_campaign(self._f(GOOD + "image:\n  aspect: [1:1]\n"))
+
+    def test_overlay_layer_absent_defaults_empty(self):
+        cfg = load_campaign(self._f(GOOD))
+        self.assertEqual(cfg["overlay_layer"], "")
+
+    def test_overlay_layer_is_carried_and_trimmed(self):
+        cfg = load_campaign(self._f(
+            GOOD + "overlay_layer: '  layer-9  '\n"))
+        self.assertEqual(cfg["overlay_layer"], "layer-9")
+
+    def test_overlay_layer_must_be_a_string(self):
+        with self.assertRaises(ValueError):
+            load_campaign(self._f(GOOD + "overlay_layer:\n  - a\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

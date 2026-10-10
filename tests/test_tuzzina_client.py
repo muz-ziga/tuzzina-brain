@@ -267,6 +267,24 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(calls[0]["params"]["arguments"]["prompt"],
                          "a calm sea at dawn")
 
+    def test_generate_image_forwards_overlay_layer_id(self):
+        MCP_CALLS.clear()
+        self.c.generate_image("a calm sea at dawn",
+                              overlay_layer_id="layer-9")
+        calls = [c for c in MCP_CALLS
+                 if c["method"] == "tools/call"]
+        self.assertEqual(
+            calls[0]["params"]["arguments"]["overlayLayerId"],
+            "layer-9")
+
+    def test_generate_image_omits_overlay_when_unset(self):
+        MCP_CALLS.clear()
+        self.c.generate_image("a calm sea at dawn")
+        calls = [c for c in MCP_CALLS
+                 if c["method"] == "tools/call"]
+        self.assertNotIn("overlayLayerId",
+                         calls[0]["params"]["arguments"])
+
     def test_generate_image_returns_media_reference(self):
         r = self.c.generate_image("hello world!")
         self.assertEqual(r["id"], "m9")

@@ -46,7 +46,8 @@ def _resolve_media(client: TuzzinaClient, m: dict,
                    headline: str | None = None,
                    icon_key: str | None = None,
                    layout: dict | None = None,
-                   art_direction: dict | None = None) -> dict:
+                   art_direction: dict | None = None,
+                   overlay_layer_id: str | None = None) -> dict:
     """One planned media item -> Tuzzina {id, path} reference.
 
     url kind: existing upload_from_url (extracted source media).
@@ -58,7 +59,9 @@ def _resolve_media(client: TuzzinaClient, m: dict,
     replay addresses the same R2 object instead of minting a new
     one; omitted preserves legacy behavior exactly. headline and
     icon_key are optional composer inputs (composed ad path);
-    omitted preserves the raw image path exactly.
+    omitted preserves the raw image path exactly. overlay_layer_id
+    is the org's exported syntax layer for the composed ad; a value
+    here is carried to the tool and must paste.
     """
     if m.get("kind") == "url":
         return client.upload_from_url(m["url"])
@@ -67,7 +70,8 @@ def _resolve_media(client: TuzzinaClient, m: dict,
         return client.generate_image(
             m["prompt"], key_hint=key_hint, headline=headline,
             icon_key=icon_key, layout=layout,
-            art_direction=art_direction)
+            art_direction=art_direction,
+            overlay_layer_id=overlay_layer_id)
     blob, fname = gen.generate_png(m["prompt"])
     return client.upload_bytes(blob, fname, "image/png")
 

@@ -95,6 +95,25 @@ def load_campaign(path: str) -> dict:
     ad = cfg.get("ad") or {}
     if not isinstance(ad, dict):
         raise _err("ad", "must be a mapping")
+    # The generated-image aspect this campaign ships to the edge worker
+    # (one of the allowed vocabulary) and the id of the org's exported
+    # overlay layer (Layers library) pasted on top of every composed
+    # image. Both ride the same campaign document; absent means the
+    # engine defaults, unchanged.
+    image = cfg.get("image") or {}
+    if not isinstance(image, dict):
+        raise _err("image", "must be a mapping")
+    aspect = image.get("aspect")
+    clean_image = {}
+    if aspect is not None:
+        from g2.generators import AD_IMAGE_SIZES
+        if not isinstance(aspect, str) or aspect not in AD_IMAGE_SIZES:
+            raise _err("image.aspect",
+                       f"must be one of {', '.join(sorted(AD_IMAGE_SIZES))}")
+        clean_image["aspect"] = aspect
+    overlay_layer = cfg.get("overlay_layer") or ""
+    if not isinstance(overlay_layer, str):
+        raise _err("overlay_layer", "must be a string")
     return {
         "brand": {
             "name": str(brand["name"]).strip(),
@@ -130,6 +149,11 @@ def load_campaign(path: str) -> dict:
         "budgets": dict(budgets),
         "capabilities": dict(capabilities),
         "ad": dict(ad),
+        # The overlay layer id is carried as the raw trimmed string;
+        # the resolve/execute stage sends it unchanged to the image
+        # tool, which looks it up server-side (ownership-checked).
+        "overlay_layer": overlay_layer.strip()[:64],
+        "image": clean_image,
         # Flow identity passthrough (evidence only in Phase 1:
         # routing still follows the default map in code; the id
         # records which map version the trigger resolved).

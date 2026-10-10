@@ -56,6 +56,11 @@ def _finalize(integration_id, channel_meta, brand, hashtags, links_policy,
         # no channel leaf overrides it, and the engine only translates
         # it into the compositor's layout.
         "ad": dict(project_cfg.get("ad") or {}),
+        # The campaign's generated-image aspect and its exported overlay
+        # layer id, carried identically: campaign-owned, passed to the
+        # image tool with every request.
+        "image": dict(project_cfg.get("image") or {}),
+        "overlay_layer": str(project_cfg.get("overlay_layer") or ""),
         "channel_meta": dict(channel_meta or {}),
         "extras": dict(extras),
     }
