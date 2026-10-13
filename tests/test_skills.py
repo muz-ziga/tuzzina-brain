@@ -100,6 +100,37 @@ class LoaderCase(unittest.TestCase):
         with self.assertRaises(SkillError):
             get_skill("text")
 
+    def test_repetition_defaults_to_off(self):
+        # No block: the deterministic repeat gate stays off and the
+        # Skill's own instructions alone decide repetition.
+        _write(self.tmp, "analysis.yaml", _doc("analysis"))
+        self.assertEqual(get_skill("analysis")["repetition"], "off")
+
+    def test_repetition_block_is_read(self):
+        doc = _doc("analysis")
+        doc["config"] = {"repetition": {"mode": "block"}}
+        _write(self.tmp, "analysis.yaml", doc)
+        self.assertEqual(get_skill("analysis")["repetition"], "block")
+
+    def test_repetition_invalid_fails_closed(self):
+        for bad in ({"repetition": {"mode": "maybe"}},
+                    {"repetition": {"mode": "block", "extra": 1}},
+                    {"repetition": "block"},
+                    {"repetition": ["block"]}):
+            doc = _doc("analysis")
+            doc["config"] = bad
+            _write(self.tmp, "analysis.yaml", doc)
+            clear_cache()
+            with self.assertRaises(SkillError):
+                get_skill("analysis")
+
+    def test_repetition_is_analysis_only(self):
+        doc = _doc("text")
+        doc["config"] = {"repetition": {"mode": "block"}}
+        _write(self.tmp, "text.yaml", doc)
+        with self.assertRaises(SkillError):
+            get_skill("text")
+
     def test_disabled_fails_closed(self):
         _write(self.tmp, "text.yaml", _doc(enabled=False))
         with self.assertRaises(SkillError):

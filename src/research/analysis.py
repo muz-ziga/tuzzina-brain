@@ -370,6 +370,13 @@ class OpenAIAnalysisModel(AnalysisModel):
             "analysis",
             (campaign_skills or {}).get("analysis"))
         context += "\n\n" + skill_doc["instructions"]
+        # Deterministic repetition gate, opt-in per Skill. The
+        # default document states a repetition POLICY in its own
+        # text and stays out of the engine (mode "off"); a Skill
+        # that declares config.repetition.mode: block asks the
+        # engine to enforce it deterministically too (see the gate
+        # below). The loader validates the value fail-closed.
+        repetition_mode = skill_doc.get("repetition", "off")
         # Everything below is VARIABLE research data (summary,
         # findings, published history, parked material), appended
         # after the policy and the Skill.
@@ -469,13 +476,18 @@ class OpenAIAnalysisModel(AnalysisModel):
             return self._validate(raw, known, truncated, contract_id)
 
         opp = _select()
-        # Deterministic repeat gate. A Skill may state a repetition
-        # policy, but a policy the model can talk past is not a gate:
+        # Deterministic repeat gate, opt-in per Skill (see
+        # config.repetition above). A Skill that states a repetition
+        # policy only in text relies on the model to honour it; one
+        # that declares mode: block asks the engine to enforce it too:
         # the same history that reached the prompt is checked here, and
         # a repeat gets exactly ONE more selection with the same
         # history plus the rejected topic named back. Two repeats mean
-        # the cycle yields no post rather than a duplicate.
-        if not spent or not opp.eligible:
+        # the cycle yields no post rather than a duplicate. When the
+        # mode is off (or the Skill is silent) the engine adds no rule
+        # and the Skill's own instructions decide alone.
+        if repetition_mode != "block" or not spent or \
+                not opp.eligible:
             return opp
         if not _repeats(opp.topic, opp.angle, spent):
             return opp
@@ -551,6 +563,12 @@ class OpenAIAnalysisModel(AnalysisModel):
             raise
         except Exception:
             raise AnalysisError("invalid-output")
+        meta = {"truncated": truncated}
+        if not eligible:
+            # The Skill's own verdict: it declined the opportunity.
+            # The reason code is recorded so the cycle's decision is
+            # auditable; the model's rationale stays on the object.
+            meta["reason"] = "skill-ineligible"
         return ContentOpportunity(
             eligible=eligible, topic=data["topic"].strip()[:200],
             angle=data["angle"].strip()[:300],
@@ -563,4 +581,4 @@ class OpenAIAnalysisModel(AnalysisModel):
             priority=prio, confidence=conf if eligible else "low",
             constraints=[c[:120] for c in constraints],
             model=self.model,
-            meta={"truncated": truncated})
+            meta=meta)

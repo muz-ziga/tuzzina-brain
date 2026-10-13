@@ -67,6 +67,15 @@ CONTRACT_VERSION = 1
 CONTRACT_TYPES = ("string", "string[]", "boolean", "number", "list")
 LEGACY_CONTRACT_ID = "legacy-v1"
 
+# Analysis-only editorial control. The deterministic repeat gate
+# in analysis.py is OFF unless the Skill explicitly opts in with
+# config.repetition.mode: block. Absent/off means the Skill's own
+# instructions alone decide repetition (the default document states
+# the policy in its text). An unknown value fails closed: a
+# malformed editorial control must never silently become a
+# different policy.
+REPETITION_MODES = ("off", "block")
+
 
 class SkillError(ValueError):
     """Skill misuse: missing/disabled/invalid skill document or
@@ -140,12 +149,13 @@ def _load_document(skill_type: str, name=None) -> dict:
     if not isinstance(config, dict):
         raise SkillError(f"invalid-skill:{skill_type}:config")
     contract, contract_id = _load_contract(config, skill_type)
+    repetition = _load_repetition(config, skill_type)
     return {"id": doc["id"].strip(), "name": doc["name"].strip(),
             "type": skill_type, "version": doc["version"],
             "enabled": enabled,
             "instructions": doc["instructions"].strip(),
             "config": dict(config), "contract": contract,
-            "contract_id": contract_id}
+            "contract_id": contract_id, "repetition": repetition}
 
 
 def _load_contract(config: dict, skill_type: str) -> tuple:
@@ -195,6 +205,31 @@ def _load_contract(config: dict, skill_type: str) -> tuple:
     return ({"version": CONTRACT_VERSION,
              "outcomes": clean_outcomes,
              "id_refs": [x.strip() for x in id_refs]}, "custom")
+
+
+def _load_repetition(config: dict, skill_type: str) -> str:
+    """Validate the optional config.repetition block and return the
+    mode. Repetition is an Analysis concern only: a block elsewhere
+    is a misplaced editorial control, not a silent no-op. Absent
+    means "off" (the Skill's own instructions decide), so the
+    deterministic repeat gate never turns itself on."""
+    raw = config.get("repetition")
+    if raw is None:
+        return "off"
+    if skill_type != "analysis":
+        raise SkillError(
+            f"invalid-repetition:{skill_type}:analysis-only")
+    if not isinstance(raw, dict):
+        raise SkillError(
+            f"invalid-repetition:{skill_type}:not-mapping")
+    for key in raw:
+        if key != "mode":
+            raise SkillError(
+                f"invalid-repetition:{skill_type}:unknown:{key}")
+    mode = raw.get("mode", "off")
+    if mode not in REPETITION_MODES:
+        raise SkillError(f"invalid-repetition:{skill_type}:mode")
+    return mode
 
 
 def get_skill(skill_type: str, assignment=None) -> dict:

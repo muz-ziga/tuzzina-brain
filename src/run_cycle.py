@@ -280,6 +280,7 @@ def _main(argv=None) -> int:
     result = {"run_id": run_id, "status": "error", "sources_checked": 0,
               "items_new": 0, "eligible": False, "intents": 0,
               "post_ids": [], "committed": False, "error": "",
+              "reason": "", "rationale": "",
               "roles_resolved": [], "skills_used": [],
               "usage": {"used": {}, "remaining": {}}}
 
@@ -495,6 +496,15 @@ def _main(argv=None) -> int:
     } for rep in (out.sources or [])]
     result["eligible"] = bool(
         out.opportunity is not None and out.opportunity.eligible)
+    # Decision reason: the Analysis Skill's own verdict code
+    # (skill-ineligible / repeated-topic) plus its rationale, so a
+    # no-op cycle is auditable without re-deriving it from logs.
+    if out.opportunity is not None:
+        result["reason"] = str(
+            (getattr(out.opportunity, "meta", {}) or {}).get("reason")
+            or "")
+        result["rationale"] = str(
+            getattr(out.opportunity, "rationale", "") or "")
     result["intents"] = len(out.intents)
     result["committed"] = bool(out.committed)
     result["roles_resolved"] = roles_resolved

@@ -166,6 +166,27 @@ class AnalysisStageCase(unittest.TestCase):
             run_analysis_stage(self._ctx(adapter))
         self.assertIn("model-error", str(ctx.exception))
 
+    def test_verdict_reason_survives_the_trace_stages(self):
+        # The Analysis Skill's decision reason must remain available
+        # across the Brain-managed stages: the analysis stage payload
+        # carries it, and rehydration (what the text/execute stages
+        # read) preserves it.
+        adapter = ScriptAdapter([json.dumps({
+            "eligible": False, "topic": "", "angle": "",
+            "rationale": "already covered by the campaign",
+            "facts": [], "source_item_ids": [], "content_format": "post",
+            "media_intent": "none", "audience": "a", "language": "en",
+            "priority": "normal", "confidence": "low",
+            "constraints": []})])
+        ctx = self._ctx(adapter)
+        ctx["dry_run"] = True
+        payload = run_analysis_stage(ctx)
+        self.assertFalse(payload["opportunity"]["eligible"])
+        self.assertEqual(payload["opportunity"]["meta"]["reason"],
+                         "skill-ineligible")
+        back = _as_opportunity(payload["opportunity"])
+        self.assertEqual(back.meta.get("reason"), "skill-ineligible")
+
 
 class TextStageCase(unittest.TestCase):
     def _ctx(self, adapter):

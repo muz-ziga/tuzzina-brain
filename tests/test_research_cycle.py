@@ -462,6 +462,33 @@ class RoleGatingCase(CycleCase):
         self.assertIn("analysis:role-off", out.skipped)
         self.assertTrue(out.intents)
 
+    def test_skill_refusal_generates_nothing(self):
+        # The Analysis Skill's verdict is final: an ineligible
+        # decision stops the cycle before any generation. No
+        # package, no intent, and the text generator is never
+        # asked to write — the engine has no fallback of its own.
+        calls = []
+
+        class Refusing(MockAnalysisModel):
+            def analyze(self, result, policy, items=None):
+                out = super().analyze(result, policy, items)
+                out.eligible = False
+                out.meta = {"reason": "skill-ineligible"}
+                return out
+
+        class SpyText:
+            def generate(self, title, summary, brand, policy=None):
+                calls.append(title)
+                return "must never be generated"
+
+        out = self._run([self._rss()], analysis_model=Refusing(),
+                        text_gen=SpyText())
+        self.assertIsNotNone(out.opportunity)
+        self.assertFalse(out.opportunity.eligible)
+        self.assertEqual(out.packages, [])
+        self.assertEqual(out.intents, [])
+        self.assertEqual(calls, [])
+
     def test_image_role_off_downgrades_media(self):
         class ImageAnalysis(MockAnalysisModel):
             def analyze(self, result, policy, items=None):

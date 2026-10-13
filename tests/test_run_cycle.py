@@ -241,6 +241,37 @@ class CycleCliCase(unittest.TestCase):
         kinds = [k for k, _ in calls]
         self.assertNotIn("create_post", kinds)
 
+    def test_ineligible_reason_is_reported(self):
+        # A no-op cycle must be auditable from its own result: the
+        # Analysis Skill's reason code and rationale ride the
+        # BRAIN_RESULT envelope instead of being lost in logs.
+        tmp, camp = self._case()
+        from research.models import MockResearchModel
+        from research.analysis import (ContentOpportunity,
+                                       MockAnalysisModel)
+        orig_models = rc_mod._build_models
+
+        class Refusing(MockAnalysisModel):
+            def analyze(self, result, policy, items=None):
+                return ContentOpportunity(
+                    eligible=False, rationale="nothing to publish",
+                    meta={"reason": "skill-ineligible"})
+
+        rc_mod._build_models = lambda mode, session_id="": (
+            MockResearchModel(), Refusing())
+        try:
+            rc, out, err = _run_cli(
+                [camp, "--strategy-by-integration", "integ-fb-1",
+                 "--strategy-base-dir", tmp, "--dry-run",
+                 "--run-id", "r-reason"])
+        finally:
+            rc_mod._build_models = orig_models
+        self.assertEqual(rc, 0, msg=err)
+        res = _result(out)
+        self.assertFalse(res["eligible"])
+        self.assertEqual(res["reason"], "skill-ineligible")
+        self.assertEqual(res["rationale"], "nothing to publish")
+
     def test_live_run_posts_and_reports_ids(self):
         # Live (non-dry) run with all three roles stubbed offline:
         # proves the execution half (media resolve + inject) and

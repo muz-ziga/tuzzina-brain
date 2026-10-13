@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import sys
+import tempfile
 import unittest
 import urllib.request
 
@@ -75,6 +76,65 @@ def _openai_body(**over):
     inner.update(over)
     return json.dumps({"choices": [{"message": {
         "content": json.dumps(inner)}}]})
+
+
+def _write_analysis_skill(dirpath, config):
+    """One analysis skill document in a temp skills dir; config is
+    the Skill's own (None -> no config block)."""
+    import yaml
+    doc = {"id": "analysis-fix", "name": "Fixture", "type": "analysis",
+           "version": 1, "instructions": "Fixture skill."}
+    if config is not None:
+        doc["config"] = config
+    with open(os.path.join(dirpath, "analysis.yaml"), "w",
+              encoding="utf-8") as f:
+        yaml.safe_dump(doc, f)
+
+
+class SkillDirCase(unittest.TestCase):
+    """Points BRAIN_SKILLS_DIR at a temp dir holding one analysis
+    skill so a test decides the Skill's OWN repetition config. The
+    deterministic repeat gate is the Skill's opt-in, so these tests
+    prove the whole decision is the Skill's, not the engine's."""
+
+    HISTORY = []
+
+    def setUp(self):
+        self._urlopen = urllib.request.urlopen
+        self._old = os.environ.get("BRAIN_SKILLS_DIR")
+        self.tmp = tempfile.mkdtemp(prefix="tbra_skill_")
+        os.environ["BRAIN_SKILLS_DIR"] = self.tmp
+        self.use_skill(None)
+
+    def tearDown(self):
+        from skills.loader import clear_cache
+        clear_cache()
+        urllib.request.urlopen = self._urlopen
+        if self._old is None:
+            os.environ.pop("BRAIN_SKILLS_DIR", None)
+        else:
+            os.environ["BRAIN_SKILLS_DIR"] = self._old
+
+    def use_skill(self, config):
+        from skills.loader import clear_cache
+        _write_analysis_skill(self.tmp, config)
+        clear_cache()
+
+    def _run(self, bodies, history=None):
+        """Feed a fixed sequence of model outputs; return (opp, calls)."""
+        calls = []
+
+        def _open(req, timeout=None):
+            body = json.loads(req.data.decode())
+            calls.append(body["messages"][1]["content"])
+            return FakeResp(bodies[min(len(calls) - 1, len(bodies) - 1)])
+        urllib.request.urlopen = _open
+        pol = policy()
+        hist = self.HISTORY if history is None else history
+        if hist:
+            pol["recent_topics"] = hist
+        r = research([finding("Loudness is measured in LUFS")])
+        return OpenAIAnalysisModel("k").analyze(r, pol), calls
 
 
 class MockCase(unittest.TestCase):
@@ -434,10 +494,11 @@ class BoundaryCase(unittest.TestCase):
             (base / "analysis.py").read_text(encoding="utf-8"))
 
 
-class RepeatGate(unittest.TestCase):
+class RepeatGate(SkillDirCase):
     """The deterministic repeat gate: a topic already present in the
     run's published history is rejected, retried exactly once with the
-    same history, and never silently accepted."""
+    same history, and never silently accepted. The gate is an opt-in:
+    this fixture Skill declares config.repetition.mode: block."""
 
     HISTORY = [
         {"topic": "Understanding Loudness Basics",
@@ -445,6 +506,10 @@ class RepeatGate(unittest.TestCase):
         {"topic": "Juzzir's Mastering Personalities",
          "angle": "Explore different mastering styles"},
     ]
+
+    def setUp(self):
+        super().setUp()
+        self.use_skill({"repetition": {"mode": "block"}})
 
     def _pol(self, history=None):
         p = policy()
@@ -574,6 +639,66 @@ class RepeatGate(unittest.TestCase):
         ])
         self.assertEqual(len(calls), 1)
         self.assertFalse(opp.eligible)
+
+
+class RepetitionOptIn(SkillDirCase):
+    """The deterministic repeat gate is an opt-in owned by the active
+    Skill: absent or off means the engine adds no rule, block means it
+    enforces one. Same engine, two Skills, two behaviors."""
+
+    HISTORY = [
+        {"topic": "Understanding Loudness Basics",
+         "angle": "Understand Loudness Basics"},
+        {"topic": "Juzzir's Mastering Personalities",
+         "angle": "Explore different mastering styles"},
+    ]
+
+    def test_absent_config_adds_no_gate(self):
+        self.use_skill(None)
+        opp, calls = self._run([_openai_body(
+            topic="Understanding Loudness Basics",
+            angle="Understand Loudness Basics")])
+        self.assertEqual(len(calls), 1, "no opt-in means no gate")
+        self.assertTrue(opp.eligible)
+
+    def test_off_config_is_the_same_as_absent(self):
+        self.use_skill({"repetition": {"mode": "off"}})
+        opp, calls = self._run([_openai_body(
+            topic="Understanding Loudness Basics",
+            angle="Understand Loudness Basics")])
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(opp.eligible)
+
+    def test_block_config_enables_the_gate(self):
+        self.use_skill({"repetition": {"mode": "block"}})
+        opp, calls = self._run([
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+            _openai_body(topic="Understanding Loudness Basics",
+                         angle="Understand Loudness Basics"),
+        ])
+        self.assertEqual(len(calls), 2, "one retry under block")
+        self.assertFalse(opp.eligible)
+        self.assertEqual(opp.meta.get("reason"), "repeated-topic")
+
+
+class SkillIneligibleReason(SkillDirCase):
+    """A decline is the Skill's own verdict and is recorded as such,
+    with the model's rationale kept on the object."""
+
+    def test_model_decline_records_skill_ineligible(self):
+        opp, calls = self._run([_openai_body(
+            eligible=False, facts=[], source_item_ids=[],
+            topic="", angle="", rationale="nothing newsworthy")])
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(opp.eligible)
+        self.assertEqual(opp.meta.get("reason"), "skill-ineligible")
+        self.assertEqual(opp.rationale, "nothing newsworthy")
+
+    def test_eligible_verdict_carries_no_decline_reason(self):
+        opp, _ = self._run([_openai_body()])
+        self.assertTrue(opp.eligible)
+        self.assertNotIn("reason", opp.meta)
 
 
 class RepeatMatcher(unittest.TestCase):
