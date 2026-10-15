@@ -80,6 +80,39 @@ class CampaignAdOverlayTest(unittest.TestCase):
         self.assertEqual(out["layout"]["text"]["y"],
                          AD_TEXT_ZONES["top"]["y"])
 
+    def test_wizard_percent_box_is_the_zone(self):
+        # The dashboard writes the whole box as percentages; that box
+        # must reach the compositor as a percent text zone, or the
+        # headline is drawn in the default zone the campaign did not
+        # choose.
+        out = campaign_ad_overlay({
+            "textZone": {"x": 17, "y": 68, "width": 66, "height": 21},
+        })
+        self.assertEqual(out["layout"]["text"], {
+            "x": 17, "y": 68,
+            "maxWidth": 66, "maxHeight": 21,
+            "unit": "percent",
+        })
+        merged = _merge_layout(dict(AD_LAYOUT), out["layout"])
+        self.assertEqual(merged["text"]["unit"], "percent")
+        self.assertEqual(merged["text"]["x"], 17)
+        self.assertEqual(merged["text"]["maxWidth"], 66)
+
+    def test_percent_box_outranks_a_preset_and_does_not_raise(self):
+        # A preset ships the same percent box the wizard picked; the
+        # box wins, and the preset's position label must neither raise
+        # nor overwrite it.
+        out = campaign_ad_overlay({
+            "template": "clean",
+            "textZone": {"position": "bottom-center",
+                         "x": 22, "y": 70, "width": 56, "height": 22},
+        })
+        self.assertEqual(out["layout"]["text"], {
+            "x": 22, "y": 70,
+            "maxWidth": 56, "maxHeight": 22,
+            "unit": "percent",
+        })
+
     def test_template_carries_its_zone_and_backing(self):
         out = campaign_ad_overlay({"template": "bare"})
         self.assertEqual(out["layout"]["logoBacking"],

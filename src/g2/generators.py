@@ -241,15 +241,38 @@ def campaign_ad_overlay(ad) -> dict:
         backing = spec["logoBacking"]
     # An explicit choice outranks the preset it was picked from: the
     # dashboard lets a user override one field of a template, and that
-    # must survive the merge.
+    # must survive the merge. The dashboard writes the whole box as
+    # percentages (x/y/width/height of the final canvas), with or
+    # without a `position` label; that explicit box is the zone and
+    # outranks any named preset. The compositor resolves the
+    # percentages per axis, so one box serves every image size.
     text_zone = ad.get("textZone")
     if isinstance(text_zone, dict):
-        pos = str(text_zone.get("position") or "").strip()
-        if pos:
-            if pos not in AD_TEXT_ZONES:
-                raise ValueError("ad.textZone.position: unknown '%s'" % pos)
-            zone_name = pos
-    if zone_name:
+        box = {
+            key: text_zone.get(key)
+            for key in ("x", "y", "width", "height")
+        }
+        if all(
+            isinstance(box[key], (int, float))
+            and not isinstance(box[key], bool)
+            for key in box
+        ):
+            layout["text"] = {
+                "x": box["x"],
+                "y": box["y"],
+                "maxWidth": box["width"],
+                "maxHeight": box["height"],
+                "unit": "percent",
+            }
+        else:
+            pos = str(text_zone.get("position") or "").strip()
+            if pos:
+                if pos not in AD_TEXT_ZONES:
+                    raise ValueError(
+                        "ad.textZone.position: unknown '%s'" % pos
+                    )
+                zone_name = pos
+    if zone_name and "text" not in layout:
         layout["text"] = dict(AD_TEXT_ZONES[zone_name])
     own_backing = str(ad.get("logoBacking") or "").strip()
     if own_backing:
