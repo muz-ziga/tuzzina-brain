@@ -74,11 +74,13 @@ class _LiveClient:
 
     def __init__(self, image_ref=None, image_error=None):
         self.calls = []
+        self.posts_calls = []
         self._image_ref = image_ref
         self._image_error = image_error
 
-    def campaign_content_exists(self, run_id, content):
-        return False
+    def campaign_content_exists(self, run_id, content, integration_id="",
+                                value_id=""):
+        return {"exists": False, "sameValue": False}
 
     def release_claim(self, key, run_id):
         pass
@@ -101,7 +103,9 @@ class _LiveClient:
 
     def create_post(self, posts, publish_at, post_type=None):
         self.calls.append("create_post")
-        return [{"postId": "p-1", "status": "success"}]
+        self.posts_calls.append(posts)
+        return [{"postId": "p-%d" % len(self.posts_calls),
+                 "status": "success"}]
 
 
 class ImageRoleInvariantCase(unittest.TestCase):
@@ -159,6 +163,65 @@ class ImageRoleInvariantCase(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             run_execute_stage(ctx)
         self.assertNotIn("create_post", client.calls)
+
+    def test_f_campaign_targets_receive_the_same_content_once(self):
+        # One generation, every channel the campaign selected: the
+        # same final text and media go to each target exactly once,
+        # and the generator's own channel is never a second target.
+        client = _LiveClient()
+        ctx = _ctx("none", dict(ALL), roles=NO_IMAGE_ROLE,
+                   client=client, dry_run=False)
+        ctx["cfg"]["channel_meta"]["identifier"] = "facebook"
+        ctx["cfg"]["publish_targets"] = ["int-1", "int-2", "int-2"]
+        out = run_execute_stage(ctx)
+        self.assertEqual(out["outcome"], "done")
+        self.assertEqual(out["publish_targets"], ["int-2"])
+        self.assertEqual(out["post_ids"], ["p-1", "p-2"])
+        targets = [p[0]["integration"]["id"] for p in client.posts_calls]
+        self.assertEqual(targets, ["int-1", "int-2"])
+        contents = [p[0]["value"][0]["content"]
+                    for p in client.posts_calls]
+        self.assertEqual(contents[0], contents[1])
+        self.assertIn("brainrun:r-fmt:0:main", out["value_ids"])
+        self.assertIn("brainrun:r-fmt:0:int-2:main", out["value_ids"])
+
+    def test_g_partial_publish_retry_finishes_only_the_missing_channel(self):
+        # The first attempt stored the primary channel, then the
+        # target failed. The retry must not re-post the primary and
+        # must not fail as a duplicate: it finishes the target only.
+        class _RetryClient(_LiveClient):
+            def __init__(self):
+                super().__init__()
+                self.stored = {}
+
+            def campaign_content_exists(self, run_id, content,
+                                        integration_id="", value_id=""):
+                hit = self.stored.get(value_id) == (
+                    integration_id, content)
+                return {"exists": hit, "sameValue": hit}
+
+            def create_post(self, posts, publish_at, post_type=None):
+                value = posts[0]["value"][0]
+                self.stored[value["id"]] = (
+                    posts[0]["integration"]["id"], value["content"])
+                return super().create_post(posts, publish_at, post_type)
+
+        client = _RetryClient()
+        ctx = _ctx("none", dict(ALL), roles=NO_IMAGE_ROLE,
+                   client=client, dry_run=False)
+        ctx["cfg"]["channel_meta"]["identifier"] = "facebook"
+        ctx["cfg"]["publish_targets"] = ["int-2"]
+        first = run_execute_stage(ctx)
+        self.assertEqual(first["outcome"], "done")
+        self.assertEqual(len(client.posts_calls), 2)
+        # Only the target is missing after the simulated failure.
+        client.stored.pop("brainrun:r-fmt:0:int-2:main")
+        retry = run_execute_stage(ctx)
+        self.assertEqual(retry["outcome"], "done")
+        self.assertEqual(len(client.posts_calls), 3)
+        self.assertEqual(
+            client.posts_calls[-1][0]["integration"]["id"], "int-2")
+        self.assertEqual(retry["post_ids"], ["p-3"])
 
     def test_e_image_role_without_the_allowed_format_fails_not_downgrades(self):
         # The account does not allow text+image. The role requirement

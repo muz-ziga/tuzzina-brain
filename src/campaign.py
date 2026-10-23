@@ -114,6 +114,21 @@ def load_campaign(path: str) -> dict:
     overlay_layer = cfg.get("overlay_layer") or ""
     if not isinstance(overlay_layer, str):
         raise _err("overlay_layer", "must be a string")
+    # The campaign's other channels. One run generates the content
+    # once (for the channel whose strategy it resolved) and publishes
+    # the same text and media to every target; each target's platform
+    # adapter applies that platform's own shaping. Channel ids are
+    # Tuzzina-owned references, never names or platforms.
+    targets_in = cfg.get("publish_targets") or []
+    if not isinstance(targets_in, list):
+        raise _err("publish_targets", "must be a list")
+    clean_targets = []
+    for i, target in enumerate(targets_in):
+        if not isinstance(target, str) or not target.strip():
+            raise _err(f"publish_targets[{i}]", "must be a non-empty string")
+        if target.strip() in clean_targets:
+            continue
+        clean_targets.append(target.strip())
     return {
         "brand": {
             "name": str(brand["name"]).strip(),
@@ -154,6 +169,7 @@ def load_campaign(path: str) -> dict:
         # tool, which looks it up server-side (ownership-checked).
         "overlay_layer": overlay_layer.strip()[:64],
         "image": clean_image,
+        "publish_targets": clean_targets,
         # Flow identity passthrough (evidence only in Phase 1:
         # routing still follows the default map in code; the id
         # records which map version the trigger resolved).

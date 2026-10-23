@@ -72,6 +72,20 @@ class CampaignTest(unittest.TestCase):
         cfg = load_campaign(self._f(GOOD))
         self.assertEqual(cfg["subject"], "")
 
+    def test_publish_targets_absent_is_single_channel(self):
+        cfg = load_campaign(self._f(GOOD))
+        self.assertEqual(cfg["publish_targets"], [])
+
+    def test_publish_targets_are_carried_and_validated(self):
+        cfg = load_campaign(self._f(
+            GOOD + "publish_targets:\n  - int-1\n  - int-2\n  - int-1\n"))
+        self.assertEqual(cfg["publish_targets"], ["int-1", "int-2"])
+        for bad in ("publish_targets: int-1\n",
+                    "publish_targets:\n  - 7\n",
+                    "publish_targets:\n  - ''\n"):
+            with self.assertRaises(ValueError):
+                load_campaign(self._f(GOOD + bad))
+
     def test_subject_must_be_a_string(self):
         with self.assertRaises(ValueError):
             load_campaign(self._f(GOOD + "subject:\n  - a\n  - b\n"))

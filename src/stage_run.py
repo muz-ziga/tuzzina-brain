@@ -717,6 +717,35 @@ def run_prompt_stage(ctx: dict) -> dict:
             "art_direction": art, "outcome": "ready"}
 
 
+def _distribution_targets(cfg: dict, integration_id: str) -> list:
+    """Campaign channels that receive the content this run generated,
+    minus the run's own channel. Order is the campaign's; duplicates
+    and the generator itself are never targets."""
+    out = []
+    for raw in (cfg.get("publish_targets") or []):
+        target = str(raw or "").strip()
+        if not target or target == integration_id or target in out:
+            continue
+        out.append(target)
+    return out
+
+
+def _mirror_intent(intent, target: str):
+    """The same content addressed to another channel. Only the
+    integration id and the deterministic row ids change; text, media,
+    companion, tags and policy stay byte-identical, and the platform
+    adapter shapes them for the target at inject time. Distinct row
+    ids keep a stage replay idempotent per channel."""
+    from dataclasses import replace
+    ids = []
+    for raw in (intent.value_ids or []):
+        value = str(raw)
+        head, sep, kind = value.rpartition(":")
+        ids.append("%s:%s:%s" % (head, target, kind) if sep else
+                   "%s:%s" % (value, target))
+    return replace(intent, integration_id=target, value_ids=ids)
+
+
 def run_execute_stage(ctx: dict) -> dict:
     """Assemble (deterministic replay of validated text+prompt),
     resolve media, inject. THE side-effect stage: releases held
@@ -859,6 +888,12 @@ def run_execute_stage(ctx: dict) -> dict:
                 if isinstance(_m, dict) and _m.get("prompt"):
                     result["media_prompts"].append(_m["prompt"])
         result["intents"] = len(intents)
+        distribution_targets = _distribution_targets(cfg, integration_id)
+        result["publish_targets"] = distribution_targets
+        for intent, _pkg in intents:
+            for target in distribution_targets:
+                result["value_ids"].extend(
+                    _mirror_intent(intent, target).value_ids)
         if dry_run or not intents:
             if not dry_run:
                 # Eligible but nothing to inject: park the facts
@@ -959,6 +994,14 @@ def run_execute_stage(ctx: dict) -> dict:
             intent.media = images
             injected = service.inject(intent, client)
             post_ids.extend(_post_ids(injected.get("response")))
+            # One generation, every campaign channel: the same text
+            # and media are addressed to each target and shaped by
+            # that target's platform adapter at inject time. The
+            # generator's own channel above is never a target.
+            for target in distribution_targets:
+                mirrored = service.inject(
+                    _mirror_intent(intent, target), client)
+                post_ids.extend(_post_ids(mirrored.get("response")))
         result["post_ids"] = post_ids
         result["media"] = media_refs
         if not dry_run and ctx.get("state_store") == "tuzzina" and \

@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from tuzzina.client import TuzzinaClient, TuzzinaError
 
 CALLS = []
+BODIES = []
 
 
 class FakeResp:
@@ -34,6 +35,13 @@ class FakeResp:
 
 def fake_urlopen(req, timeout=None):
     CALLS.append((req.full_url, req.get_method()))
+    if req.data:
+        try:
+            BODIES.append((req.full_url, json.loads(req.data.decode())))
+        except (ValueError, UnicodeDecodeError):
+            pass
+    if req.full_url.endswith("/public/v1/brain-content-exists"):
+        return FakeResp({"exists": True, "sameValue": True})
     if req.full_url.endswith("/mcp"):
         return _fake_mcp(req)
     if req.full_url.endswith("/public/v1/upload-from-url"):
@@ -119,6 +127,7 @@ def _fake_mcp(req):
 class ClientTest(unittest.TestCase):
     def setUp(self):
         CALLS.clear()
+        BODIES.clear()
         self._orig = urllib.request.urlopen
         urllib.request.urlopen = fake_urlopen
         self.c = TuzzinaClient("http://x/api", "k")
@@ -244,6 +253,34 @@ class ClientTest(unittest.TestCase):
         with self.assertRaises(TuzzinaError) as ctx:
             self.c.get_content_distribution("int9")
         self.assertIn("500", str(ctx.exception))
+
+    def test_campaign_content_exists_returns_flags_and_scopes_the_row(self):
+        r = self.c.campaign_content_exists(
+            "run-1", "Hello",
+            integration_id="int-ig",
+            value_id="brainrun:run-1:0:int-ig:main")
+        self.assertEqual(r, {"exists": True, "sameValue": True})
+        body = [b for u, b in BODIES
+                if u.endswith("/public/v1/brain-content-exists")][-1]
+        self.assertEqual(body, {
+            "runId": "run-1", "content": "Hello",
+            "integrationId": "int-ig",
+            "valueId": "brainrun:run-1:0:int-ig:main",
+        })
+
+    def test_campaign_content_exists_omits_unset_scope_fields(self):
+        self.c.campaign_content_exists("run-1", "Hello")
+        body = [b for u, b in BODIES
+                if u.endswith("/public/v1/brain-content-exists")][-1]
+        self.assertEqual(body, {"runId": "run-1", "content": "Hello"})
+
+    def test_campaign_content_exists_empty_content_is_not_a_duplicate(self):
+        r = self.c.campaign_content_exists("run-1", "  ",
+                                           value_id="v")
+        self.assertEqual(r, {"exists": False, "sameValue": False})
+        self.assertEqual(
+            [u for u, _ in CALLS if u.endswith("/brain-content-exists")],
+            [])
 
     def test_generate_image_hits_mcp_endpoint(self):
         MCP_CALLS.clear()

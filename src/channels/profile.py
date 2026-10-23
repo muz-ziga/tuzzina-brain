@@ -61,6 +61,15 @@ def _finalize(integration_id, channel_meta, brand, hashtags, links_policy,
         # image tool with every request.
         "image": dict(project_cfg.get("image") or {}),
         "overlay_layer": str(project_cfg.get("overlay_layer") or ""),
+        # The campaign's other channels, carried verbatim: the run
+        # generates once and the execute stage publishes the same
+        # content to each target through its own platform adapter.
+        # Campaign-owned (no channel leaf overrides it); absent means
+        # single-channel behavior, unchanged.
+        "publish_targets": [str(x).strip()
+                            for x in (project_cfg.get("publish_targets")
+                                      or [])
+                            if str(x).strip()],
         "channel_meta": dict(channel_meta or {}),
         "extras": dict(extras),
     }

@@ -30,9 +30,13 @@ class FakeClient:
         self.content_lookups = []
         self.duplicate_content = False
 
-    def campaign_content_exists(self, run_id, content):
-        self.content_lookups.append({"run_id": run_id, "content": content})
-        return self.duplicate_content
+    def campaign_content_exists(self, run_id, content, integration_id="",
+                                value_id=""):
+        self.content_lookups.append({"run_id": run_id, "content": content,
+                                     "integration_id": integration_id,
+                                     "value_id": value_id})
+        return {"exists": bool(self.duplicate_content),
+                "sameValue": False}
 
     def get_integration(self, integration_id):
         try:
@@ -459,9 +463,10 @@ class DuplicateContentTest(unittest.TestCase):
     and published posts both count: the server compares stored
     content in any state. Different campaigns are independent."""
 
-    def _intent(self, run="run-1", content="Same words"):
+    def _intent(self, run="run-1", content="Same words",
+                integration_id="int-fb-1"):
         intent = build_intent(
-            integration_id="int-fb-1", content=content,
+            integration_id=integration_id, content=content,
             publish_at="2026-09-08T09:00:00+00:00", mode="schedule")
         # Same shape the staged execute path mints.
         intent.value_ids = ["brainrun:%s:0:main" % run]
@@ -501,6 +506,36 @@ class DuplicateContentTest(unittest.TestCase):
         intent.hashtags = ["#mix"]
         InjectionService().inject(intent, c)
         self.assertIn("#mix", c.content_lookups[0]["content"])
+
+    def test_guard_is_scoped_to_the_intent_channel(self):
+        # The same content on another channel of the campaign is
+        # distribution, not a repeat; the lookup asks per channel.
+        c = FakeClient([IG_RECORD])
+        intent = self._intent(integration_id="int-ig-1",
+                              content="Post body")
+        InjectionService().inject(intent, c)
+        self.assertEqual(c.content_lookups[0]["integration_id"],
+                         "int-ig-1")
+        self.assertEqual(c.content_lookups[0]["value_id"],
+                         "brainrun:run-1:0:main")
+
+    def test_a_replay_of_the_runs_own_row_is_skipped_not_rejected(self):
+        # Partial failure + retry: the channel already stored this
+        # exact row (same deterministic value id, same content), so a
+        # retry must skip it and let the remaining channels finish
+        # instead of failing the whole stage as a duplicate.
+        class OwnRowClient(FakeClient):
+            def campaign_content_exists(self, run_id, content,
+                                        **kw):
+                super().campaign_content_exists(run_id, content, **kw)
+                return {"exists": True, "sameValue": True}
+
+        c = OwnRowClient([FB_RECORD])
+        out = InjectionService().inject(
+            self._intent(content="Post body"), c)
+        self.assertEqual(c.posts_calls, [])
+        self.assertEqual(out.get("skipped"), "already-created")
+        self.assertEqual(out.get("response"), [])
 
     def test_companion_only_repeats_are_not_compared(self):
         c = FakeClient([FB_RECORD])

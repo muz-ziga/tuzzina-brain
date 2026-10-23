@@ -202,17 +202,38 @@ class InjectionService:
             "settings": settings,
         }]
         # Exact-duplicate guard: one campaign never creates the same
-        # final content twice. Runs AFTER the adapter shaped the final
-        # text (so the comparison is against what would be stored) and
-        # BEFORE create_post, so a duplicate is never created, never
-        # scheduled and never regenerated. Exact equality only: what
-        # counts as a repeated IDEA stays with the Skill.
+        # final content twice ON THE SAME CHANNEL. Runs AFTER the
+        # adapter shaped the final text (so the comparison is against
+        # what would be stored) and BEFORE create_post, so a duplicate
+        # is never created, never scheduled and never regenerated.
+        # Scoped by channel: the same content going to another channel
+        # of the campaign is intentional distribution, not a repeat.
+        # The deterministic row id is part of the question: if the
+        # match IS this intent's own row, a previous attempt already
+        # wrote it (partial failure retry), so this injection is
+        # skipped and the stage continues with the remaining channels.
+        # Exact equality only: what counts as a repeated IDEA stays
+        # with the Skill.
         run_id = _brain_run_id(intent.value_ids)
-        if run_id and client.campaign_content_exists(
-                run_id, str(items[0].get("content") or "")):
-            raise ValueError(
-                "duplicate-content: this campaign already has a post "
-                "with exactly this content")
+        if run_id:
+            guard = client.campaign_content_exists(
+                run_id, str(items[0].get("content") or ""),
+                integration_id=intent.integration_id,
+                value_id=(intent.value_ids or [""])[0])
+            if guard.get("sameValue"):
+                return {
+                    "integration_id": intent.integration_id,
+                    "identifier": identifier,
+                    "post_kind": intent.post_kind,
+                    "mode": intent.mode,
+                    "publish_at": intent.publish_at,
+                    "response": [],
+                    "skipped": "already-created",
+                }
+            if guard.get("exists"):
+                raise ValueError(
+                    "duplicate-content: this campaign already has a "
+                    "post with exactly this content on this channel")
         response = client.create_post(posts, intent.publish_at,
                                       post_type=intent.mode)
         self._tracer.emit(

@@ -129,6 +129,25 @@ class IntegrationTest(unittest.TestCase):
                          ["research", "analysis", "text",
                           "image", "video"])
 
+    def test_publish_targets_are_carried_verbatim(self):
+        # Campaign-owned, channel-agnostic: carried in order, empty
+        # entries dropped, the campaign maybe includes its own
+        # primary (the execute stage removes it, not this layer).
+        project = _project()
+        project["publish_targets"] = ["integ-ig-1", " ",
+                                      "integ-fb-1"]
+        cfg = resolve_strategy(
+            project, _strategy(),
+            channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["publish_targets"],
+                         ["integ-ig-1", "integ-fb-1"])
+
+    def test_publish_targets_absent_is_empty(self):
+        cfg = resolve_strategy(
+            _project(), _strategy(),
+            channel_meta={"identifier": "facebook"})
+        self.assertEqual(cfg["publish_targets"], [])
+
     def test_schedule_channel_wins_per_leaf(self):
         project = _project()
         project["schedule"] = {"timezone": "UTC",
