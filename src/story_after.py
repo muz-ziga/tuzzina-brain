@@ -188,6 +188,9 @@ def main(argv=None) -> int:
                         help="comma list fallback ids (unused by the "
                         "group read; kept for ledger parity)")
     parser.add_argument("--targets", default="")
+    parser.add_argument("--state-store", default="tuzzina",
+                        help="accepted for orchestration parity; this "
+                        "module always talks to Tuzzina directly")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
