@@ -352,15 +352,18 @@ class TuzzinaClient:
             "sameValue": exists and bool(data.get("sameValue")),
         }
 
-    def get_post(self, post_id: str) -> dict:
-        """Read one Tuzzina post (existing GET /posts/:id endpoint):
-        group + posts rows (content/title/image/releaseURL/integration).
-        Used by the after-post Story flow to read the REAL published
-        post's permalink; a transport or server failure raises like
-        every other read (Tuzzina stays authority)."""
-        if not post_id or not str(post_id).strip():
-            raise TuzzinaError("post_id is required")
-        return self._call("GET", "/posts/%s" % str(post_id).strip())
+    def list_recent_posts(self, since_iso: str, until_iso: str) -> dict:
+        """Read org posts in a window via the EXISTING public API
+        (GET /public/v1/posts?startDate&endDate; API-key auth):
+        full rows (id/integrationId/title/content/image/releaseURL)
+        the after-post Story flow matches by id. Transport or server
+        failure raises like every other read (Tuzzina authority)."""
+        import urllib.parse
+        start = urllib.parse.quote(str(since_iso), safe="")
+        end = urllib.parse.quote(str(until_iso), safe="")
+        return self._call(
+            "GET",
+            "/public/v1/posts?startDate=%s&endDate=%s" % (start, end))
 
     def get_content_usage(self, integration_id: str, start_date: str):
         """Load published-format usage for one integration since a

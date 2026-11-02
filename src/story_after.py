@@ -38,6 +38,42 @@ POLL_INTERVAL_S = 5
 POLL_TRIES = 8  # ≤40s worst case: publish workflow is async by design
 
 
+def fetch_post_rows(client, post_ids: list,
+                    tries: int = POLL_TRIES,
+                    interval: int = POLL_INTERVAL_S) -> list:
+    """Rows for the given post ids from the group window.
+
+    releaseURL is written by Tuzzina's publish workflow AFTER the
+    provider confirms, so the caller re-reads the window a few
+    times until every requested row is publishable (or bounded
+    tries elapse — never invents a URL)."""
+    import datetime
+    until = datetime.datetime.now(
+        datetime.timezone.utc).isoformat()
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(hours=48)).isoformat()
+    wanted = {str(x) for x in post_ids}
+    rows: list = []
+    for _ in range(max(1, tries)):
+        try:
+            data = client.list_recent_posts(since, until) or {}
+        except Exception as e:
+            print("warning: posts read failed (%s)"
+                  % type(e).__name__, file=sys.stderr)
+            data = {}
+        candidates = data.get("posts") or []
+        rows = [r for r in candidates if str(r.get("id")) in wanted]
+        if rows and all(
+                str(r.get("releaseURL") or "").strip() for r in rows):
+            break
+        if _ < max(1, tries) - 1:
+            time.sleep(max(1, interval))
+    yield_rows = [r for r in rows
+                  if str(r.get("releaseURL") or "").strip()]
+    _ = post_ids  # kept for the exact-set contract
+    return yield_rows
+
+
 def real_permalink(client, post_id: str, tries: int = POLL_TRIES,
                    interval: int = POLL_INTERVAL_S) -> str:
     """The post's permalink once publish completed; resilience only.
@@ -105,7 +141,7 @@ def story_caption(title: str, permalink: str, integration_id: str,
     return text
 
 
-def inject_story(client, campaign: dict, post_id: str,
+def inject_story(client, campaign: dict, post_ids: list,
                  targets: list, poll_tries: int = POLL_TRIES):
     """One story per channel from the REAL published post rows.
 
@@ -119,14 +155,9 @@ def inject_story(client, campaign: dict, post_id: str,
     from injection.service import InjectionService
     from injection.trace import StderrTracer
 
-    rows = []
-    for _ in range(max(1, poll_tries)):
-        data = client.get_post(post_id) or {}
-        rows = data.get("posts") or []
-        if all(str(r.get("releaseURL") or "").strip() for r in rows) \
-                and rows:
-            break
-        time.sleep(POLL_INTERVAL_S)
+    current_post_ids = [str(x) for x in post_ids]
+    rows = fetch_post_rows(client, current_post_ids,
+                           tries=poll_tries)
     rows = [r for r in rows
             if str(r.get("releaseURL") or "").strip()
             and post_media_refs({"posts": [r]})]
@@ -206,7 +237,9 @@ def main(argv=None) -> int:
     if args.dry_run:
         print("STORY_AFTER dry-run: targets=%s" % tgts)
         return 0
-    published = inject_story(client, campaign, args.post_id, tgts)
+    ids = [args.post_id] + [x for x in args.post_ids.split(",")
+                            if x.strip() and x.strip() != args.post_id]
+    published = inject_story(client, campaign, ids, tgts)
     print("BRAIN_RESULT %s" % json.dumps({
         "status": "success" if published else "no-op",
         "post_ids": published,
