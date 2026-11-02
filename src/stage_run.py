@@ -1017,13 +1017,18 @@ def run_execute_stage(ctx: dict) -> dict:
                 _story_targets = [intent.integration_id] \
                     + list(distribution_targets)
                 for _tgt in _story_targets:
+                    # Story carries the SAME link policy as the main
+                    # post (DRY: no parallel policy). The campaign link
+                    # therefore appears in the story caption as text
+                    # (Tuzzina's story publishing = caption + media),
+                    # which works on any channel. Companion is cleared
+                    # because stories reject comments.
                     _main_text = str(intent.content or "").split(
                         "---COMPANION---", 1)[0].strip()
                     story = _replace(intent, integration_id=_tgt,
                                      post_kind="story",
                                      media=images[:1],
-                                     value_ids=None, link="",
-                                     links_policy="hide",
+                                     value_ids=None,
                                      content=_main_text, companion="")
                     try:
                         s_inj = service.inject(story, client)

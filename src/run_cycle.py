@@ -568,8 +568,7 @@ def _main(argv=None) -> int:
                     "---COMPANION---", 1)[0].strip()
                 story = _replace(intent, integration_id=_tgt,
                                  post_kind="story", media=images[:1],
-                                 value_ids=None, link="",
-                                 links_policy="hide",
+                                 value_ids=None,
                                  content=_main_text, companion="")
                 try:
                     s_inj = service.inject(story, client)
