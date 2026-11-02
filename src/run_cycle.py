@@ -543,6 +543,22 @@ def _main(argv=None) -> int:
         intent.media = images
         injected = service.inject(intent, client)
         post_ids.extend(_post_ids(injected.get("response")))
+        # Optional bonus: publish the same generated image as a Story.
+        # Add-on only: failures never fail the run, and only the first
+        # image is used (IG stories are single-media).
+        if isinstance(cfg, dict) and (cfg.get("story") or {}).get("enabled") \
+                and images:
+            from dataclasses import replace as _replace
+            story = _replace(intent, post_kind="story", media=images[:1],
+                             value_ids=None, link="", links_policy="hide")
+            try:
+                s_inj = service.inject(story, client)
+                post_ids.extend(_post_ids(s_inj.get("response")))
+                print(f"run_id={run_id} story -> "
+                      f"{len(_post_ids(s_inj.get('response')))}")
+            except Exception as _e:
+                print(f"run_id={run_id} STORY-SKIP "
+                      f"{type(_e).__name__}: {_e}", file=sys.stderr)
     result["post_ids"] = post_ids
     result["status"] = "success"
     print(f"run_id={run_id} INJECTED {len(post_ids)} post(s) "

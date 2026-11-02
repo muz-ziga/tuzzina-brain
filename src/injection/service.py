@@ -215,7 +215,11 @@ class InjectionService:
         # Exact equality only: what counts as a repeated IDEA stays
         # with the Skill.
         run_id = _brain_run_id(intent.value_ids)
-        if run_id:
+        # Story posts deliberately reuse the main post's content on the
+        # same channel, so exempt them from the channel-scoped duplicate
+        # guard (see run_cycle). The main post's guard above still
+        # applies to the post itself.
+        if run_id and intent.post_kind != "story":
             guard = client.campaign_content_exists(
                 run_id, str(items[0].get("content") or ""),
                 integration_id=intent.integration_id,
