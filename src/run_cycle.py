@@ -564,10 +564,13 @@ def _main(argv=None) -> int:
                     _seen.add(_t)
                     _uniq.append(_t)
             for _tgt in _uniq:
+                _main_text = str(intent.content or "").split(
+                    "---COMPANION---", 1)[0].strip()
                 story = _replace(intent, integration_id=_tgt,
                                  post_kind="story", media=images[:1],
                                  value_ids=None, link="",
-                                 links_policy="hide")
+                                 links_policy="hide",
+                                 content=_main_text, companion="")
                 try:
                     s_inj = service.inject(story, client)
                     post_ids.extend(_post_ids(s_inj.get("response")))

@@ -1017,11 +1017,14 @@ def run_execute_stage(ctx: dict) -> dict:
                 _story_targets = [intent.integration_id] \
                     + list(distribution_targets)
                 for _tgt in _story_targets:
+                    _main_text = str(intent.content or "").split(
+                        "---COMPANION---", 1)[0].strip()
                     story = _replace(intent, integration_id=_tgt,
                                      post_kind="story",
                                      media=images[:1],
                                      value_ids=None, link="",
-                                     links_policy="hide")
+                                     links_policy="hide",
+                                     content=_main_text, companion="")
                     try:
                         s_inj = service.inject(story, client)
                         _sids = _post_ids(s_inj.get("response"))
