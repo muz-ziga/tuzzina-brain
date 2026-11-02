@@ -169,6 +169,11 @@ def load_campaign(path: str) -> dict:
         # tool, which looks it up server-side (ownership-checked).
         "overlay_layer": overlay_layer.strip()[:64],
         "image": clean_image,
+        # Campaign-owned: publish the same generated image as a
+        # Story on every channel of the run when enabled. Carried
+        # verbatim (shape-checked upstream in Tuzzina).
+        "story": dict(cfg.get("story") or {})
+        if isinstance(cfg.get("story"), dict) else {},
         "publish_targets": clean_targets,
         # Flow identity passthrough (evidence only in Phase 1:
         # routing still follows the default map in code; the id
