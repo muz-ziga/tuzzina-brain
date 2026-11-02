@@ -551,8 +551,9 @@ def _main(argv=None) -> int:
         # channel and every publish target, each via its own adapter.
         _story_cfg = (campaign.get("story") if isinstance(campaign, dict)
                       else None)
-        if isinstance(_story_cfg, dict) and _story_cfg.get("enabled") \
-                and images:
+        # Same stand-down rule as the staged path (see stage_run).
+        if (isinstance(_story_cfg, dict) and _story_cfg.get("enabled")
+                and not _story_cfg.get("afterMinutes") and images):
             from dataclasses import replace as _replace
             _targets = [intent.integration_id] + [
                 str(x).strip() for x in (cfg.get("publish_targets") or [])

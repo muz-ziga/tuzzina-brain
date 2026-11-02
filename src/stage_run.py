@@ -1011,8 +1011,13 @@ def run_execute_stage(ctx: dict) -> dict:
             # single-media) and story rows carry no deterministic ids
             # (stories are ephemeral, they never replay).
             _story_cfg = (ctx.get("campaign") or {}).get("story")
+            # afterMinutes > 0 switches to the AFTER-POST mode (a
+            # one-shot story then reads the real permalink after the
+            # publish), so the same-moment story stands down and a
+            # cycle never double-stories the same image.
             if (isinstance(_story_cfg, dict)
-                    and _story_cfg.get("enabled") and images):
+                    and _story_cfg.get("enabled")
+                    and not _story_cfg.get("afterMinutes") and images):
                 from dataclasses import replace as _replace
                 _story_targets = [intent.integration_id] \
                     + list(distribution_targets)
