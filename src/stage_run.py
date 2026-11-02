@@ -1002,6 +1002,36 @@ def run_execute_stage(ctx: dict) -> dict:
                 mirrored = service.inject(
                     _mirror_intent(intent, target), client)
                 post_ids.extend(_post_ids(mirrored.get("response")))
+            # Optional bonus: the same generated image as a Story on
+            # every channel of this run. The flag is campaign-owned
+            # and lives in the campaign doc (the resolved cfg never
+            # carries unknown sections), so read it from ctx. Add-on
+            # only: a per-channel failure is logged and never fails
+            # the stage; only the first image is used (IG stories are
+            # single-media) and story rows carry no deterministic ids
+            # (stories are ephemeral, they never replay).
+            _story_cfg = (ctx.get("campaign") or {}).get("story")
+            if (isinstance(_story_cfg, dict)
+                    and _story_cfg.get("enabled") and images):
+                from dataclasses import replace as _replace
+                _story_targets = [intent.integration_id] \
+                    + list(distribution_targets)
+                for _tgt in _story_targets:
+                    story = _replace(intent, integration_id=_tgt,
+                                     post_kind="story",
+                                     media=images[:1],
+                                     value_ids=None, link="",
+                                     links_policy="hide")
+                    try:
+                        s_inj = service.inject(story, client)
+                        _sids = _post_ids(s_inj.get("response"))
+                        post_ids.extend(_sids)
+                        print(f"run_id={run_id} story[{_tgt}] -> "
+                              f"{len(_sids)}")
+                    except Exception as e:
+                        print(f"run_id={run_id} STORY-SKIP[{_tgt}] "
+                              f"{type(e).__name__}: {e}",
+                              file=sys.stderr)
         result["post_ids"] = post_ids
         result["media"] = media_refs
         if not dry_run and ctx.get("state_store") == "tuzzina" and \
