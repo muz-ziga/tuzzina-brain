@@ -352,6 +352,16 @@ class TuzzinaClient:
             "sameValue": exists and bool(data.get("sameValue")),
         }
 
+    def get_post(self, post_id: str) -> dict:
+        """Read one Tuzzina post (existing GET /posts/:id endpoint):
+        group + posts rows (content/title/image/releaseURL/integration).
+        Used by the after-post Story flow to read the REAL published
+        post's permalink; a transport or server failure raises like
+        every other read (Tuzzina stays authority)."""
+        if not post_id or not str(post_id).strip():
+            raise TuzzinaError("post_id is required")
+        return self._call("GET", "/posts/%s" % str(post_id).strip())
+
     def get_content_usage(self, integration_id: str, start_date: str):
         """Load published-format usage for one integration since a
         UTC day (YYYY-MM-DD). Returns {format: count} (possibly all

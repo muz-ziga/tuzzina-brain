@@ -13,6 +13,34 @@ def _err(path: str, msg: str) -> ValueError:
     return ValueError(f"campaign.{path}: {msg}")
 
 
+def _clean_story_block(raw) -> dict:
+    """Closed-shape story block. Absent -> {}. Unknown keys refuse
+    loud (same fail-closed grammar as flow/budgets); numbers stay
+    integers in their bounds so the runner never re-checks."""
+    if not isinstance(raw, dict):
+        return {}
+    allowed = ("enabled", "afterMinutes", "linkEnabled")
+    for key in raw:
+        if key not in allowed:
+            raise _err("story.%s" % key, "unknown key")
+    out: dict = {}
+    if "enabled" in raw:
+        if not isinstance(raw["enabled"], bool):
+            raise _err("story.enabled", "must be a boolean")
+        out["enabled"] = raw["enabled"]
+    if "afterMinutes" in raw:
+        value = raw["afterMinutes"]
+        if not isinstance(value, int) or isinstance(value, bool)                 or not 0 <= value <= 1440:
+            raise _err("story.afterMinutes",
+                       "must be int minutes 0..1440")
+        out["afterMinutes"] = value
+    if "linkEnabled" in raw:
+        if not isinstance(raw["linkEnabled"], bool):
+            raise _err("story.linkEnabled", "must be a boolean")
+        out["linkEnabled"] = raw["linkEnabled"]
+    return out
+
+
 def load_campaign(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -169,11 +197,19 @@ def load_campaign(path: str) -> dict:
         # tool, which looks it up server-side (ownership-checked).
         "overlay_layer": overlay_layer.strip()[:64],
         "image": clean_image,
-        # Campaign-owned: publish the same generated image as a
-        # Story on every channel of the run when enabled. Carried
-        # verbatim (shape-checked upstream in Tuzzina).
-        "story": dict(cfg.get("story") or {})
-        if isinstance(cfg.get("story"), dict) else {},
+        # Campaign-owned Story mode (validated here, closed keys):
+        #   enabled      — the same generated image also publishes
+        #                  as a Story on every channel (unchanged
+        #                  default when absent).
+        #   afterMinutes — 0 keeps today's same-moment Story; >0
+        #                  switches to AFTER-POST: a story reads the
+        #                  REAL published post (permalink) after the
+        #                  delay. Closed bounds keep it a knob,
+        #                  never a business-rule engine.
+        #   linkEnabled  — caption carries the post permalink (V2;
+        #                  visible rendering on the image waits for
+        #                  compose-from-media in the engine).
+        "story": _clean_story_block(cfg.get("story")),
         "publish_targets": clean_targets,
         # Flow identity passthrough (evidence only in Phase 1:
         # routing still follows the default map in code; the id
