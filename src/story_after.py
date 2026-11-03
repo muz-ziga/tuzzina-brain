@@ -1,10 +1,13 @@
 """story_after.py: publish a Story from an ACTUALLY published post.
 
 The after-post Story mode: a cycle publishes the post; this helper
-later reads that REAL post (existing GET /posts/:id) and injects a
-story for every channel of the same campaign, all through the ONE
-injection service Tuzzina already owns (post_kind="story") — no
-parallel pipeline, no new engine, no platform branches.
+later reads that REAL post's permalink (existing public list API)
+and injects a story for every channel of the same campaign, all
+through the ONE injection service Tuzzina already owns
+(post_kind="story") — no parallel pipeline, no new engine, no
+platform branches. Media refs ride the one-shot input (the execute
+stage already resolved them); the public list is only asked for
+what it actually carries (id/releaseURL/content/integration).
 
 Rules:
 - the permalink is a plain-text line in the caption: Meta's story
@@ -74,34 +77,6 @@ def fetch_post_rows(client, post_ids: list,
     return yield_rows
 
 
-def real_permalink(client, post_id: str, tries: int = POLL_TRIES,
-                   interval: int = POLL_INTERVAL_S) -> str:
-    """The post's permalink once publish completed; resilience only.
-
-    releaseURL is written by Tuzzina's publish workflow AFTER the
-    provider confirms, so the caller polls the same read a few
-    times before falling back to "" (never invents a URL)."""
-    last = ""
-    for attempt in range(max(1, tries)):
-        try:
-            data = client.get_post(post_id) or {}
-        except Exception as e:  # transport is retried, not fatal
-            print("warning: post read %s failed (%s)"
-                  % (post_id, type(e).__name__), file=sys.stderr)
-            data = {}
-        rows = data.get("posts") or []
-        for row in rows:
-            url = str(row.get("releaseURL") or "").strip()
-            if url:
-                return url
-            # keep the first non-trivial title as the story's text seed
-            if not last and str(row.get("title") or "").strip():
-                last = str(row.get("title")).strip()
-        if attempt + 1 < max(1, tries):
-            time.sleep(max(1, interval))
-    return ""
-
-
 def post_media_refs(data: dict) -> list:
     """Media refs from the post rows, read-only — reused verbatim
     (same {id, path} the injection layer validates), never
@@ -141,26 +116,63 @@ def story_caption(title: str, permalink: str, integration_id: str,
     return text
 
 
+def row_target(row: dict) -> str:
+    """Channel id from a public-list row (nested integration object
+    first; flat integrationId fallback for older callers)."""
+    integ = row.get("integration")
+    if isinstance(integ, dict) and str(integ.get("id") or "").strip():
+        return str(integ.get("id")).strip()
+    return str(row.get("integrationId") or "").strip()
+
+
+def row_title(row: dict) -> str:
+    """Story text seed: explicit title first, else the first line
+    of the post content (the hook line campaigns write first)."""
+    if str(row.get("title") or "").strip():
+        return str(row.get("title")).strip()
+    for line in str(row.get("content") or "").splitlines():
+        if line.strip():
+            return line.strip()[:180]
+    return ""
+
+
+def clean_media_refs(raw) -> list:
+    """Workflow-supplied media refs, shape-checked (same {id, path}
+    the injection layer validates). Garbage in -> [] (caller then
+    falls back to row media, then skips)."""
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for m in raw:
+        if isinstance(m, dict) and str(m.get("id") or "").strip() \
+                and str(m.get("path") or "").strip():
+            out.append({"id": str(m["id"]).strip(),
+                        "path": str(m["path"]).strip()})
+        if len(out) >= 4:
+            break
+    return out
+
+
 def inject_story(client, campaign: dict, post_ids: list,
-                 targets: list, poll_tries: int = POLL_TRIES):
+                 targets: list, poll_tries: int = POLL_TRIES,
+                 media_refs: list | None = None):
     """One story per channel from the REAL published post rows.
 
-    The group read (existing GET /posts/:id) returns every row of
-    the post group — one per channel — so each channel's story
-    reuses THAT channel's own media ref and permalink; a channel
-    the publish workflow has not finished yet is skipped this
-    attempt (idempotent retry covers it), and failures below are
-    logged, never fatal (add-on contract)."""
-    from dataclasses import replace
+    The public list carries id/releaseURL/content/integration (no
+    title/image) — so the permalink+title come from the row while
+    the media comes from the one-shot input (the execute stage
+    resolved it once; never re-uploaded, never regenerated). A
+    channel the publish workflow has not finished yet is skipped
+    this attempt (idempotent retry covers it), and failures below
+    are logged, never fatal (add-on contract)."""
     from injection.service import InjectionService
     from injection.trace import StderrTracer
 
     current_post_ids = [str(x) for x in post_ids]
     rows = fetch_post_rows(client, current_post_ids,
                            tries=poll_tries)
-    rows = [r for r in rows
-            if str(r.get("releaseURL") or "").strip()
-            and post_media_refs({"posts": [r]})]
+    supplied = clean_media_refs(media_refs)
+    wanted = {str(x).strip() for x in (targets or []) if str(x).strip()}
     if not rows:
         return []
 
@@ -168,11 +180,14 @@ def inject_story(client, campaign: dict, post_ids: list,
     published: list = []
     seen: set = set()
     for row in rows:
-        tgt = str(row.get("integrationId") or "").strip()
+        tgt = row_target(row)
         url = str(row.get("releaseURL") or "").strip()
-        title = str(row.get("title") or "").strip()
-        media = post_media_refs({"posts": [row]})[:1]
-        if not tgt or tgt in seen or not (title or url):
+        title = row_title(row)
+        media = list(supplied) or post_media_refs({"posts": [row]})
+        media = media[:1]
+        if not tgt or tgt in seen or not media or not (title or url):
+            continue
+        if wanted and tgt not in wanted:
             continue
         seen.add(tgt)
         content = "\n".join(p for p in (title,
@@ -219,6 +234,9 @@ def main(argv=None) -> int:
                         help="comma list fallback ids (unused by the "
                         "group read; kept for ledger parity)")
     parser.add_argument("--targets", default="")
+    parser.add_argument("--media-refs", default="",
+                        help="JSON list of {id, path} the execute stage "
+                        "resolved (reused verbatim, never regenerated)")
     parser.add_argument("--state-store", default="tuzzina",
                         help="accepted for orchestration parity; this "
                         "module always talks to Tuzzina directly")
@@ -239,7 +257,12 @@ def main(argv=None) -> int:
         return 0
     ids = [args.post_id] + [x for x in args.post_ids.split(",")
                             if x.strip() and x.strip() != args.post_id]
-    published = inject_story(client, campaign, ids, tgts)
+    try:
+        refs = json.loads(args.media_refs) if args.media_refs else []
+    except Exception:
+        refs = []
+    published = inject_story(client, campaign, ids, tgts,
+                             media_refs=refs)
     print("BRAIN_RESULT %s" % json.dumps({
         "status": "success" if published else "no-op",
         "post_ids": published,
