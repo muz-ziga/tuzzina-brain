@@ -209,3 +209,37 @@ class CampaignTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoryBlockTest(unittest.TestCase):
+    """Closed story vocabulary in load_campaign (mirrors the
+    Tuzzina cleanCampaignDoc bounds): dynamic minutes 0..1440
+    pass, anything else fails closed."""
+
+    def _cfg(self, block):
+        text = GOOD + "story:\n" + block
+        f = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+        f.write(text)
+        f.close()
+        return load_campaign(f.name)
+
+    def test_one_minute_delay_loads(self):
+        cfg = self._cfg("  enabled: true\n  afterMinutes: 1\n")
+        self.assertEqual(
+            cfg["story"], {"enabled": True, "afterMinutes": 1})
+
+    def test_sixty_minutes_loads(self):
+        cfg = self._cfg("  enabled: true\n  afterMinutes: 60\n")
+        self.assertEqual(cfg["story"]["afterMinutes"], 60)
+
+    def test_absent_story_is_empty(self):
+        cfg = self._cfg("")
+        self.assertEqual(cfg["story"], {})
+
+    def test_out_of_bounds_rejected(self):
+        for bad in ("  enabled: true\n  afterMinutes: 1441\n",
+                    "  enabled: true\n  afterMinutes: -1\n",
+                    "  enabled: true\n  bogus: 1\n",
+                    "  enabled: \"yes\"\n"):
+            with self.assertRaises(ValueError, msg=bad):
+                self._cfg(bad)

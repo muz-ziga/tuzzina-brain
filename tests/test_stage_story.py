@@ -162,3 +162,22 @@ class ImageStoryCase(unittest.TestCase):
         self.assertEqual(len(client.posts_calls), 2)
         self.assertEqual([_kind_of(c) for c in client.posts_calls],
                          ["post", "post"])
+
+
+class StoryDelayStandDownCase(unittest.TestCase):
+    """afterMinutes (even the smallest, 1) switches the cycle to
+    the AFTER-POST mode: the same-moment story stands down so one
+    run never stories the same image twice; Immediate (absent/0)
+    keeps today's behavior byte-identically (ImageStoryCase)."""
+
+    def test_one_minute_delay_keeps_immediate_story_down(self):
+        client = _LiveClient(image_ref={"id": "img-1", "path": "ai/a.png"})
+        ctx = _ctx("none", roles=IMAGE_ROLE,
+                   campaign={"story": {"enabled": True, "afterMinutes": 1,
+                                       "linkEnabled": True}},
+                   client=client, targets=["int-2"])
+        out = run_execute_stage(ctx)
+        self.assertEqual(out["outcome"], "done")
+        self.assertEqual(len(client.posts_calls), 2)
+        self.assertEqual([_kind_of(c) for c in client.posts_calls],
+                         ["post", "post"])
