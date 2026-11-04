@@ -6,6 +6,8 @@ for what code can prove:
 
 - markdown link/image syntax is flattened (social destinations
   take plain text);
+- inline markdown markup (bold, italic, headings, lists, code)
+  is stripped to plain text;
 - repeated identical URLs collapse to their first occurrence;
 - policy-owned links never duplicate (the publishing step
   appends the call to action / attachment itself);
@@ -144,6 +146,25 @@ def clean_model_text(text: str, *, links_policy: str = "hide",
     # Text Skill is the only source of hashtags and its output stands.
     if strip_hashtags:
         text = _HASHTAG.sub("", text)
+
+    # Inline markdown markup the model sometimes emits despite the
+    # Text Skill forbidding it (social destinations render plain
+    # text, so the markers leak through as literal asterisks/hash/
+    # bullets/backticks). Strip the markup, keep the inner text.
+    # Code fences and inline code markers are removed entirely.
+    text = re.sub(r"```[a-zA-Z0-9_-]*\n?", "", text)
+    text = re.sub(r"```", "", text)
+    text = re.sub(r"(?m)^#{1,6}\s*", "", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.S)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.S)
+    text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])",
+                  r"\1", text, flags=re.S)
+    text = re.sub(r"(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])",
+                  r"\1", text, flags=re.S)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"(?m)^\s*[-*+]\s+", "", text)
+    # Collapse any leftover double spaces created by removals.
+    text = re.sub(r"[ \t]{2,}", " ", text)
 
     # Collapse consecutive duplicate lines (the classic echoed
     # call-to-action) and normalize whitespace.
