@@ -941,7 +941,7 @@ class OpenAIImagePromptGenerator:
         # byte-identical to what the Skill authored. This module adds
         # no style words of its own.
         if style_block:
-            out = "%s\n\n%s" % (out.strip(), style_block)
+            out = "%s\n\n%s" % (style_block, out.strip())
         return out
 
     @staticmethod
