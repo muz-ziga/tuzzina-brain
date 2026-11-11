@@ -879,7 +879,7 @@ class OpenAIImagePromptGenerator:
                    if isinstance(concept, dict) and concept else
                    "Describe ONLY the visual scene of this post: a short, "
                    "specific, drawable scene that explains the idea. ")
-                + "Output rules: about 15-25 words, one sentence, no style "
+                + "Output rules: about 25-40 words, one sentence, no style "
                   "wording, no flat/vector/2D/rendering vocabulary, no "
                   "negations, no negative prompt clauses, no numbers or "
                   "units, no colour names, no lighting or camera or material "
