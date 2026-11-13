@@ -873,12 +873,16 @@ class OpenAIImagePromptGenerator:
         if style_block:
             parts.append(
                 f"Post topic: {topic[:200]}. Brand: {brand.get('name','')}. "
-                + ("Describe ONLY the visual scene of this post: a short, "
-                   "specific, drawable scene that explains the idea, using "
+                + ("Describe ONLY the visual scene of this post, using "
                    "the concept above. "
                    if isinstance(concept, dict) and concept else
-                   "Describe ONLY the visual scene of this post: a short, "
-                   "specific, drawable scene that explains the idea. ")
+                   "Describe ONLY the visual scene of this post. ")
+                + "Start the sentence with the mastering equipment "
+                  "(console faders, DAW screen with waveform, meters, "
+                  "monitor speakers, or studio headphones), then the hands "
+                  "operating it, then the background colour and its single "
+                  "accent. The equipment is the main subject; no face, no "
+                  "eyes, no nose, no mouth, no portrait. "
                 + "Output rules: about 25-40 words, one sentence, no style "
                   "wording, no flat/vector/2D/rendering vocabulary, no "
                   "negations, no negative prompt clauses, no numbers or "
