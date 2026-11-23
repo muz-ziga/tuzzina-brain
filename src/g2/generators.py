@@ -804,7 +804,31 @@ class OpenAIImagePromptGenerator:
                 validate=lambda r: parse(r), task="visual_concept",
                 max_attempts=2)
 
-        raw = _concept_call(system)
+        try:
+            raw = _concept_call(system)
+        except LLMError as err:
+            # The router sometimes answers with markdown image/link
+            # syntax or prose instead of the contracted JSON. The
+            # identical retry inside complete_with_retry reproduces
+            # that failure, so one corrective attempt names the
+            # violation explicitly. Fail-closed is unchanged: a
+            # grounding miss (a real content refusal) is never retried
+            # here, and a second formatting violation propagates.
+            if "grounding" in str(err):
+                raise
+            corrected = (
+                system
+                + "\n\nYour previous reply was not the contracted JSON: "
+                  "it contained markdown, an image link, a URL, or prose. "
+                  "Reply with the JSON object only - no markdown, no links, "
+                  "no URLs, nothing before or after it."
+            )
+            raw = complete_with_retry(
+                self._adapter, corrected,
+                "Post to illustrate:\n" + (payload or "(none provided)"),
+                temperature=0.3, max_tokens=4000, timeout=150,
+                validate=lambda r: parse(r), task="visual_concept",
+                max_attempts=1)
         return parse(raw)
 
     def generate_prompt(self, topic: str, brand: dict,
