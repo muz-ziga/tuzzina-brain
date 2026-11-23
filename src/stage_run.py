@@ -959,11 +959,17 @@ def run_execute_stage(ctx: dict) -> dict:
         # best-effort, and independent of the icon channel — a
         # failed icon pick must never drop the text layer.
         main = str(text or "").split("---COMPANION---", 1)[0]
+        # The compositor renders the headline verbatim on the image,
+        # so any model markdown would print literally (e.g. "**...").
+        # Reuse the post-text cleaner: strip the markup, keep words.
+        from skills.editorial import clean_model_text
         headline = None
         for line in main.splitlines():
             if line.strip():
-                headline = line.strip()[:160]
-                break
+                cleaned = clean_model_text(line.strip())[:160].strip()
+                if cleaned:
+                    headline = cleaned
+                    break
         post_ids: list = []
         media_refs: list = []
         # The campaign's active roles are its stage requirement, so a
