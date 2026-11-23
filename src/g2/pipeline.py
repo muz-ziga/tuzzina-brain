@@ -123,7 +123,18 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
     if isinstance(cap, int) and cap > 0:
         body = body[:cap]
     media: list = []
-    if item.images:
+    # Composition profile: data owned by the active Image Skill. A
+    # campaign without one keeps the exact legacy branch below.
+    from g2.composition import composition_from_policy
+    composition = composition_from_policy(policy)
+    if composition is not None:
+        media.append({
+            "kind": "cover-card",
+            "composition": composition,
+            "source": item.images[0] if item.images else "",
+            "prompt": "cover-blur-card",
+        })
+    elif item.images:
         media.append({"kind": "url", "url": item.images[0],
                       "source": "extracted"})
     elif image_gen is not None:

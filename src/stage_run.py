@@ -666,6 +666,15 @@ def run_prompt_stage(ctx: dict) -> dict:
     claimed = ctx.get("claimed") or []
     cfg = ctx["cfg"]
     try:
+        # A campaign whose image Skill declares a composition profile
+        # does not need an LLM prompt: the profile is the direction and
+        # Tuzzina's standalone composer executes it. Campaigns without
+        # a profile keep the exact existing path below.
+        from g2.composition import composition_from_policy
+        if composition_from_policy(cfg) is not None:
+            return {"prompt": "cover-blur-card", "claimed": list(claimed),
+                    "icon_key": None, "concept": {},
+                    "art_direction": {}, "outcome": "ready"}
         brand = cfg.get("brand") or {}
         topic = str(ctx.get("topic") or "")
         post = ctx.get("post")

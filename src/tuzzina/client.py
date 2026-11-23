@@ -500,6 +500,76 @@ class TuzzinaClient:
         raise TuzzinaError(
             "Tuzzina image delegation returned no media reference")
 
+    def compose_cover_card(self, source_url: str,
+                           key_hint: str | None = None,
+                           headline: str | None = None,
+                           composition: dict | None = None,
+                           overlay_layer_id: str | None = None) -> dict:
+        """Delegate campaign-declared cover composition to Tuzzina's
+        standalone composeCoverCardTool.
+
+        No text-to-image model is called. The source artwork and the
+        campaign Skill's composition profile are the only inputs.
+        Fail-closed: any error raises TuzzinaError; no local fallback.
+        """
+        if not source_url or not str(source_url).strip():
+            raise TuzzinaError("sourceUrl is required")
+        from mcp.client import McpClient, McpError
+        client = McpClient(self._mcp_url(), auth_header=self.key,
+                           timeout=self.timeout)
+        try:
+            client.initialize()
+        except McpError:
+            raise TuzzinaError(
+                "Tuzzina cover composition failed during handshake")
+        try:
+            tool_args: dict = {
+                "sourceUrl": str(source_url),
+                "composition": composition
+                if isinstance(composition, dict) else {},
+            }
+            if key_hint:
+                tool_args["keyHint"] = str(key_hint)
+            if headline:
+                tool_args["headline"] = str(headline)[:200]
+            if overlay_layer_id:
+                tool_args["overlayLayerId"] = str(overlay_layer_id)[:64]
+            result = client.call_tool("composeCoverCardTool", tool_args)
+        except McpError as e:
+            msg = str(e)
+            if msg.startswith("tool-error:"):
+                msg = msg[len("tool-error:"):]
+            raise TuzzinaError(
+                f"Tuzzina cover composition failed: {msg}")
+        if isinstance(result, dict) and result.get("isError"):
+            detail = ""
+            for item in result.get("content") or []:
+                if isinstance(item, dict) and \
+                        isinstance(item.get("text"), str):
+                    detail = item["text"][:300]
+                    break
+            raise TuzzinaError(
+                "Tuzzina cover composition failed: "
+                f"{detail or 'tool error'}")
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict) and structured.get("id") and \
+                structured.get("path"):
+            return {"id": str(structured["id"]),
+                    "path": str(structured["path"])}
+        for item in result.get("content") or []:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            try:
+                data = json.loads(item.get("text") or "")
+            except Exception:
+                continue
+            if isinstance(data, dict) and data.get("id") and \
+                    data.get("path"):
+                return {"id": str(data["id"]),
+                        "path": str(data["path"])}
+        raise TuzzinaError(
+            "Tuzzina cover composition returned no media reference")
+
     def generate_video(self, video_type: str, output: str, prompt: str,
                        params: dict | None = None,
                        timeout: int = 600) -> dict:

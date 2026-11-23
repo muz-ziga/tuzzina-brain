@@ -63,6 +63,21 @@ def _resolve_media(client: TuzzinaClient, m: dict,
     is the org's exported syntax layer for the composed ad; a value
     here is carried to the tool and must paste.
     """
+    if m.get("kind") == "cover-card":
+        # Campaign-declared composition: Tuzzina's standalone composer
+        # owns the pixels; Brain only picks the source and carries the
+        # Skill's profile untouched.
+        from g2.composition import pick_source
+        comp = m.get("composition")
+        if not isinstance(comp, dict):
+            raise ValueError("cover-card media requires a composition profile")
+        source = str(m.get("source") or "").strip() or pick_source(
+            comp, key_hint, [])
+        if not source:
+            raise ValueError("cover-card media has no source artwork")
+        return client.compose_cover_card(
+            source, key_hint=key_hint, headline=headline,
+            composition=comp, overlay_layer_id=overlay_layer_id)
     if m.get("kind") == "url":
         return client.upload_from_url(m["url"])
     gen = m["generator"]
