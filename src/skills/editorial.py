@@ -163,6 +163,14 @@ def clean_model_text(text: str, *, links_policy: str = "hide",
                   r"\1", text, flags=re.S)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"(?m)^\s*[-*+]\s+", "", text)
+    # Em/en dashes are forbidden in social copy: the model uses them
+    # as a stylistic connector ("mastering—it's"). Replace with a
+    # comma so the clause boundary survives, then tidy the result
+    # (no leading comma, no doubled commas, no comma before .!?;:).
+    text = re.sub(r"[ \t]*[\u2014\u2013][ \t]*", ", ", text)
+    text = re.sub(r"(?m)^[ \t]*,[ \t]*", "", text)
+    text = re.sub(r",[ \t]*,", ",", text)
+    text = re.sub(r",[ \t]*([.!?;:])", r"\1", text)
     # Collapse any leftover double spaces created by removals.
     text = re.sub(r"[ \t]{2,}", " ", text)
 
