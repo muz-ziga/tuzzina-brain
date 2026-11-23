@@ -615,11 +615,23 @@ class OpenAIImagePromptGenerator:
             try:
                 data = _json.loads(unwrap_model_json(raw))
             except Exception:
-                # Diagnostic only: the rejection code head is
-                # unchanged; the suffix exposes what the model
-                # actually returned so the cause is inspectable.
-                raise LLMError("invalid-output:unparsed=%s" % (
-                    " ".join(str(raw or "").split())[:160],))
+                # Fallback: the model sometimes answers with markdown
+                # image/link syntax (e.g. "![Image](https://...") instead
+                # of the contracted JSON. Strip those spans and retry
+                # once — the happy path above is untouched. A still
+                # unparseable answer keeps the exact original error.
+                cleaned = re.sub(r"!\[[^\]]*\]\([^)]*\)", "",
+                                 str(raw or ""))
+                cleaned = re.sub(r"(?<!!)\[[^\]]*\]\([^)]*\)", "",
+                                  cleaned)
+                try:
+                    data = _json.loads(unwrap_model_json(cleaned))
+                except Exception:
+                    # Diagnostic only: the rejection code head is
+                    # unchanged; the suffix exposes what the model
+                    # actually returned so the cause is inspectable.
+                    raise LLMError("invalid-output:unparsed=%s" % (
+                        " ".join(str(raw or "").split())[:160],))
             if not isinstance(data, dict):
                 raise LLMError("invalid-output:not-a-mapping")
             out: dict = {}
