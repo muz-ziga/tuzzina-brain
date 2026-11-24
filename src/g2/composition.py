@@ -30,6 +30,12 @@ def composition_from_policy(policy: dict | None) -> dict | None:
     name = skills.get("image")
     if not isinstance(name, str) or not name.strip():
         return None
+    # Role gate: a campaign that explicitly excludes the image role can
+    # never enter the composition path, even if it still names an image
+    # Skill. Absent/empty roles keep the pre-roles default (all on).
+    roles = policy.get("roles")
+    if isinstance(roles, list) and roles and "image" not in roles:
+        return None
     from skills.loader import get_skill
 
     doc = get_skill("image", name.strip())
