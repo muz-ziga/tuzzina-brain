@@ -504,7 +504,8 @@ class TuzzinaClient:
                            key_hint: str | None = None,
                            headline: str | None = None,
                            composition: dict | None = None,
-                           overlay_layer_id: str | None = None) -> dict:
+                           overlay_layer_id: str | None = None,
+                           excerpt: str | None = None) -> dict:
         """Delegate campaign-declared cover composition to Tuzzina's
         standalone composeCoverCardTool.
 
@@ -512,8 +513,6 @@ class TuzzinaClient:
         campaign Skill's composition profile are the only inputs.
         Fail-closed: any error raises TuzzinaError; no local fallback.
         """
-        if not source_url or not str(source_url).strip():
-            raise TuzzinaError("sourceUrl is required")
         from mcp.client import McpClient, McpError
         client = McpClient(self._mcp_url(), auth_header=self.key,
                            timeout=self.timeout)
@@ -524,14 +523,17 @@ class TuzzinaClient:
                 "Tuzzina cover composition failed during handshake")
         try:
             tool_args: dict = {
-                "sourceUrl": str(source_url),
                 "composition": composition
                 if isinstance(composition, dict) else {},
             }
+            if source_url:
+                tool_args["sourceUrl"] = str(source_url)
             if key_hint:
                 tool_args["keyHint"] = str(key_hint)
             if headline:
                 tool_args["headline"] = str(headline)[:200]
+            if excerpt:
+                tool_args["excerpt"] = str(excerpt)[:120]
             if overlay_layer_id:
                 tool_args["overlayLayerId"] = str(overlay_layer_id)[:64]
             result = client.call_tool("composeCoverCardTool", tool_args)

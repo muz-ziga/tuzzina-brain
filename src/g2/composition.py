@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 
-_MODES = ("cover-blur-card",)
+_MODES = ("cover-blur-card", "brand-card", "auto")
 
 
 def composition_from_policy(policy: dict | None) -> dict | None:
@@ -68,29 +68,37 @@ def composition_from_policy(policy: dict | None) -> dict | None:
             "image skill composition.source_pool must be a non-empty list "
             "when present"
         )
+    catalogue = comp.get("catalogue")
+    if catalogue is not None and not isinstance(catalogue, list):
+        raise ValueError("image skill composition.catalogue must be a list")
+    brand = comp.get("brand")
+    if brand is not None and not isinstance(brand, dict):
+        raise ValueError("image skill composition.brand must be a mapping")
+    if isinstance(brand, dict):
+        # Brand-card display contract (generic, campaign data only):
+        # pattern selects full-bleed geometry, wordmark/category/footer
+        # are free text blocks, variants pick them by headline keywords,
+        # brandMentions derive the excerpt from the headline. Types are
+        # validated here; values belong to the Skill.
+        if brand.get("pattern") is not None and not isinstance(
+            brand.get("pattern"), str
+        ):
+            raise ValueError("image skill composition.brand.pattern must be a string")
+        for key in ("wordmark", "category", "footer", "excerpt"):
+            if brand.get(key) is not None and not isinstance(
+                brand.get(key), dict
+            ):
+                raise ValueError(
+                    "image skill composition.brand.%s must be a mapping" % key
+                )
+        if brand.get("variants") is not None and not isinstance(
+            brand.get("variants"), list
+        ):
+            raise ValueError("image skill composition.brand.variants must be a list")
+        if brand.get("brandMentions") is not None and not isinstance(
+            brand.get("brandMentions"), list
+        ):
+            raise ValueError(
+                "image skill composition.brand.brandMentions must be a list"
+            )
     return dict(comp)
-
-
-def pick_source(
-    composition: dict, key_hint: str | None, images: list | None = None
-) -> str:
-    """Pick the one source artwork for this media item.
-
-    An artwork extracted by research wins. Otherwise the Skill's own
-    source pool is rotated deterministically by the run's key hint, so
-    two runs do not always publish the same cover while a replay of
-    the same run addresses the same source.
-    """
-    for url in images or []:
-        if isinstance(url, str) and url.strip():
-            return url.strip()
-    pool = [
-        u.strip()
-        for u in (composition.get("source_pool") or [])
-        if isinstance(u, str) and u.strip()
-    ]
-    if not pool:
-        return ""
-    seed = str(key_hint or "")
-    index = int(hashlib.sha1(seed.encode("utf-8")).hexdigest()[:8], 16)
-    return pool[index % len(pool)]
