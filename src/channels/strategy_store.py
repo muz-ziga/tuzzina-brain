@@ -275,7 +275,7 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
             if not isinstance(s, dict):
                 raise _err(f"'strategy.sources[{i}]' must be a mapping")
             stype = s.get("type")
-            if stype not in ("website", "rss", "youtube",
+            if stype not in ("website", "rss", "youtube", "api",
                              "web", "news", "social.facebook",
                              "social.instagram", "social.x"):
                 raise _err(f"'strategy.sources[{i}].type' unsupported")
@@ -289,6 +289,19 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
                     raise _err(f"'strategy.sources[{i}].channel_id' "
                                f"must be a YouTube channel id (UC…)")
                 entry["channel_id"] = cid
+            elif stype == "api":
+                entry["url"] = str(
+                    s.get("url", "")).strip()
+                if not entry["url"]:
+                    raise _err(
+                        f"'strategy.sources[{i}].url' required")
+                if "source_id" in s and s["source_id"]:
+                    entry["source_id"] = str(
+                        s["source_id"]).strip()
+                if "page" in s and s["page"]:
+                    entry["page"] = str(s["page"]).strip()
+                if "csrf" in s:
+                    entry["csrf"] = bool(s["csrf"])
             elif stype in ("web", "news", "social.facebook",
                              "social.instagram", "social.x"):
                 # Query-driven sources (search + social): an

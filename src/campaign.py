@@ -6,7 +6,7 @@ from __future__ import annotations
 import yaml
 
 VALID_LINK_POLICIES = ("attach", "cta", "hide")
-VALID_SOURCE_TYPES = ("website",)  # rss/facebook/... later
+VALID_SOURCE_TYPES = ("website", "api")  # rss/facebook/... later
 
 
 def _err(path: str, msg: str) -> ValueError:

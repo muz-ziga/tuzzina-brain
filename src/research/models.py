@@ -259,7 +259,7 @@ class OpenAIResearchModel(ResearchModel):
             stats: dict = {}
             raw = complete_with_retry(
                 self._adapter, prompt, body_text,
-                temperature=0.2, max_tokens=1500, timeout=90,
+                temperature=0.2, max_tokens=4000, timeout=90,
                 validate=_check, task="research", stats=stats)
         except (TimeoutError, socket.timeout):
             raise ResearchError("model-timeout")

@@ -156,6 +156,7 @@ def _as_opportunity(raw: dict):
             facts=list(raw.get("facts") or []),
             source_item_ids=list(raw.get("source_item_ids") or []),
             content_format=str(raw.get("content_format") or "post"),
+            content_class=str(raw.get("content_class") or ""),
             media_intent=str(raw.get("media_intent") or "none"),
             audience=str(raw.get("audience") or ""),
             language=str(raw.get("language") or ""),
@@ -481,6 +482,90 @@ def run_analysis_stage(ctx: dict) -> dict:
                         else "ineligible")}
 
 
+def _text_guard(cfg: dict) -> dict | None:
+    """Opt-in, domain-agnostic text guard declared by the TEXT SKILL.
+
+    config.guard = {
+      mode: "block",
+      allowed_hosts: [...],
+      block_unsourced_urls: bool,
+      block_years: bool,
+      require_sourced_terms: [terms that must appear in inputs]
+    }
+    Absent/off keeps the exact historical text path. No campaign
+    name, domain or vocabulary is hardcoded here: every value is
+    the Skill's own data.
+    """
+    from skills.loader import get_skill
+    doc = get_skill("text", (cfg.get("skills") or {}).get("text"))
+    guard = (doc.get("config") or {}).get("guard")
+    if not isinstance(guard, dict) or guard.get("mode") != "block":
+        return None
+    out = {"allowed_hosts": [], "block_unsourced_urls": True,
+           "block_years": True, "require_sourced_terms": []}
+    hosts = guard.get("allowed_hosts")
+    if isinstance(hosts, list):
+        out["allowed_hosts"] = [str(h).strip().lower()
+                                for h in hosts
+                                if isinstance(h, str) and h.strip()]
+    for key in ("block_unsourced_urls", "block_years"):
+        if key in guard:
+            out[key] = bool(guard[key])
+    terms = guard.get("require_sourced_terms")
+    if isinstance(terms, list):
+        out["require_sourced_terms"] = [str(t).strip()
+                                        for t in terms
+                                        if isinstance(t, str) and t.strip()]
+    return out
+
+
+def _guard_violations(text: str, guard: dict, items: list,
+                      opportunity) -> list:
+    """Pure, generic check: every URL, year and declared term in
+    the generated text must be backed by the inputs given to the
+    text stage. Returns machine reasons only."""
+    import re as _re
+    from urllib.parse import urlparse as _urlparse
+    parts = []
+    for it in items or []:
+        for value in (getattr(it, "title", ""), getattr(it, "text", ""),
+                      getattr(it, "source_url", "")):
+            if isinstance(value, str) and value:
+                parts.append(value)
+    if opportunity is not None:
+        for value in (getattr(opportunity, "topic", ""),
+                      getattr(opportunity, "angle", ""),
+                      getattr(opportunity, "rationale", "")):
+            if isinstance(value, str) and value:
+                parts.append(value)
+        facts = getattr(opportunity, "facts", None)
+        if isinstance(facts, list):
+            parts.extend(f for f in facts if isinstance(f, str))
+    for it in items or []:
+        link = getattr(it, "source_url", "")
+        if isinstance(link, str) and link:
+            parts.append(link)
+    sourced = " ".join(parts)
+    out = []
+    hosts = guard.get("allowed_hosts") or []
+    urls = _re.findall(r"https?://[^\s<>\"\'،؛\)]+", text)
+    for url in urls:
+        host = (_urlparse(url).hostname or "").lower()
+        if hosts and host not in hosts and not any(
+                host.endswith("." + h) for h in hosts):
+            out.append("host-not-allowed:" + host)
+        if guard.get("block_unsourced_urls") and url not in sourced:
+            out.append("url-not-sourced")
+    if guard.get("block_years"):
+        for year in _re.findall(r"\b(?:19|20)\d{2}\b", text):
+            if year not in sourced:
+                out.append("year-not-sourced:" + year)
+    for term in guard.get("require_sourced_terms") or []:
+        if term in text and term not in sourced:
+            out.append("term-not-sourced:" + term)
+    return out
+
+
 def run_text_stage(ctx: dict) -> dict:
     """Text LLM via the exact shaping the pipeline uses
     (plan_generation -> shape_item_for_g2 -> generate). Pure
@@ -514,8 +599,30 @@ def run_text_stage(ctx: dict) -> dict:
         shaped = shape_item_for_g2(one or editorial_item_for(plan), plan)
         from g2.pipeline import normalize
         brand = cfg.get("brand") or {}
+        summary = normalize(shaped.text)
         text = ctx["text_gen"].generate(
-            shaped.title, normalize(shaped.text), brand, cfg)
+            shaped.title, summary, brand, cfg)
+        guard = _text_guard(cfg)
+        if guard:
+            violations = _guard_violations(
+                text, guard, items, opportunity)
+            if violations:
+                # One corrective retry with the violations named back
+                # as data, mirroring the analysis repeat gate. A second
+                # failure is terminal: no post can be built from text
+                # that invents unsourced material.
+                retry_summary = (
+                    summary + "\nGUARD REJECTION: "
+                    + "; ".join(violations[:12])
+                    + ". Rewrite using only the supplied inputs; "
+                    "never add years, links or names absent from them.")
+                text = ctx["text_gen"].generate(
+                    shaped.title, retry_summary, brand, cfg)
+                violations = _guard_violations(
+                    text, guard, items, opportunity)
+                if violations:
+                    raise ValueError(
+                        "text-guard-blocked: " + "; ".join(violations[:12]))
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
@@ -1065,7 +1172,8 @@ def run_execute_stage(ctx: dict) -> dict:
         if not dry_run and ctx.get("state_store") == "tuzzina" and \
                 opportunity is not None:
             _record_published_topic(
-                client, opportunity.topic, opportunity.angle)
+                client, opportunity.topic, opportunity.angle,
+                getattr(opportunity, "content_class", ""))
         if post_ids:
             # Published = gone from the queue; whatever remains
             # there is still unpublished by definition.

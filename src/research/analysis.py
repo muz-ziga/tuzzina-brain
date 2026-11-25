@@ -56,6 +56,7 @@ class ContentOpportunity:
     facts: list = field(default_factory=list)  # [str], FACT-kind only
     source_item_ids: list = field(default_factory=list)
     content_format: str = "post"
+    content_class: str = ""
     media_intent: str = "none"
     audience: str = ""
     language: str = ""
@@ -342,7 +343,8 @@ class OpenAIAnalysisModel(AnalysisModel):
             "exactly: {\"eligible\": bool, \"topic\": str, \"angle\": "
             "str, \"rationale\": str, \"facts\": [str], "
             "\"source_item_ids\": [ids from input], "
-            "\"content_format\": \"post\", \"media_intent\": "
+            "\"content_format\": \"post\", \"content_class\": str, "
+            "\"media_intent\": "
             "\"none\"|\"image\"|\"video\", \"audience\": str, "
             "\"language\": str, \"priority\": "
             "\"low\"|\"normal\"|\"high\", \"confidence\": "
@@ -377,6 +379,41 @@ class OpenAIAnalysisModel(AnalysisModel):
         # engine to enforce it deterministically too (see the gate
         # below). The loader validates the value fail-closed.
         repetition_mode = skill_doc.get("repetition", "off")
+        # Generic content-class rotation, opt-in per Skill:
+        # config.rotation = {mode: "cycle", classes: ["artist", ...]}
+        # The required class is derived deterministically from the
+        # published history, so a campaign can rotate artist / track /
+        # album / identity / capability without any campaign logic in
+        # the engine.
+        skill_config = skill_doc.get("config") or {}
+        rotation = skill_config.get("rotation") if isinstance(
+            skill_config, dict) else None
+        rotation_classes: list = []
+        required_class = ""
+        if isinstance(rotation, dict) and rotation.get("mode") == "cycle":
+            rotation_classes = [
+                str(c).strip() for c in (rotation.get("classes") or [])
+                if isinstance(c, str) and c.strip()]
+        if rotation_classes:
+            recent_classes = []
+            recent_entries = policy.get("recent_topics") \
+                if isinstance(policy, dict) else None
+            for entry in (recent_entries or []):
+                if not isinstance(entry, dict):
+                    continue
+                c = str(entry.get("class") or "").strip()
+                if c in rotation_classes:
+                    recent_classes.append(c)
+            last_class = recent_classes[0] if recent_classes else ""
+            idx = (rotation_classes.index(last_class) + 1) \
+                if last_class in rotation_classes else 0
+            required_class = rotation_classes[idx % len(rotation_classes)]
+            context += (
+                "\n\nREQUIRED CONTENT CLASS for this cycle: %s. "
+                "The output MUST set content_class to this exact value "
+                "and choose an item of this class from the input. "
+                "Allowed values: %s." % (
+                    required_class, ", ".join(rotation_classes)))
         # Everything below is VARIABLE research data (summary,
         # findings, published history, parked material), appended
         # after the policy and the Skill.
@@ -476,6 +513,27 @@ class OpenAIAnalysisModel(AnalysisModel):
             return self._validate(raw, known, truncated, contract_id)
 
         opp = _select()
+        # Deterministic class gate (same opt-in block as above): the
+        # model's class must equal the required rotation entry. One
+        # corrective retry, then a clean ineligible stop.
+        if required_class:
+            if opp.eligible and opp.content_class != required_class:
+                context += (
+                    "\n\nREJECTED SELECTION (deterministic class check): "
+                    "required content_class=%r but the selection declared "
+                    "%r. Choose an item of the required class and set "
+                    "content_class to it." % (
+                        required_class, opp.content_class))
+                opp = _select()
+                if not opp.eligible or \
+                        opp.content_class != required_class:
+                    meta = dict(opp.meta)
+                    meta["reason"] = "class-mismatch"
+                    meta["required_class"] = required_class
+                    meta["rejected_class"] = opp.content_class
+                    return replace(
+                        opp, eligible=False, facts=[], confidence="low",
+                        priority="low", meta=meta)
         # Deterministic repeat gate, opt-in per Skill (see
         # config.repetition above). A Skill that states a repetition
         # policy only in text relies on the model to honour it; one
@@ -559,6 +617,9 @@ class OpenAIAnalysisModel(AnalysisModel):
             if not isinstance(constraints, list) or \
                     not all(isinstance(c, str) for c in constraints):
                 raise AnalysisError("invalid-output")
+            content_class = data.get("content_class", "")
+            if not isinstance(content_class, str):
+                raise AnalysisError("invalid-output")
         except AnalysisError:
             raise
         except Exception:
@@ -575,7 +636,8 @@ class OpenAIAnalysisModel(AnalysisModel):
             rationale=data["rationale"].strip()[:500],
             facts=[f.strip()[:500] for f in facts] if eligible else [],
             source_item_ids=list(ids),
-            content_format=fmt, media_intent=media,
+            content_format=fmt, content_class=content_class.strip()[:40],
+            media_intent=media,
             audience=data["audience"].strip()[:120],
             language=data["language"].strip()[:16],
             priority=prio, confidence=conf if eligible else "low",

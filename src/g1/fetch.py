@@ -128,7 +128,9 @@ def _opener():
 def safe_get(url: str, *, timeout: int = 25,
              max_bytes: int = 1_000_000,
              allowed_content_types: tuple | None = None,
-             user_agent: str = "tuzzina-brain/0.1") -> tuple:
+             user_agent: str = "tuzzina-brain/0.1",
+             headers: dict | None = None,
+             opener: object | None = None) -> tuple:
     """GET one URL through the full boundary. Returns
     (body_bytes, final_url, content_type). allowed types are
     substring matched case-insensitively; None skips the check.
@@ -139,9 +141,13 @@ def safe_get(url: str, *, timeout: int = 25,
         max_bytes = 1_000_000
     p = check_url(url)
     resolve_host(p.hostname or "")
-    opener = _opener()
-    req = urllib.request.Request(url, headers={"User-Agent":
-                                               user_agent})
+    opener = opener or _opener()
+    hdrs = {"User-Agent": user_agent}
+    if headers:
+        for k, v in headers.items():
+            if isinstance(k, str) and isinstance(v, str):
+                hdrs[k] = v
+    req = urllib.request.Request(url, headers=hdrs)
     try:
         with opener.open(req, timeout=timeout) as r:
             final = ""

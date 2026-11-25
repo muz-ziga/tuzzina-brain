@@ -35,6 +35,7 @@ from g1.rss import to_source_item
 from g1.rss import canonical_url as _canonical_url
 from g1.rss import content_hash as _content_hash
 from g1.website import WebsiteAdapter
+from g1.api import ApiAdapter
 from g1.youtube import YouTubeFeedAdapter, youtube_feed_url
 from research.monitor import (NEW, UPDATED, CollectionResult,
                               ClassifiedItem, MemoryStateStore,
@@ -161,6 +162,33 @@ def _collect_website(source: dict, n: int, *, store,
     return items, CollectionResult(source_id, out, now, "", pending)
 
 
+def _collect_api(source: dict, n: int, *, store,
+                 now: str):
+    """JSON endpoints through the SAME classify step as websites.
+    Identity is the declared official page (or endpoint URL);
+    the hash covers the flattened JSON text."""
+    url = (source.get("url") or "").strip()
+    source_id = (source.get("source_id") or "").strip() or \
+        str(source.get("page") or "").strip() or url
+    res = ApiAdapter().extract(url, n, config=source)
+    state = store.load(source_id)
+    candidates = []
+    for it in res.items:
+        ident = _canonical_url(it.source_id or "") or \
+            it.source_id or url
+        candidates.append({
+            "carrier": it, "item_id": ident,
+            "content_hash": _content_hash(it.title or "",
+                                          it.text or ""),
+            "published_at": it.published_at or ""})
+    classified, pending = classify_candidates(source_id, candidates,
+                                              state, now)
+    items = [carrier for carrier, kind in classified if kind == NEW]
+    out = [ClassifiedItem(carrier, kind)
+           for carrier, kind in classified]
+    return items, CollectionResult(source_id, out, now, "", pending)
+
+
 def _collect_search(source: dict, n: int, *, store,
                     now: str):
     """Web/news queries through the SAME classify step as feeds
@@ -256,6 +284,14 @@ def collect_all_sources(sources, store, now: str, out,
             items, res = _collect_website(source, n, store=store,
                                           now=now)
             rep = SourceReport("website", source["url"].strip(),
+                               True, "", len(res.items), len(items))
+            pending.append(res)
+        elif stype == "api":
+            if not (source.get("url") or "").strip():
+                raise ValueError("api-source-missing-url")
+            items, res = _collect_api(source, n, store=store,
+                                      now=now)
+            rep = SourceReport("api", source["url"].strip(),
                                True, "", len(res.items), len(items))
             pending.append(res)
         elif stype in ("web", "news", "social.facebook",

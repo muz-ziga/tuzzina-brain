@@ -129,13 +129,15 @@ def _recent_topics(client) -> list:
         if not topic:
             continue
         out.append({"topic": topic[:200],
-                    "angle": str(entry.get("angle") or "")[:200]})
+                    "angle": str(entry.get("angle") or "")[:200],
+                    "class": str(entry.get("class") or "")[:40]})
         if len(out) >= RECENT_TOPICS_SHOWN:
             break
     return out
 
 
-def _record_published_topic(client, topic: str, angle: str) -> None:
+def _record_published_topic(client, topic: str, angle: str,
+                            content_class: str = "") -> None:
     """Append one published topic to the durable novelty ledger
     (newest first, capped). Best-effort: never fails the run;
     expiry of interest is implicit in the cap."""
@@ -151,6 +153,7 @@ def _record_published_topic(client, topic: str, angle: str) -> None:
                          if isinstance(e, dict)]
         entry = {"topic": str(topic or "").strip()[:200],
                  "angle": str(angle or "").strip()[:200],
+                 "class": str(content_class or "").strip()[:40],
                  "at": datetime.now(timezone.utc).isoformat()}
         if not entry["topic"]:
             return
@@ -586,7 +589,8 @@ def _main(argv=None) -> int:
     if not args.dry_run and args.state_store == "tuzzina" and \
             out.opportunity is not None:
         _record_published_topic(
-            client, out.opportunity.topic, out.opportunity.angle)
+            client, out.opportunity.topic, out.opportunity.angle,
+            getattr(out.opportunity, "content_class", ""))
     _release_all()
     _emit_result(result)
     return 0
