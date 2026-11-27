@@ -680,19 +680,19 @@ class AnalysisClassGateTest(unittest.TestCase):
             self.calls += 1
             return self.outputs.pop(0)
 
-    def _body(self, content_class):
+    def _body(self, content_class, ids=None):
         return json.dumps({
             "eligible": True, "topic": "About", "angle": "Archive angle",
             "rationale": "R", "facts": ["fact"],
-            "source_item_ids": ["about"], "content_format": "post",
+            "source_item_ids": ids or ["about"], "content_format": "post",
             "content_class": content_class, "media_intent": "none",
             "audience": "a", "language": "ar", "priority": "normal",
             "confidence": "high", "constraints": [],
         })
 
-    def _research(self):
+    def _research(self, iid="about"):
         finding = Finding(statement="About", kind="fact",
-                          confidence="high", item_ids=["about"],
+                          confidence="high", item_ids=[iid],
                           excerpt="About")
         return ResearchResult(
             summary="About", findings=[finding], topics=["About"],
@@ -729,6 +729,35 @@ class AnalysisClassGateTest(unittest.TestCase):
                                          content_class="identity")])
         self.assertEqual(out.content_class, "identity")
         self.assertEqual(adapter.calls, 2)
+
+
+    def test_wheel_item_repeat_is_blocked(self):
+        policy = self._policy()
+        policy["wheel_repeat"] = "item_ids"
+        policy["recent_topics"] = [
+            {"topic": "old", "angle": "old", "item_ids": ["track/39"]}]
+        adapter = self.Adapter([self._body(
+            "identity", ids=["track/39"])])
+        out = OpenAIAnalysisModel(adapter=adapter).analyze(
+            self._research("track/39"), policy,
+            [source_item(item_id="track/39",
+                         source_id="track/39", source_url="track/39")])
+        self.assertFalse(out.eligible)
+        self.assertEqual(out.meta["reason"], "repeated-item")
+
+    def test_wheel_new_item_is_not_blocked_by_word_overlap(self):
+        policy = self._policy()
+        policy["wheel_repeat"] = "item_ids"
+        policy["recent_topics"] = [
+            {"topic": "ألبوم دونبايا", "angle": "قديم",
+             "item_ids": ["old-item"]}]
+        adapter = self.Adapter([self._body(
+            "identity", ids=["new-item"])])
+        out = OpenAIAnalysisModel(adapter=adapter).analyze(
+            self._research("new-item"), policy,
+            [source_item(item_id="new-item",
+                         source_id="new-item", source_url="new-item")])
+        self.assertTrue(out.eligible)
 
 
 class WheelAnalysisStageTest(unittest.TestCase):

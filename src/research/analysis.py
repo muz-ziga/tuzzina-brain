@@ -549,6 +549,27 @@ class OpenAIAnalysisModel(AnalysisModel):
                     return replace(
                         opp, eligible=False, facts=[], confidence="low",
                         priority="low", meta=meta)
+        if str(policy.get("wheel_repeat") or "") == "item_ids":
+            # Wheel path: the selected item is already the least recently
+            # featured one. Block only an exact item repeat; word overlap
+            # overblocks new works that share generic words with old
+            # campaign topics.
+            used = set()
+            for entry in (policy.get("recent_topics") or []):
+                if not isinstance(entry, dict):
+                    continue
+                for raw in (entry.get("item_ids") or []):
+                    value = str(raw or "").strip()
+                    if value:
+                        used.add(value)
+            if used and any(str(i or "").strip() in used
+                            for i in (opp.source_item_ids or [])):
+                meta = dict(opp.meta)
+                meta["reason"] = "repeated-item"
+                return replace(
+                    opp, eligible=False, facts=[], confidence="low",
+                    priority="low", meta=meta)
+            return opp
         # Deterministic repeat gate, opt-in per Skill (see
         # config.repetition above). A Skill that states a repetition
         # policy only in text relies on the model to honour it; one

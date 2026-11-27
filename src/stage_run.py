@@ -467,6 +467,11 @@ def run_analysis_stage(ctx: dict) -> dict:
                 if str(x).strip()
             ] or [cfg["wheel_class"]]
             cfg["wheel_plan"] = wheel
+            # The wheel already picks the least-recently-featured item,
+            # and the ledger now carries item_ids. Repetition at word
+            # level overblocks new works that share generic words with
+            # old topics, so use item identity instead.
+            cfg["wheel_repeat"] = "item_ids"
         opportunity = ctx["analysis_model"].analyze(
             research, cfg, items)
         if isinstance(wheel, dict):
