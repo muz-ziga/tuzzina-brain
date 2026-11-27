@@ -61,6 +61,9 @@ def _finalize(integration_id, channel_meta, brand, hashtags, links_policy,
         # image tool with every request.
         "image": dict(project_cfg.get("image") or {}),
         "overlay_layer": str(project_cfg.get("overlay_layer") or ""),
+        # Campaign-owned content-wheel declaration. The engine only
+        # reads the pattern/classes; no campaign vocabulary lives here.
+        "wheel": dict(project_cfg.get("wheel") or {}),
         # The campaign's other channels, carried verbatim: the run
         # generates once and the execute stage publishes the same
         # content to each target through its own platform adapter.

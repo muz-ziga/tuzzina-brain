@@ -22,7 +22,8 @@ TIMEOUT = 25
 MAX_BYTES = 1_000_000
 
 _IMG = re.compile(r"https?://[^\s\"'<>]+?\.(?:png|jpe?g|webp|gif)(?:\?[^\s\"'<>]*)?", re.I)
-_TITLE_KEYS = ("title", "name", "album", "track", "artist", "heading")
+_TITLE_KEYS = ("title", "name", "heading")
+_GENERIC_TEXT_KEYS = ("name", "title", "description", "bio", "summary")
 _TEXT_KEYS = ("text", "description", "summary", "body", "content", "bio")
 _DATE_KEYS = ("published_at", "release_date", "created_at", "updated_at", "date")
 
@@ -119,11 +120,12 @@ class ApiAdapter(SourceAdapter):
         source_id = page or url
 
         # Essential fields only: the research model cannot carry
-        # 4000 chars of metadata. Every field here is a conventional
-        # key any platform JSON may use; absent keys simply omit.
-        essential_keys = ("name", "title", "album", "track", "artist",
-                          "artists", "release_date", "description", "bio",
-                          "summary", "id", "tracks_count")
+        # 4000 chars of metadata. The campaign may declare its own
+        # conventional keys; absent keys simply omit.
+        configured_keys = config.get("text_keys")
+        essential_keys = tuple(configured_keys) if isinstance(
+            configured_keys, list) and configured_keys else \
+            _GENERIC_TEXT_KEYS
         # The page URL is the item identity the research model must
         # quote in item_ids. Put it first so the model can see it.
         essential: list = [f"source_id: {source_url}"]
@@ -132,7 +134,11 @@ class ApiAdapter(SourceAdapter):
         title = ""
         published = ""
         found_titles = []
-        _find_key(data, _TITLE_KEYS, found_titles)
+        configured_titles = config.get("title_keys")
+        title_keys = tuple(configured_titles) if isinstance(
+            configured_titles, list) and configured_titles else \
+            _TITLE_KEYS
+        _find_key(data, title_keys, found_titles)
         if found_titles:
             title = found_titles[0][:200]
         found_dates = []

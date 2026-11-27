@@ -389,12 +389,19 @@ class OpenAIAnalysisModel(AnalysisModel):
         rotation = skill_config.get("rotation") if isinstance(
             skill_config, dict) else None
         rotation_classes: list = []
-        required_class = ""
-        if isinstance(rotation, dict) and rotation.get("mode") == "cycle":
+        # A caller (the content wheel) may decide the class before the
+        # model runs. That is a campaign-level decision, and it takes
+        # precedence over the Skill's own rotation; the Skill still
+        # owns the meaning of each class and the editorial rules.
+        required_class = str(
+            policy.get("wheel_class") or "").strip() \
+            if isinstance(policy, dict) else ""
+        if not required_class and isinstance(rotation, dict) and \
+                rotation.get("mode") == "cycle":
             rotation_classes = [
                 str(c).strip() for c in (rotation.get("classes") or [])
                 if isinstance(c, str) and c.strip()]
-        if rotation_classes:
+        if not required_class and rotation_classes:
             recent_classes = []
             recent_entries = policy.get("recent_topics") \
                 if isinstance(policy, dict) else None
@@ -408,12 +415,19 @@ class OpenAIAnalysisModel(AnalysisModel):
             idx = (rotation_classes.index(last_class) + 1) \
                 if last_class in rotation_classes else 0
             required_class = rotation_classes[idx % len(rotation_classes)]
+        if required_class:
+            accepted = [str(x).strip() for x in
+                        (policy.get("wheel_accept") or [])
+                        if str(x).strip()] \
+                if isinstance(policy, dict) else []
+            if not accepted:
+                accepted = [required_class]
+            allowed = ", ".join(accepted)
             context += (
                 "\n\nREQUIRED CONTENT CLASS for this cycle: %s. "
-                "The output MUST set content_class to this exact value "
-                "and choose an item of this class from the input. "
-                "Allowed values: %s." % (
-                    required_class, ", ".join(rotation_classes)))
+                "The output MUST set content_class to one of these exact "
+                "values and choose an item of this class from the input. "
+                "Allowed values: %s." % (required_class, allowed))
         # Everything below is VARIABLE research data (summary,
         # findings, published history, parked material), appended
         # after the policy and the Skill.
@@ -514,22 +528,23 @@ class OpenAIAnalysisModel(AnalysisModel):
 
         opp = _select()
         # Deterministic class gate (same opt-in block as above): the
-        # model's class must equal the required rotation entry. One
+        # model's class must be one of the required classes. One
         # corrective retry, then a clean ineligible stop.
         if required_class:
-            if opp.eligible and opp.content_class != required_class:
+            if opp.eligible and opp.content_class not in accepted:
                 context += (
                     "\n\nREJECTED SELECTION (deterministic class check): "
-                    "required content_class=%r but the selection declared "
-                    "%r. Choose an item of the required class and set "
-                    "content_class to it." % (
-                        required_class, opp.content_class))
+                    "required content_class one of %r but the selection "
+                    "declared %r. Choose an item of the required class and "
+                    "set content_class to one of %r." % (
+                        accepted, opp.content_class, accepted))
                 opp = _select()
                 if not opp.eligible or \
-                        opp.content_class != required_class:
+                        opp.content_class not in accepted:
                     meta = dict(opp.meta)
                     meta["reason"] = "class-mismatch"
                     meta["required_class"] = required_class
+                    meta["accepted_classes"] = list(accepted)
                     meta["rejected_class"] = opp.content_class
                     return replace(
                         opp, eligible=False, facts=[], confidence="low",

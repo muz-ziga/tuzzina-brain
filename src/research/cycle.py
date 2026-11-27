@@ -28,7 +28,7 @@ No cron, no persistence backend, no network beyond collectors,
 no LLM except the injected model roles (tests use Mocks).
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace, asdict
 
 from contracts import SourceItem
 from g1.rss import to_source_item
@@ -36,6 +36,7 @@ from g1.rss import canonical_url as _canonical_url
 from g1.rss import content_hash as _content_hash
 from g1.website import WebsiteAdapter
 from g1.api import ApiAdapter
+from g1.api_list import ApiListAdapter
 from g1.youtube import YouTubeFeedAdapter, youtube_feed_url
 from research.monitor import (NEW, UPDATED, CollectionResult,
                               ClassifiedItem, MemoryStateStore,
@@ -145,8 +146,11 @@ def _collect_website(source: dict, n: int, *, store,
     source_id = (source.get("source_id") or "").strip() or url
     res = WebsiteAdapter().extract(url, n)
     state = store.load(source_id)
+    cls = str(source.get("class") or "").strip()
     candidates = []
     for it in res.items:
+        if cls:
+            it = replace(it, content_class=cls)
         ident = _canonical_url(it.source_id or "") or \
             it.source_id or url
         candidates.append({
@@ -172,8 +176,11 @@ def _collect_api(source: dict, n: int, *, store,
         str(source.get("page") or "").strip() or url
     res = ApiAdapter().extract(url, n, config=source)
     state = store.load(source_id)
+    cls = str(source.get("class") or "").strip()
     candidates = []
     for it in res.items:
+        if cls:
+            it = replace(it, content_class=cls)
         ident = _canonical_url(it.source_id or "") or \
             it.source_id or url
         candidates.append({
@@ -187,6 +194,62 @@ def _collect_api(source: dict, n: int, *, store,
     out = [ClassifiedItem(carrier, kind)
            for carrier, kind in classified]
     return items, CollectionResult(source_id, out, now, "", pending)
+
+
+def _collect_api_list(source: dict, n: int, *, store,
+                      now: str):
+    """Paginated newest-first JSON list.
+
+    Discovery is incremental: known ids and the last scanned timestamp
+    stop the adapter after the page that crosses the old boundary. The
+    full catalogue, however, must stay selectable for LRU, so every
+    seen item's compact summary is cached in the monitor state and the
+    CollectionResult carries the cached catalogue alongside this
+    cycle's rows. A first run (or a state predating the cache) fetches
+    the configured pages and rebuilds it."""
+    url = (source.get("url") or "").strip()
+    source_id = (source.get("source_id") or "").strip() or url
+    state = store.load(source_id)
+    cache_ready = bool(state.seen) and all(
+        isinstance(entry, dict) and isinstance(entry.get("item"), dict)
+        for entry in state.seen.values())
+    known_ids = set(state.seen) if cache_ready else set()
+    cursor = state.last_seen_published_at if cache_ready else ""
+    res = ApiListAdapter().extract(
+        url, n, config=source, known_ids=known_ids, cursor=cursor)
+    candidates = []
+    current = {}
+    for it in res.items:
+        ident = _canonical_url(it.source_id or "") or \
+            it.source_id or it.source_url or url
+        current[ident] = it
+        candidates.append({
+            "carrier": it, "item_id": ident,
+            "content_hash": _content_hash(it.title or "",
+                                          it.text or ""),
+            "published_at": it.published_at or ""})
+    classified, pending = classify_candidates(source_id, candidates,
+                                              state, now)
+    for ident, item in current.items():
+        entry = pending.seen.get(ident)
+        if isinstance(entry, dict):
+            entry["item"] = asdict(item)
+    catalogue = []
+    for entry in pending.seen.values():
+        summary = entry.get("item") if isinstance(entry, dict) else None
+        if not isinstance(summary, dict):
+            continue
+        try:
+            catalogue.append(SourceItem(**summary))
+        except Exception:
+            continue
+    catalogue.sort(key=lambda it: str(
+        getattr(it, "published_at", "") or ""), reverse=True)
+    items = [carrier for carrier, kind in classified if kind == NEW]
+    out = [ClassifiedItem(carrier, kind)
+           for carrier, kind in classified]
+    return items, CollectionResult(
+        source_id, out, now, "", pending, catalogue=catalogue)
 
 
 def _collect_search(source: dict, n: int, *, store,
@@ -292,6 +355,14 @@ def collect_all_sources(sources, store, now: str, out,
             items, res = _collect_api(source, n, store=store,
                                       now=now)
             rep = SourceReport("api", source["url"].strip(),
+                               True, "", len(res.items), len(items))
+            pending.append(res)
+        elif stype == "api-list":
+            if not (source.get("url") or "").strip():
+                raise ValueError("api-list-source-missing-url")
+            items, res = _collect_api_list(source, n, store=store,
+                                            now=now)
+            rep = SourceReport("api-list", source["url"].strip(),
                                True, "", len(res.items), len(items))
             pending.append(res)
         elif stype in ("web", "news", "social.facebook",

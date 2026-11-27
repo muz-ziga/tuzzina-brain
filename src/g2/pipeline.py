@@ -128,11 +128,20 @@ def build_package(item: SourceItem, brand: dict, lang_cfg: dict,
     from g2.composition import composition_from_policy
     composition = composition_from_policy(policy)
     if composition is not None:
+        # Per-class mode: the wheel knows whether this item is a work
+        # (use its official artwork) or an identity page (brand card).
+        # The mapping is campaign data; the app still receives one
+        # valid mode, so no app-side branch is added.
+        mode_by_class = composition.get("modeByClass")
+        content_class = str(getattr(item, "content_class", "") or "")
+        if isinstance(mode_by_class, dict) and content_class in mode_by_class:
+            composition = dict(composition)
+            composition["mode"] = mode_by_class[content_class]
         media.append({
             "kind": "cover-card",
             "composition": composition,
             "source": item.images[0] if item.images else "",
-            "prompt": "cover-blur-card",
+            "prompt": str(composition.get("mode") or "cover-blur-card"),
         })
     elif item.images:
         media.append({"kind": "url", "url": item.images[0],

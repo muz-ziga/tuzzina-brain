@@ -276,6 +276,7 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
                 raise _err(f"'strategy.sources[{i}]' must be a mapping")
             stype = s.get("type")
             if stype not in ("website", "rss", "youtube", "api",
+                             "api-list",
                              "web", "news", "social.facebook",
                              "social.instagram", "social.x"):
                 raise _err(f"'strategy.sources[{i}].type' unsupported")
@@ -289,7 +290,7 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
                     raise _err(f"'strategy.sources[{i}].channel_id' "
                                f"must be a YouTube channel id (UC…)")
                 entry["channel_id"] = cid
-            elif stype == "api":
+            elif stype in ("api", "api-list"):
                 entry["url"] = str(
                     s.get("url", "")).strip()
                 if not entry["url"]:
@@ -302,6 +303,20 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
                     entry["page"] = str(s["page"]).strip()
                 if "csrf" in s:
                     entry["csrf"] = bool(s["csrf"])
+                if stype == "api-list":
+                    template = str(
+                        s.get("page_template", "")).strip()
+                    if not template or "{id}" not in template:
+                        raise _err(
+                            f"'strategy.sources[{i}].page_template' "
+                            f"must contain {{id}}")
+                    entry["page_template"] = template[:500]
+                    pages = s.get("max_pages", 1)
+                    if not isinstance(pages, int) or pages < 1:
+                        raise _err(
+                            f"'strategy.sources[{i}].max_pages' "
+                            f"must be int >= 1")
+                    entry["max_pages"] = int(pages)
             elif stype in ("web", "news", "social.facebook",
                              "social.instagram", "social.x"):
                 # Query-driven sources (search + social): an
@@ -329,6 +344,13 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
                 if not str(s.get("url", "")).strip():
                     raise _err(f"'strategy.sources[{i}].url' required")
                 entry["url"] = str(s.get("url")).strip()
+            cls = s.get("class")
+            if cls is not None:
+                if not isinstance(cls, str) or not cls.strip() \
+                        or len(cls.strip()) > 60:
+                    raise _err(f"'strategy.sources[{i}].class' "
+                               f"must be a non-empty string ≤ 60 chars")
+                entry["class"] = cls.strip()
             sid = s.get("source_id")
             if sid is not None:
                 if not isinstance(sid, str) or not sid.strip() \
@@ -344,6 +366,19 @@ def _from_yaml_dict(cfg: dict) -> ChannelStrategy:
                 entry["poll_minutes"] = int(poll)
             if s.get("enabled") is False:
                 entry["enabled"] = False
+            if s.get("index") is True:
+                entry["index"] = True
+            for key in ("text_keys", "nested_text_keys", "title_keys"):
+                if key not in s or s[key] is None:
+                    continue
+                value = s[key]
+                if not isinstance(value, list) or len(value) > 100 \
+                        or not all(isinstance(x, str) and x.strip() and
+                                   len(x) <= 100 for x in value):
+                    raise _err(
+                        f"'strategy.sources[{i}].{key}' must be a list "
+                        f"of non-empty strings ≤ 100 chars")
+                entry[key] = [x.strip() for x in value]
             out.append(entry)
         return out
 

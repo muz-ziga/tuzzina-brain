@@ -1336,7 +1336,8 @@ class LegacyOutcomeCase(unittest.TestCase):
         client = Client()
         from run_cycle import _recent_topics
         self.assertEqual(_recent_topics(client),
-                         [{"topic": "Old topic", "angle": "Old angle"}])
+                         [{"topic": "Old topic", "angle": "Old angle",
+                           "class": ""}])
 
         opportunity = {"eligible": True, "topic": "Evergreen topic",
                        "angle": "Angle", "rationale": "R",

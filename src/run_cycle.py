@@ -105,10 +105,12 @@ RECENT_TOPICS_SHOWN = 10
 PUBLISHED_TOPICS_CAP = 30
 
 
-def _recent_topics(client) -> list:
-    """Load newest-first [{topic, angle}] from the durable novelty
-    ledger. Best-effort read-only helper: transport failure means
-    an empty list (no novelty signal), never a failed run."""
+def _recent_topics(client, limit: int = RECENT_TOPICS_SHOWN) -> list:
+    """Load newest-first [{topic, angle, class, ...}] from the durable
+    novelty ledger. Best-effort read-only helper: transport failure means
+    an empty list (no novelty signal), never a failed run. Optional
+    wheel fields are included only when the ledger actually carries
+    them, so historical rows keep their exact shape."""
     try:
         row = client.get_research_state(PUBLISHED_TOPICS_SOURCE)
     except Exception:
@@ -128,16 +130,37 @@ def _recent_topics(client) -> list:
         topic = str(entry.get("topic") or "").strip()
         if not topic:
             continue
-        out.append({"topic": topic[:200],
-                    "angle": str(entry.get("angle") or "")[:200],
-                    "class": str(entry.get("class") or "")[:40]})
-        if len(out) >= RECENT_TOPICS_SHOWN:
+        item = {"topic": topic[:200],
+                "angle": str(entry.get("angle") or "")[:200],
+                "class": str(entry.get("class") or "")[:40]}
+        ids = entry.get("item_ids")
+        if isinstance(ids, list):
+            item["item_ids"] = [str(i)[:500] for i in ids
+                                if str(i).strip()]
+        state = str(entry.get("state") or "").strip()
+        if state:
+            item["state"] = state[:20]
+        slot = entry.get("wheel_slot")
+        if isinstance(slot, int) and not isinstance(slot, bool):
+            item["wheel_slot"] = slot
+        bucket = str(entry.get("wheel_bucket") or "").strip()
+        if bucket:
+            item["wheel_bucket"] = bucket[:20]
+        at = str(entry.get("at") or "").strip()
+        if at:
+            item["at"] = at
+        out.append(item)
+        if len(out) >= max(1, int(limit)):
             break
     return out
 
 
 def _record_published_topic(client, topic: str, angle: str,
-                            content_class: str = "") -> None:
+                            content_class: str = "",
+                            item_ids: list | None = None,
+                            state: str = "",
+                            wheel_slot: int | None = None,
+                            wheel_bucket: str = "") -> None:
     """Append one published topic to the durable novelty ledger
     (newest first, capped). Best-effort: never fails the run;
     expiry of interest is implicit in the cap."""
@@ -155,6 +178,18 @@ def _record_published_topic(client, topic: str, angle: str,
                  "angle": str(angle or "").strip()[:200],
                  "class": str(content_class or "").strip()[:40],
                  "at": datetime.now(timezone.utc).isoformat()}
+        ids = [str(i).strip()[:500] for i in (item_ids or [])
+               if str(i).strip()]
+        if ids:
+            entry["item_ids"] = ids
+        state = str(state or "").strip().lower()
+        if state:
+            entry["state"] = state[:20]
+        if isinstance(wheel_slot, int) and not isinstance(wheel_slot, bool):
+            entry["wheel_slot"] = wheel_slot
+        bucket = str(wheel_bucket or "").strip().lower()
+        if bucket:
+            entry["wheel_bucket"] = bucket[:20]
         if not entry["topic"]:
             return
         client.save_research_state(
@@ -446,7 +481,8 @@ def _main(argv=None) -> int:
     # so Analysis can avoid repeating them. Durable runs only;
     # memory/dry runs simply carry no history.
     if not args.dry_run and args.state_store == "tuzzina":
-        cfg["recent_topics"] = _recent_topics(client)
+        cfg["recent_topics"] = _recent_topics(
+            client, PUBLISHED_TOPICS_CAP)
 
     def _video_resolve(req):
         return client.generate_video(

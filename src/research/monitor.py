@@ -86,6 +86,10 @@ class CollectionResult:
     checked_at: str = ""
     error: str = ""
     _pending: object = None  # SourceState staged for commit
+    # Optional cached catalogue carriers for newest-first list sources.
+    # Generic list sources fill this so LRU can see items beyond the
+    # current incremental page. Empty for every legacy source.
+    catalogue: list = field(default_factory=list)
 
     def new_items(self) -> list:
         return [c.item for c in self.items if c.kind == NEW]

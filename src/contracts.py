@@ -39,6 +39,10 @@ class SourceItem:
     discovered_at: str = ""
     capability: str = ""
     author: str = ""
+    # Content-wheel class declared by the source or the catalogue row
+    # (artist / album / track / identity / ...). Empty means the item
+    # predates the wheel and behaves exactly as before.
+    content_class: str = ""
 
 
 @dataclass

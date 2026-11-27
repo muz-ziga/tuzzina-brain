@@ -700,8 +700,8 @@ class PublishedTopicsCase(unittest.TestCase):
 
         out = _recent_topics(C())
         self.assertEqual(out, [
-            {"topic": "Loudness", "angle": "LUFS"},
-            {"topic": "Stereo", "angle": ""},
+            {"topic": "Loudness", "angle": "LUFS", "class": ""},
+            {"topic": "Stereo", "angle": "", "class": ""},
         ])
 
     def test_load_transport_failure_is_empty(self):

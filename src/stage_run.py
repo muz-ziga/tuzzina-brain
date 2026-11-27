@@ -37,6 +37,7 @@ import json
 import os
 import sys
 import uuid
+from dataclasses import replace
 
 STAGE_ORDER = ("research", "analysis", "text", "prompt", "execute")
 
@@ -118,7 +119,8 @@ def _as_source_item(raw: dict):
                               ("text", ""), ("images", []),
                               ("links", []), ("hashtags", []),
                               ("published_at", ""), ("platform", ""),
-                              ("item_id", ""), ("content_hash", ""))})
+                              ("item_id", ""), ("content_hash", ""),
+                              ("content_class", ""))})
     except Exception as e:
         raise ValueError(f"stage-item-invalid: {e}")
 
@@ -233,8 +235,9 @@ def _stage_base(args, run_id: str) -> dict:
     # missing it, so the decision stage saw no history at all. Pure
     # read, best-effort (never fails a run).
     try:
-        from run_cycle import _recent_topics
-        cfg["recent_topics"] = _recent_topics(client)
+        from run_cycle import _recent_topics, PUBLISHED_TOPICS_CAP
+        cfg["recent_topics"] = _recent_topics(
+            client, PUBLISHED_TOPICS_CAP)
     except Exception:
         cfg["recent_topics"] = []
     return {"campaign": campaign, "client": client, "store": store,
@@ -454,8 +457,22 @@ def run_analysis_stage(ctx: dict) -> dict:
         # legacy path passes in-process).
         research = _as_research_result(ctx.get("research") or {})
         items = [_as_source_item(r) for r in (ctx.get("items") or [])]
+        wheel = (research.meta or {}).get("wheel") \
+            if isinstance(research.meta, dict) else None
+        if isinstance(wheel, dict) and str(wheel.get("class") or "").strip():
+            cfg = dict(cfg)
+            cfg["wheel_class"] = str(wheel["class"]).strip()
+            cfg["wheel_accept"] = [
+                str(x).strip() for x in (wheel.get("accept") or [])
+                if str(x).strip()
+            ] or [cfg["wheel_class"]]
+            cfg["wheel_plan"] = wheel
         opportunity = ctx["analysis_model"].analyze(
             research, cfg, items)
+        if isinstance(wheel, dict):
+            opportunity = replace(
+                opportunity, meta={**(opportunity.meta or {}),
+                                   "wheel": wheel})
     except Exception:
         _release_keys(client, run_id, claimed)
         raise
@@ -563,6 +580,23 @@ def _guard_violations(text: str, guard: dict, items: list,
     for term in guard.get("require_sourced_terms") or []:
         if term in text and term not in sourced:
             out.append("term-not-sourced:" + term)
+
+    def _norm(value):
+        return _re.sub(r"[^\w\u0600-\u06FF]+", " ", str(value or "")) \
+            .strip().lower()
+
+    if guard.get("require_item_terms"):
+        for it in (items or [])[:1]:
+            title = str(getattr(it, "title", "") or "").strip()
+            if title and _norm(title) not in _norm(text):
+                out.append("item-title-missing")
+            author = str(getattr(it, "author", "") or "").strip()
+            if author and _norm(author) not in _norm(text):
+                out.append("item-author-missing")
+    for term in guard.get("forbidden_terms") or []:
+        needle = _norm(term)
+        if needle and needle in _norm(text):
+            out.append("forbidden-term:" + str(term)[:60])
     return out
 
 
@@ -603,6 +637,36 @@ def run_text_stage(ctx: dict) -> dict:
         text = ctx["text_gen"].generate(
             shaped.title, summary, brand, cfg)
         guard = _text_guard(cfg)
+        wheel = (opportunity.meta or {}).get("wheel") \
+            if opportunity is not None and \
+            isinstance(opportunity.meta, dict) else None
+        if isinstance(wheel, dict):
+            guard = dict(guard or {})
+            guard.setdefault("allowed_hosts", [])
+            guard.setdefault("block_unsourced_urls", True)
+            guard.setdefault("block_years", True)
+            content_class = str(
+                getattr(opportunity, "content_class", "") or "")
+            content_classes = [
+                str(c).strip() for c in
+                (wheel.get("content_classes") or [])
+                if str(c).strip()]
+            selected = str(wheel.get("selected_title") or "")
+            known = [str(t) for t in (wheel.get("known_titles") or [])
+                     if str(t).strip()]
+            is_content = content_class in content_classes
+            if is_content:
+                guard["require_item_terms"] = True
+            selected_item = items[0] if items else None
+            own_text = " ".join([
+                str(getattr(selected_item, "title", "") or ""),
+                str(getattr(selected_item, "text", "") or ""),
+            ]).lower() if is_content else ""
+            guard["forbidden_terms"] = [
+                t for t in known
+                if t.strip().lower() != selected.strip().lower()
+                and t.strip().lower() not in own_text
+            ]
         if guard:
             violations = _guard_violations(
                 text, guard, items, opportunity)
@@ -1171,9 +1235,21 @@ def run_execute_stage(ctx: dict) -> dict:
         result["media"] = media_refs
         if not dry_run and ctx.get("state_store") == "tuzzina" and \
                 opportunity is not None:
+            wheel = (opportunity.meta or {}).get("wheel") \
+                if isinstance(opportunity.meta, dict) else None
+            extra = {}
+            if isinstance(wheel, dict):
+                extra = {
+                    "item_ids": list(
+                        getattr(opportunity, "source_item_ids", []) or []),
+                    "state": "" if str(mode).lower() == "now"
+                    else str(mode).lower(),
+                    "wheel_slot": wheel.get("slot"),
+                    "wheel_bucket": wheel.get("bucket", ""),
+                }
             _record_published_topic(
                 client, opportunity.topic, opportunity.angle,
-                getattr(opportunity, "content_class", ""))
+                getattr(opportunity, "content_class", ""), **extra)
         if post_ids:
             # Published = gone from the queue; whatever remains
             # there is still unpublished by definition.
@@ -1612,6 +1688,104 @@ def _empty_research() -> dict:
         earliest_published="", latest_published="", model="", meta={}))
 
 
+def _wheel_pool(pending) -> list:
+    """Every classified carrier with a content class, deduped by
+    identity, in collection order. This is the catalogue the wheel
+    chooses from; it is NOT limited to NEW items, because an LRU
+    re-feature intentionally reuses material already seen."""
+    out = []
+    seen = set()
+    for result in pending or []:
+        carriers = list(getattr(result, "catalogue", []) or [])
+        carriers += [getattr(c, "item", None)
+                     for c in (getattr(result, "items", []) or [])]
+        for item in carriers:
+            if item is None or not getattr(item, "content_class", ""):
+                continue
+            item_id = (getattr(item, "item_id", "") or
+                       getattr(item, "source_id", "") or
+                       getattr(item, "source_url", ""))
+            if not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            out.append(item)
+    return out
+
+
+def _wheel_known_titles(pool, content_classes) -> list:
+    """Bounded list of catalogue titles the text guard can treat as
+    known work names. It is data, never an instruction. The class
+    vocabulary is the campaign's wheel declaration, not a built-in
+    music taxonomy."""
+    wanted = {str(c).strip() for c in (content_classes or [])
+              if str(c).strip()}
+    titles = []
+    seen = set()
+    for item in pool or []:
+        if getattr(item, "content_class", "") not in wanted:
+            continue
+        title = str(getattr(item, "title", "") or "").strip()
+        if title and title not in seen:
+            seen.add(title)
+            titles.append(title[:120])
+        if len(titles) >= 60:
+            break
+    return titles
+
+
+def _wheel_select(pending, recent, wheel: dict, plan=None):
+    """Plan the next slot and pick its LRU item. Falls back to the
+    other bucket only when the campaign explicitly opts in; a wheel
+    must never silently replace identity with content (or vice
+    versa)."""
+    from research.wheel import plan_next, select_lru
+    if plan is None:
+        plan = plan_next(recent, wheel)
+    if plan is None:
+        return None, None
+    pool = _wheel_pool(pending)
+    selected = select_lru(pool, recent, plan["class"])
+    if selected is None and plan.get("bucket") == "content":
+        # An exhausted content class (for example, every album was
+        # already featured) must not wedge the whole wheel: try the
+        # next content class in the campaign's own order. The slot
+        # stays a content slot, so the 70/30 mix is untouched.
+        classes = [str(c) for c in (plan.get("content_classes") or [])
+                   if str(c).strip()]
+        if plan["class"] in classes:
+            start = classes.index(plan["class"]) + 1
+            for cls in classes[start:] + classes[:start]:
+                selected = select_lru(pool, recent, cls)
+                if selected is not None:
+                    plan = dict(plan, **{"class": cls, "accept": [cls],
+                                         "fallback_content": True})
+                    break
+    if selected is None and wheel.get("fallback") is True:
+        from research.wheel import fallback_class
+        alt = fallback_class(plan, wheel)
+        selected = select_lru(pool, recent, alt)
+        if selected is not None:
+            identity_classes = [
+                str(x).strip() for x in
+                (plan.get("identity_classes")
+                 or wheel.get("identity_classes") or ["identity"])
+                if str(x).strip()]
+            accepted = identity_classes if alt in identity_classes \
+                else [alt]
+            plan = dict(plan, **{"class": alt, "accept": accepted,
+                                 "fallback": True})
+    if selected is not None:
+        plan = dict(plan)
+        plan["item_id"] = (getattr(selected, "item_id", "") or
+                           getattr(selected, "source_id", "") or
+                           getattr(selected, "source_url", ""))
+        plan["selected_title"] = str(
+            getattr(selected, "title", "") or "")[:200]
+        plan["known_titles"] = _wheel_known_titles(
+            pool, plan.get("content_classes") or [])
+    return plan, selected
+
+
 def run_research_stage(ctx: dict) -> dict:
     """Collect + claim + research LLM. Commits collection state
     on success (mirrors the legacy cycle); on failure nothing is
@@ -1628,13 +1802,6 @@ def run_research_stage(ctx: dict) -> dict:
     dry_run = bool(ctx.get("dry_run"))
     out = CycleResult()
     pending: list = []
-    collect_all_sources(ctx["sources"], store, ctx["now"], out,
-                        pending)
-    try:
-        claim_collected_items(out, ctx.get("claimer"))
-    except ClaimFailed:
-        _release_keys(client, run_id, out.claimed)
-        raise
     from skills.loader import SKILL_TYPES
     raw_roles = cfg.get("roles") if isinstance(cfg, dict) else None
     if isinstance(raw_roles, list) and raw_roles:
@@ -1643,6 +1810,98 @@ def run_research_stage(ctx: dict) -> dict:
         roles = list(SKILL_TYPES)
     skills = [_trace_skill("research", cfg)] \
         if "research" in roles else []
+    wheel_cfg = cfg.get("wheel") if isinstance(cfg, dict) else None
+    is_wheel = bool(isinstance(wheel_cfg, dict)
+                    and wheel_cfg.get("pattern")
+                    and "research" in roles)
+    wheel_plan = None
+    sources = ctx["sources"]
+    if is_wheel:
+        # Plan BEFORE collecting: the wheel knows which class it
+        # needs, so the cycle fetches only that class's sources
+        # instead of polling every identity page and every catalogue
+        # page on every tick. The plan is pure (ledger + config).
+        from research.wheel import fallback_class, plan_next
+        wheel_plan = plan_next(cfg.get("recent_topics") or [], wheel_cfg)
+        wanted = wheel_plan["class"]
+        class_sources = [s for s in ctx["sources"]
+                         if str(s.get("class") or "").strip() == wanted]
+        index_sources = [s for s in ctx["sources"]
+                         if s.get("index") is True
+                         and s not in class_sources]
+        fallback_sources = []
+        if wheel_cfg.get("fallback") is True:
+            alt = fallback_class(wheel_plan, wheel_cfg)
+            fallback_sources = [s for s in ctx["sources"]
+                                if str(s.get("class") or "").strip() == alt
+                                and s not in class_sources]
+        if not class_sources and not fallback_sources:
+            raise ValueError("wheel-source-class-missing:" + wanted)
+        sources = class_sources + index_sources + fallback_sources
+    collect_all_sources(sources, store, ctx["now"], out, pending)
+    if not is_wheel:
+        try:
+            claim_collected_items(out, ctx.get("claimer"))
+        except ClaimFailed:
+            _release_keys(client, run_id, out.claimed)
+            raise
+    # The wheel chooses ONE item before the model sees anything.
+    # This is what makes the 70/30 mix and the LRU rotation
+    # deterministic: the model writes about the selected item, it
+    # does not choose a class or a work from a pile.
+    if is_wheel:
+        plan, selected = _wheel_select(
+            pending, cfg.get("recent_topics") or [], wheel_cfg,
+            plan=wheel_plan)
+        if selected is None:
+            for res in pending:
+                res.commit(store)
+            research = _empty_research()
+            research["meta"]["wheel"] = dict(
+                plan or {}, reason="no-wheel-item")
+            return {"items": [], "research": research,
+                    "claimed": [],
+                    "committed": True,
+                    "sources_checked": len(out.sources),
+                    "items_new": len(out.items),
+                    "discovery": _to_jsonable(out.sources),
+                    "roles": roles,
+                    "roles_resolved": ctx.get("roles_resolved") or [],
+                    "skills_used": skills, "queued": False,
+                    "outcome": "findings"}
+        if not dry_run:
+            try:
+                claimed_out = CycleResult(items=[selected])
+                claim_collected_items(
+                    claimed_out, ctx.get("claimer"))
+                out.claimed = list(claimed_out.claimed)
+            except ClaimFailed:
+                _release_keys(client, run_id, out.claimed)
+                raise
+        try:
+            result = ctx["research_model"].research([selected], cfg)
+        except Exception:
+            _release_keys(client, run_id, out.claimed)
+            raise
+        if not isinstance(result.meta, dict):
+            result.meta = {}
+        result.meta["wheel"] = plan
+        # The wheel is a scoped decision: parked material from other
+        # cycles must not compete with the selected item.
+        result.meta.pop("unpublished", None)
+        for res in pending:
+            res.commit(store)
+        return {"items": _to_jsonable([selected]),
+                "research": _to_jsonable(result),
+                "claimed": list(out.claimed),
+                "committed": True,
+                "sources_checked": len(out.sources),
+                "items_new": len(out.items),
+                "discovery": _to_jsonable(out.sources),
+                "roles": roles,
+                "roles_resolved": ctx.get("roles_resolved") or [],
+                "skills_used": skills, "queued": False,
+                "outcome": "findings"}
     # Phase 2 split: a research skill declaring a CUSTOM semantic
     # contract runs the generic agent loop (capability calls, no
     # empty-input branch). Every other skill keeps the frozen

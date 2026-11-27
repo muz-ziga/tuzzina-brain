@@ -47,11 +47,25 @@ def composition_from_policy(policy: dict | None) -> dict | None:
         return None
     if not isinstance(comp, dict):
         raise ValueError("image skill composition must be a mapping")
-    mode = str(comp.get("mode") or "").strip()
+    mode = str(comp.get("mode") or "auto").strip()
     if mode not in _MODES:
         raise ValueError(
             "image skill composition.mode is not supported: %s" % mode
         )
+    by_class = comp.get("modeByClass")
+    if by_class is not None:
+        if not isinstance(by_class, dict):
+            raise ValueError(
+                "image skill composition.modeByClass must be a mapping")
+        for cls, value in by_class.items():
+            if not isinstance(cls, str) or not cls.strip():
+                raise ValueError(
+                    "image skill composition.modeByClass keys must be "
+                    "non-empty strings")
+            if str(value).strip() not in _MODES:
+                raise ValueError(
+                    "image skill composition.modeByClass.%s is not "
+                    "supported: %s" % (cls, value))
     hosts = comp.get("allowedHosts")
     if not isinstance(hosts, list) or not [
         h for h in hosts if isinstance(h, str) and h.strip()
@@ -101,4 +115,6 @@ def composition_from_policy(policy: dict | None) -> dict | None:
             raise ValueError(
                 "image skill composition.brand.brandMentions must be a list"
             )
-    return dict(comp)
+    out = dict(comp)
+    out["mode"] = mode
+    return out

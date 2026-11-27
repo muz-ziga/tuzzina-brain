@@ -762,7 +762,7 @@ class BudgetParametersTest(unittest.TestCase):
                 "topic", BRAND, {}, {"facts": ["a 250 ml cup"]})
             # A reached the adapter.
             self.assertEqual(spy.kw.get("temperature"), 0.3)
-            self.assertEqual(spy.kw.get("max_tokens"), 600)
+            self.assertEqual(spy.kw.get("max_tokens"), 4000)
             # Brain applied no application-side truncation: the returned
             # prompt is the adapter output minus whitespace/scaffolding
             # handling only.
@@ -947,10 +947,11 @@ class StyleBlockAssemblyTest(unittest.TestCase):
             out = G.OpenAIImagePromptGenerator(
                 adapter=self._Adapter(scene)).generate_prompt(
                     "loudness", BRAND, {}, {})
-            self.assertTrue(out.startswith(scene))
-            self.assertIn(self.BLOCK, out)
-            # Byte-identical, appended after the scene.
-            self.assertEqual(out, scene + "\n\n" + self.BLOCK)
+            self.assertTrue(out.startswith(self.BLOCK))
+            self.assertIn(scene, out)
+            # Style-first order: the Skill block is byte-identical and
+            # precedes the model-written scene.
+            self.assertEqual(out, self.BLOCK + "\n\n" + scene)
         finally:
             self._restore(old)
 
@@ -967,7 +968,7 @@ class StyleBlockAssemblyTest(unittest.TestCase):
             out = G.OpenAIImagePromptGenerator(
                 adapter=self._Adapter(scene)).generate_prompt(
                     "vinyl", BRAND, {}, {})
-            self.assertTrue(out.endswith(self.BLOCK))
+            self.assertTrue(out.startswith(self.BLOCK))
         finally:
             self._restore(old)
 
