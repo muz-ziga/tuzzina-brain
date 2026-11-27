@@ -41,6 +41,62 @@ def _clean_story_block(raw) -> dict:
     return out
 
 
+def _clean_wheel_block(raw) -> dict:
+    """Campaign-owned content wheel. Shape-only validation; the
+    meaning of each class belongs to the campaign's Skills."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise _err("wheel", "must be a mapping")
+    allowed = ("pattern", "content_classes", "identity_classes",
+               "start_slot", "fallback")
+    for key in raw:
+        if key not in allowed:
+            raise _err("wheel.%s" % key, "unknown key")
+    pattern = raw.get("pattern")
+    if not isinstance(pattern, list) or not pattern:
+        raise _err("wheel.pattern", "must be a non-empty list")
+    if any(x not in ("identity", "content") for x in pattern):
+        raise _err("wheel.pattern", "entries must be identity|content")
+    classes = raw.get("content_classes")
+    if not isinstance(classes, list) or not classes or \
+            not all(isinstance(x, str) and x.strip() for x in classes):
+        raise _err("wheel.content_classes",
+                   "must be a non-empty list of strings")
+    clean_classes = []
+    for value in classes:
+        value = value.strip()[:60]
+        if value and value not in clean_classes:
+            clean_classes.append(value)
+    identity = raw.get("identity_classes", ["identity"])
+    if not isinstance(identity, list) or not identity or \
+            not all(isinstance(x, str) and x.strip() for x in identity):
+        raise _err("wheel.identity_classes",
+                   "must be a non-empty list of strings")
+    clean_identity = []
+    for value in identity:
+        value = value.strip()[:60]
+        if value and value not in clean_identity:
+            clean_identity.append(value)
+    out = {
+        "pattern": list(pattern),
+        "content_classes": clean_classes,
+        "identity_classes": clean_identity,
+    }
+    if raw.get("start_slot") is not None:
+        slot = raw["start_slot"]
+        if not isinstance(slot, int) or isinstance(slot, bool) \
+                or not 0 <= slot < len(pattern):
+            raise _err("wheel.start_slot",
+                       "must be an integer inside pattern")
+        out["start_slot"] = slot
+    if raw.get("fallback") is not None:
+        if not isinstance(raw["fallback"], bool):
+            raise _err("wheel.fallback", "must be a boolean")
+        out["fallback"] = raw["fallback"]
+    return out
+
+
 def load_campaign(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -210,6 +266,7 @@ def load_campaign(path: str) -> dict:
         #                  visible rendering on the image waits for
         #                  compose-from-media in the engine).
         "story": _clean_story_block(cfg.get("story")),
+        "wheel": _clean_wheel_block(cfg.get("wheel")),
         "publish_targets": clean_targets,
         # Flow identity passthrough (evidence only in Phase 1:
         # routing still follows the default map in code; the id

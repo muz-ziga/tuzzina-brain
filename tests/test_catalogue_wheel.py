@@ -26,6 +26,7 @@ from research.monitor import ClassifiedItem, MemoryStateStore, SourceState
 from research.wheel import plan_next, select_lru
 from stage_run import _guard_violations, run_analysis_stage, \
     run_research_stage, _to_jsonable, _wheel_select
+from campaign import load_campaign
 
 
 NOW = "2026-11-26T12:00:00+00:00"
@@ -45,6 +46,24 @@ def source_item(**kw):
     )
     data.update(kw)
     return SourceItem(**data)
+
+
+class CampaignLoaderTest(unittest.TestCase):
+    def test_wheel_survives_campaign_load(self):
+        import yaml
+        wheel = {
+            "pattern": ["identity", "content"],
+            "content_classes": ["dish"],
+            "identity_classes": ["identity"],
+            "start_slot": 1,
+            "fallback": False,
+        }
+        tmp = tempfile.mkdtemp(prefix="tbra_campaign_")
+        path = os.path.join(tmp, "campaign.yaml")
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump({"brand": {"name": "X"}, "wheel": wheel}, f)
+        cfg = load_campaign(path)
+        self.assertEqual(cfg["wheel"], wheel)
 
 
 class StrategySourceTest(unittest.TestCase):
